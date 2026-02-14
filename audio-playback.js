@@ -1,0 +1,112 @@
+// Plays PCM16 24kHz audio from Gemini via Web Audio API
+
+export class AudioPlayback {
+	constructor() {
+		this.ctx = null;
+		this.gainNode = null;
+		this.queue = [];
+		this.nextStartTime = 0;
+		this.playing = false;
+		this.listeners = {};
+		this.sources = [];
+	}
+
+	on(event, fn) {
+		(this.listeners[event] ||= []).push(fn);
+	}
+
+	emit(event, ...args) {
+		(this.listeners[event] || []).forEach(fn => fn(...args));
+	}
+
+	init() {
+		if (this.ctx) return;
+		this.ctx = new AudioContext({ sampleRate: 24000 });
+		this.analyser = this.ctx.createAnalyser();
+		this.analyser.fftSize = 256;
+		this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
+		this.gainNode = this.ctx.createGain();
+		this.gainNode.connect(this.analyser);
+		this.analyser.connect(this.ctx.destination);
+	}
+
+	getVolume() {
+		if (!this.analyser || !this.playing) return 0;
+		this.analyser.getByteTimeDomainData(this.analyserData);
+		let sum = 0;
+		for (let i = 0; i < this.analyserData.length; i++) {
+			const v = (this.analyserData[i] - 128) / 128;
+			sum += v * v;
+		}
+		return Math.sqrt(sum / this.analyserData.length);
+	}
+
+	enqueue(base64Data) {
+		this.init();
+		if (this.ctx.state === 'suspended') this.ctx.resume();
+
+		const pcm16 = this._base64ToInt16(base64Data);
+		const float32 = new Float32Array(pcm16.length);
+		for (let i = 0; i < pcm16.length; i++) {
+			float32[i] = pcm16[i] / 32768;
+		}
+
+		const audioBuffer = this.ctx.createBuffer(1, float32.length, 24000);
+		audioBuffer.getChannelData(0).set(float32);
+
+		const source = this.ctx.createBufferSource();
+		source.buffer = audioBuffer;
+		source.connect(this.gainNode);
+
+		const now = this.ctx.currentTime;
+		const startTime = Math.max(now, this.nextStartTime);
+		source.start(startTime);
+		this.nextStartTime = startTime + audioBuffer.duration;
+
+		this.sources.push(source);
+		source.onended = () => {
+			const idx = this.sources.indexOf(source);
+			if (idx >= 0) this.sources.splice(idx, 1);
+			if (this.sources.length === 0) {
+				this.playing = false;
+				this.emit('ended');
+			}
+		};
+
+		if (!this.playing) {
+			this.playing = true;
+			this.emit('started');
+		}
+	}
+
+	stop() {
+		// Barge-in: fast fade out then stop all sources
+		if (this.gainNode) {
+			const now = this.ctx.currentTime;
+			this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
+			this.gainNode.gain.linearRampToValueAtTime(0, now + 0.05);
+
+			setTimeout(() => {
+				for (const src of this.sources) {
+					try { src.stop(); } catch {}
+				}
+				this.sources = [];
+				this.gainNode.gain.setValueAtTime(1, this.ctx.currentTime);
+			}, 60);
+		}
+
+		this.nextStartTime = 0;
+		this.playing = false;
+		this.queue = [];
+		this.emit('stopped');
+	}
+
+	_base64ToInt16(base64) {
+		const binary = atob(base64);
+		const bytes = new Uint8Array(binary.length);
+		for (let i = 0; i < binary.length; i++) {
+			bytes[i] = binary.charCodeAt(i);
+		}
+		return new Int16Array(bytes.buffer);
+	}
+}
