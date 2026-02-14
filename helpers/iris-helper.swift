@@ -12,6 +12,13 @@ struct Command: Decodable {
     let x: Double?
     let y: Double?
     let name: String?
+    let level: Double?
+    let path: String?
+    let content: String?
+    let position: String? // "left", "right", "maximize", "center"
+    let x2: Double?
+    let y2: Double?
+    let button: String? // "left", "right"
 }
 
 struct Response: Encodable {
@@ -79,7 +86,7 @@ case "type_text":
     vDown.post(tap: .cghidEventTap)
     vUp.post(tap: .cghidEventTap)
 
-    usleep(100_000)
+    usleep(300_000) // 300ms for web apps to process the paste
     pb.clearContents()
     for (typeStr, data) in oldContents {
         pb.setData(data, forType: NSPasteboard.PasteboardType(typeStr))
@@ -92,34 +99,36 @@ case "press_key":
         respond(false, "Missing key")
     }
 
+    // Small delay so prior actions (paste, focus) settle in web apps
+    usleep(150_000)
+
     let parts = key.split(separator: "+").map(String.init)
-    var flags: CGEventFlags = []
+    var modifiers: [String] = []
     var keyStr = parts.last ?? key
 
     for part in parts.dropLast() {
         switch part {
-        case "cmd", "command": flags.insert(.maskCommand)
-        case "ctrl", "control": flags.insert(.maskControl)
-        case "shift": flags.insert(.maskShift)
-        case "alt", "option": flags.insert(.maskAlternate)
+        case "cmd", "command": modifiers.append("command down")
+        case "ctrl", "control": modifiers.append("control down")
+        case "shift": modifiers.append("shift down")
+        case "alt", "option": modifiers.append("option down")
         default: break
         }
     }
     if parts.count == 1 { keyStr = parts[0] }
 
+    // Use AppleScript System Events — works reliably across all apps including Electron
     guard let keycode = keycodeMap[keyStr] else {
         respond(false, "Unknown key: \(keyStr)")
     }
 
-    let src = CGEventSource(stateID: .hidSystemState)
-    let down = CGEvent(keyboardEventSource: src, virtualKey: keycode, keyDown: true)!
-    let up = CGEvent(keyboardEventSource: src, virtualKey: keycode, keyDown: false)!
-    if !flags.isEmpty {
-        down.flags = flags
-        up.flags = flags
-    }
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    let modStr = modifiers.isEmpty ? "" : " using {\(modifiers.joined(separator: ", "))}"
+    let script = "tell application \"System Events\" to key code \(keycode)\(modStr)"
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    proc.arguments = ["-e", script]
+    try? proc.run()
+    proc.waitUntilExit()
 
     respond(true, "Pressed \(key)")
 
@@ -141,15 +150,104 @@ case "click_at":
     }
     let point = CGPoint(x: x, y: y)
     let src = CGEventSource(stateID: .hidSystemState)
+    let isRight = cmd.button?.lowercased() == "right"
 
-    let mouseDown = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)!
-    let mouseUp = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)!
+    if isRight {
+        let down = CGEvent(mouseEventSource: src, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right)!
+        let up = CGEvent(mouseEventSource: src, mouseType: .rightMouseUp, mouseCursorPosition: point, mouseButton: .right)!
+        down.post(tap: .cghidEventTap)
+        usleep(50_000)
+        up.post(tap: .cghidEventTap)
+        respond(true, "Right-clicked at (\(Int(x)), \(Int(y)))")
+    } else {
+        let down = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)!
+        let up = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)!
+        down.post(tap: .cghidEventTap)
+        usleep(50_000)
+        up.post(tap: .cghidEventTap)
+        respond(true, "Clicked at (\(Int(x)), \(Int(y)))")
+    }
 
-    mouseDown.post(tap: .cghidEventTap)
-    usleep(50_000)
-    mouseUp.post(tap: .cghidEventTap)
+case "double_click":
+    guard let x = cmd.x, let y = cmd.y else {
+        respond(false, "Missing x or y coordinates")
+    }
+    let dblPoint = CGPoint(x: x, y: y)
+    let dblSrc = CGEventSource(stateID: .hidSystemState)
+    for i in 0..<2 {
+        let down = CGEvent(mouseEventSource: dblSrc, mouseType: .leftMouseDown, mouseCursorPosition: dblPoint, mouseButton: .left)!
+        let up = CGEvent(mouseEventSource: dblSrc, mouseType: .leftMouseUp, mouseCursorPosition: dblPoint, mouseButton: .left)!
+        down.setIntegerValueField(.mouseEventClickState, value: Int64(i + 1))
+        up.setIntegerValueField(.mouseEventClickState, value: Int64(i + 1))
+        down.post(tap: .cghidEventTap)
+        usleep(30_000)
+        up.post(tap: .cghidEventTap)
+        if i == 0 { usleep(50_000) }
+    }
+    respond(true, "Double-clicked at (\(Int(x)), \(Int(y)))")
 
-    respond(true, "Clicked at (\(Int(x)), \(Int(y)))")
+case "mouse_move":
+    guard let x = cmd.x, let y = cmd.y else {
+        respond(false, "Missing x or y coordinates")
+    }
+    let movePoint = CGPoint(x: x, y: y)
+    let moveSrc = CGEventSource(stateID: .hidSystemState)
+    let moveEvent = CGEvent(mouseEventSource: moveSrc, mouseType: .mouseMoved, mouseCursorPosition: movePoint, mouseButton: .left)!
+    moveEvent.post(tap: .cghidEventTap)
+    respond(true, "Moved mouse to (\(Int(x)), \(Int(y)))")
+
+case "drag":
+    guard let x = cmd.x, let y = cmd.y, let x2 = cmd.x2, let y2 = cmd.y2 else {
+        respond(false, "Missing coordinates (need x, y, x2, y2)")
+    }
+    let dragSrc = CGEventSource(stateID: .hidSystemState)
+    let from = CGPoint(x: x, y: y)
+    let to = CGPoint(x: x2, y: y2)
+    let dragDown = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseDown, mouseCursorPosition: from, mouseButton: .left)!
+    dragDown.post(tap: .cghidEventTap)
+    usleep(100_000)
+    // Smooth drag in steps
+    let steps = 10
+    for i in 1...steps {
+        let t = Double(i) / Double(steps)
+        let mid = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
+        let dragMove = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseDragged, mouseCursorPosition: mid, mouseButton: .left)!
+        dragMove.post(tap: .cghidEventTap)
+        usleep(20_000)
+    }
+    let dragUp = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseUp, mouseCursorPosition: to, mouseButton: .left)!
+    dragUp.post(tap: .cghidEventTap)
+    respond(true, "Dragged from (\(Int(x)),\(Int(y))) to (\(Int(x2)),\(Int(y2)))")
+
+case "get_mouse_position":
+    let pos = NSEvent.mouseLocation
+    let screenH = NSScreen.main?.frame.height ?? 0
+    // Convert from AppKit (bottom-left origin) to CGEvent (top-left origin)
+    respond(true, "x:\(Int(pos.x)),y:\(Int(screenH - pos.y))")
+
+case "clipboard_read":
+    let pb = NSPasteboard.general
+    let text = pb.string(forType: .string) ?? ""
+    respond(true, text.isEmpty ? "(clipboard empty)" : String(text.prefix(4000)))
+
+case "clipboard_write":
+    guard let text = cmd.text, !text.isEmpty else {
+        respond(false, "Missing text")
+    }
+    let pb = NSPasteboard.general
+    pb.clearContents()
+    pb.setString(text, forType: .string)
+    respond(true, "Copied \(text.count) chars to clipboard")
+
+case "notify":
+    let msg = cmd.text ?? "Notification from Iris"
+    let script = "display notification \"\(msg.replacingOccurrences(of: "\"", with: "\\\""))\" with title \"Iris\""
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    proc.arguments = ["-e", script]
+    try? proc.run()
+    proc.waitUntilExit()
+    respond(true, "Notification sent")
 
 case "open_app":
     guard let name = cmd.name, !name.isEmpty else {
@@ -195,6 +293,106 @@ case "open_app":
             respond(false, "Failed to open \(name): \(error.localizedDescription)")
         }
     }
+
+case "set_volume":
+    let level = cmd.level ?? 0.5
+    let clamped = max(0.0, min(1.0, level))
+    let script = "set volume output volume \(Int(clamped * 100))"
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    proc.arguments = ["-e", script]
+    try? proc.run()
+    proc.waitUntilExit()
+    respond(true, "Volume set to \(Int(clamped * 100))%")
+
+case "set_brightness":
+    let level = cmd.level ?? 0.5
+    let clamped = max(0.0, min(1.0, level))
+    let script = "tell application \"System Events\" to tell appearance preferences to set dark mode to \(clamped < 0.5 ? "true" : "false")"
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    proc.arguments = ["-e", "do shell script \"brightness \(clamped)\" 2>/dev/null || osascript -e '\(script)'"]
+    try? proc.run()
+    proc.waitUntilExit()
+    respond(true, "Brightness set to \(Int(clamped * 100))%")
+
+case "get_frontmost_app":
+    let script = """
+    tell application "System Events"
+        set frontApp to first application process whose frontmost is true
+        set appName to name of frontApp
+        set winNames to name of every window of frontApp
+        return appName & "|" & (winNames as text)
+    end tell
+    """
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    proc.arguments = ["-e", script]
+    let pipe = Pipe()
+    proc.standardOutput = pipe
+    try? proc.run()
+    proc.waitUntilExit()
+    let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let parts = output.split(separator: "|", maxSplits: 1)
+    let appName = parts.first.map(String.init) ?? "unknown"
+    let windows = parts.count > 1 ? String(parts[1]) : ""
+    respond(true, "App: \(appName), Windows: \(windows)")
+
+case "window_manage":
+    let pos = cmd.position?.lowercased() ?? "maximize"
+    let script: String
+    switch pos {
+    case "left":
+        script = """
+        tell application "System Events"
+            set frontApp to first application process whose frontmost is true
+            set frontWin to first window of frontApp
+            set {x, y, w, h} to {0, 25, (do shell script "system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $2}'"  as integer) / 2, (do shell script "system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $4}'" as integer) - 25}
+            set position of frontWin to {0, 25}
+            set size of frontWin to {w, h}
+        end tell
+        """
+    case "right":
+        script = """
+        tell application "System Events"
+            set frontApp to first application process whose frontmost is true
+            set frontWin to first window of frontApp
+            set screenW to (do shell script "system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $2}'" as integer)
+            set screenH to (do shell script "system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $4}'" as integer)
+            set halfW to screenW / 2
+            set position of frontWin to {halfW, 25}
+            set size of frontWin to {halfW, screenH - 25}
+        end tell
+        """
+    case "center":
+        script = """
+        tell application "System Events"
+            set frontApp to first application process whose frontmost is true
+            set frontWin to first window of frontApp
+            set screenW to (do shell script "system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $2}'" as integer)
+            set screenH to (do shell script "system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $4}'" as integer)
+            set {winW, winH} to size of frontWin
+            set position of frontWin to {(screenW - winW) / 2, (screenH - winH) / 2}
+        end tell
+        """
+    default: // maximize
+        script = """
+        tell application "System Events"
+            set frontApp to first application process whose frontmost is true
+            set frontWin to first window of frontApp
+            set screenW to (do shell script "system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $2}'" as integer)
+            set screenH to (do shell script "system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $4}'" as integer)
+            set position of frontWin to {0, 25}
+            set size of frontWin to {screenW, screenH - 25}
+        end tell
+        """
+    }
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    proc.arguments = ["-e", script]
+    try? proc.run()
+    proc.waitUntilExit()
+    respond(true, "Window moved to \(pos)")
 
 default:
     respond(false, "Unknown action: \(cmd.action)")

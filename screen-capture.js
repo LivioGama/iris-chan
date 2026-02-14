@@ -5,7 +5,7 @@ async function capture() {
 	try {
 		const sources = await desktopCapturer.getSources({
 			types: ['screen'],
-			thumbnailSize: { width: 1280, height: 800 },
+			thumbnailSize: { width: 800, height: 500 },
 		});
 
 		if (!sources.length) {
