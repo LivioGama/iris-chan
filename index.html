@@ -53,6 +53,8 @@
 			#dbg-ws::before { background: #f87171; }
 			#dbg-tool::before { background: #22d3ee; }
 			#dbg-tool.active::before { animation: pulse 0.6s ease-in-out infinite; }
+			#dbg-srch::before { background: #a78bfa; }
+			#dbg-srch.active::before { animation: pulse 0.5s ease-in-out infinite; }
 			@keyframes pulse {
 				0%, 100% { opacity: 1; }
 				50% { opacity: 0.3; }
@@ -111,6 +113,7 @@
 			}
 			.bubble-user .bubble-label { color: rgba(255,255,255,0.7); }
 			.bubble-iris .bubble-label { color: #888; }
+
 		</style>
 	</head>
 
@@ -125,6 +128,7 @@
 				<span id="dbg-think" class="dbg-dot">THINK</span>
 				<span id="dbg-speak" class="dbg-dot">SPEAK</span>
 				<span id="dbg-tool" class="dbg-dot">TOOL</span>
+				<span id="dbg-srch" class="dbg-dot">SRCH</span>
 			</div>
 			<div id="dbg-status">Initializing...</div>
 		</div>
