@@ -1,22 +1,15 @@
 // Plays PCM16 24kHz audio from Gemini via Web Audio API
+import { Emitter } from '../../shared/emitter.js';
 
-export class AudioPlayback {
+export class AudioPlayback extends Emitter {
 	constructor() {
+		super();
 		this.ctx = null;
 		this.gainNode = null;
 		this.queue = [];
 		this.nextStartTime = 0;
 		this.playing = false;
-		this.listeners = {};
 		this.sources = [];
-	}
-
-	on(event, fn) {
-		(this.listeners[event] ||= []).push(fn);
-	}
-
-	emit(event, ...args) {
-		(this.listeners[event] || []).forEach(fn => fn(...args));
 	}
 
 	init() {
@@ -80,7 +73,6 @@ export class AudioPlayback {
 	}
 
 	stop() {
-		// Barge-in: fast fade out then stop all sources
 		if (this.gainNode) {
 			const now = this.ctx.currentTime;
 			this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);

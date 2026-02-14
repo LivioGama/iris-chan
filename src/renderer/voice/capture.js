@@ -1,4 +1,5 @@
-// Mic capture via AudioWorklet → base64 PCM16 16kHz chunks
+// Mic capture via AudioWorklet -> PCM16 16kHz chunks
+import { Emitter } from '../../shared/emitter.js';
 
 const WORKLET_CODE = `
 class CaptureProcessor extends AudioWorkletProcessor {
@@ -40,21 +41,13 @@ class CaptureProcessor extends AudioWorkletProcessor {
 registerProcessor('capture-processor', CaptureProcessor);
 `;
 
-export class AudioCapture {
+export class AudioCapture extends Emitter {
 	constructor() {
+		super();
 		this.ctx = null;
 		this.stream = null;
 		this.workletNode = null;
-		this.listeners = {};
 		this.active = false;
-	}
-
-	on(event, fn) {
-		(this.listeners[event] ||= []).push(fn);
-	}
-
-	emit(event, ...args) {
-		(this.listeners[event] || []).forEach(fn => fn(...args));
 	}
 
 	async start() {
@@ -62,7 +55,6 @@ export class AudioCapture {
 
 		this.ctx = new AudioContext({ sampleRate: 16000 });
 
-		// Register worklet via Blob URL
 		const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
 		const url = URL.createObjectURL(blob);
 		await this.ctx.audioWorklet.addModule(url);
@@ -82,7 +74,6 @@ export class AudioCapture {
 		};
 
 		source.connect(this.workletNode);
-		// Connect through silent gain to keep worklet alive (Chromium optimization)
 		const silentGain = this.ctx.createGain();
 		silentGain.gain.value = 0;
 		this.workletNode.connect(silentGain);

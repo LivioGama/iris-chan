@@ -15,7 +15,6 @@ async function capture() {
 		const cursor = screen.getCursorScreenPoint();
 		const cursorDisplay = screen.getDisplayNearestPoint(cursor);
 
-		// desktopCapturer source.display_id matches display.id as a string
 		const match = sources.find(s => String(s.display_id) === String(cursorDisplay.id));
 		const source = match || sources[0];
 
