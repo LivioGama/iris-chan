@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8" />
+		<title>VRM Avatar Viewer</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<style>
+			body { margin: 0; overflow: hidden; background: transparent; }
+			canvas { display: block; }
+		</style>
+	</head>
+
+	<body>
+		<!-- Import map: resolve bare specifiers to CDN URLs -->
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+					"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+					"@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.min.js",
+					"@pixiv/three-vrm-animation": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm-animation@3/lib/three-vrm-animation.module.min.js"
+				}
+			}
+		</script>
+
+		<script type="module">
+			import * as THREE from 'three';
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+			import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+			import { createVRMAnimationClip, VRMAnimationLoaderPlugin } from '@pixiv/three-vrm-animation';
+
+			// ── Renderer (WebGL2 → ANGLE → Metal on macOS) ─────────────
+			const renderer = new THREE.WebGLRenderer({
+				antialias: true,
+				powerPreference: 'high-performance',
+				alpha: true,
+			});
+			renderer.setClearColor(0x000000, 0);
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			renderer.setPixelRatio(window.devicePixelRatio);
+			renderer.outputColorSpace = THREE.SRGBColorSpace;
+			document.body.appendChild(renderer.domElement);
+
+			// ── Camera ─────────────────────────────────────────────────
+			const camera = new THREE.PerspectiveCamera(30.0, window.innerWidth / window.innerHeight, 0.1, 20.0);
+			camera.position.set(0.0, 1.05, 2.4);
+			camera.lookAt(0.0, 1.05, 0.0);
+
+			// ── Scene ──────────────────────────────────────────────────
+			const scene = new THREE.Scene();
+
+			// ── Lighting ───────────────────────────────────────────────
+			const dirLight = new THREE.DirectionalLight(0xffffff, Math.PI);
+			dirLight.position.set(1.0, 1.0, 1.0).normalize();
+			scene.add(dirLight);
+
+			// ── Loader with both VRM + VRM Animation plugins ───────────
+			const loader = new GLTFLoader();
+			loader.crossOrigin = 'anonymous';
+			loader.register((parser) => new VRMLoaderPlugin(parser));
+			loader.register((parser) => new VRMAnimationLoaderPlugin(parser));
+
+			const [gltfVrm, gltfVrma] = await Promise.all([
+				loader.loadAsync('./avatar.glb'),
+				loader.loadAsync('./idle_loop.vrma'),
+			]);
+
+			const vrm = gltfVrm.userData.vrm;
+			VRMUtils.removeUnnecessaryVertices(gltfVrm.scene);
+			VRMUtils.combineSkeletons(gltfVrm.scene);
+			VRMUtils.combineMorphs(vrm);
+			vrm.scene.traverse((obj) => { obj.frustumCulled = false; });
+			vrm.scene.rotation.y = Math.PI;
+
+			for (let i = 0; i < 60; i++) vrm.update(1 / 60);
+			scene.add(vrm.scene);
+
+			const clip = createVRMAnimationClip(gltfVrma.userData.vrmAnimations[0], vrm);
+			const mixer = new THREE.AnimationMixer(vrm.scene);
+			mixer.clipAction(clip).setLoop(THREE.LoopRepeat).play();
+
+			// ── Procedural overlays (head, fingers, expressions) ───────
+			function applyOverlays(vrm, time) {
+				const h = vrm.humanoid;
+				if (!h) return;
+
+				// Head — look around (VRMA has neck but no head track)
+				const head = h.getNormalizedBoneNode('head');
+				if (head) {
+					head.rotation.y = Math.sin(time * 0.3) * 0.12 + Math.sin(time * 0.13) * 0.06;
+					head.rotation.x = Math.sin(time * 0.5) * 0.05;
+					head.rotation.z = Math.sin(time * 0.4 + 1.0) * 0.04;
+				}
+
+				// Fingers — relaxed curl with gentle movement
+				const curl = 0.2 + Math.sin(time * 0.35) * 0.08;
+				for (const side of ['right', 'left']) {
+					const sign = side === 'right' ? -1 : 1;
+					for (const finger of ['Index', 'Middle', 'Ring', 'Little']) {
+						const prox = h.getNormalizedBoneNode(`${side}${finger}Proximal`);
+						const inter = h.getNormalizedBoneNode(`${side}${finger}Intermediate`);
+						const dist = h.getNormalizedBoneNode(`${side}${finger}Distal`);
+						const offset = { Index: 0, Middle: 0.15, Ring: 0.3, Little: 0.45 }[finger];
+						const fc = curl + Math.sin(time * 0.4 + offset) * 0.05;
+						if (prox) prox.rotation.z = sign * fc;
+						if (inter) inter.rotation.z = sign * fc * 1.1;
+						if (dist) dist.rotation.z = sign * fc * 0.8;
+					}
+					const tMeta = h.getNormalizedBoneNode(`${side}ThumbMetacarpal`);
+					const tProx = h.getNormalizedBoneNode(`${side}ThumbProximal`);
+					const tDist = h.getNormalizedBoneNode(`${side}ThumbDistal`);
+					if (tMeta) tMeta.rotation.z = sign * 0.15;
+					if (tProx) tProx.rotation.z = sign * (0.1 + Math.sin(time * 0.3) * 0.05);
+					if (tDist) tDist.rotation.z = sign * 0.1;
+				}
+
+				// Expressions
+				const expr = vrm.expressionManager;
+				if (expr) {
+					const blinkInterval = 6.0 + Math.sin(time * 0.13) * 2.0;
+					const blinkPhase = time % blinkInterval;
+					let blinkVal = 0;
+					if (blinkPhase < 0.12) {
+						blinkVal = Math.sin((blinkPhase / 0.12) * Math.PI);
+					}
+					expr.setValue('blink', blinkVal);
+
+					const smileVal = Math.max(0, Math.sin(time * 0.2) * 0.3);
+					expr.setValue('happy', smileVal);
+				}
+			}
+
+			// ── Handle window resize ───────────────────────────────────
+			window.addEventListener('resize', () => {
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize(window.innerWidth, window.innerHeight);
+			});
+
+			// ── Render loop ────────────────────────────────────────────
+			const clock = new THREE.Clock();
+			let elapsedTime = 0;
+
+			function animate() {
+				requestAnimationFrame(animate);
+				const delta = clock.getDelta();
+				elapsedTime += delta;
+
+				mixer.update(delta);
+				applyOverlays(vrm, elapsedTime);
+				vrm.update(delta);
+
+				renderer.render(scene, camera);
+			}
+
+			animate();
+		</script>
+	</body>
+</html>
