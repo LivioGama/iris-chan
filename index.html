@@ -7,10 +7,140 @@
 		<style>
 			body { margin: 0; overflow: hidden; background: transparent; }
 			canvas { display: block; }
+
+			/* Debug overlay */
+			#debug-panel {
+				position: fixed;
+				bottom: 8px;
+				right: 8px;
+				pointer-events: none;
+				font-family: 'SF Mono', 'Menlo', monospace;
+				font-size: 10px;
+				color: rgba(255,255,255,0.8);
+				text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+				z-index: 9999;
+				display: flex;
+				flex-direction: column;
+				align-items: flex-end;
+				gap: 4px;
+			}
+			#debug-indicators {
+				display: flex;
+				gap: 6px;
+				align-items: center;
+			}
+			.dbg-dot {
+				display: flex;
+				align-items: center;
+				gap: 3px;
+				opacity: 0.4;
+				transition: opacity 0.15s;
+			}
+			.dbg-dot.active { opacity: 1; }
+			.dbg-dot::before {
+				content: '';
+				width: 8px;
+				height: 8px;
+				border-radius: 50%;
+				display: inline-block;
+			}
+			#dbg-mic::before { background: #4ade80; }
+			#dbg-voice::before { background: #60a5fa; }
+			#dbg-send::before { background: #facc15; }
+			#dbg-think::before { background: #fb923c; }
+			#dbg-think.active::before { animation: pulse 0.8s ease-in-out infinite; }
+			#dbg-speak::before { background: #c084fc; }
+			#dbg-ws::before { background: #f87171; }
+			#dbg-tool::before { background: #22d3ee; }
+			#dbg-tool.active::before { animation: pulse 0.6s ease-in-out infinite; }
+			@keyframes pulse {
+				0%, 100% { opacity: 1; }
+				50% { opacity: 0.3; }
+			}
+			#dbg-status {
+				font-size: 9px;
+				opacity: 0.6;
+			}
+			/* Speech bubbles — right of avatar */
+			#bubble-container {
+				position: fixed;
+				top: 8%;
+				right: 4px;
+				pointer-events: none;
+				z-index: 9998;
+				display: flex;
+				flex-direction: column;
+				align-items: flex-end;
+				gap: 6px;
+				max-width: 42%;
+			}
+			.bubble {
+				padding: 8px 12px;
+				border-radius: 12px;
+				font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+				font-size: 12px;
+				line-height: 1.4;
+				word-wrap: break-word;
+				max-width: 100%;
+				opacity: 0;
+				transform: translateY(6px) scale(0.95);
+				transition: opacity 0.25s ease, transform 0.25s ease;
+			}
+			.bubble.visible {
+				opacity: 1;
+				transform: translateY(0) scale(1);
+			}
+			.bubble-user {
+				background: rgba(59, 130, 246, 0.85);
+				color: #fff;
+				border-bottom-right-radius: 4px;
+				align-self: flex-end;
+			}
+			.bubble-iris {
+				background: rgba(255, 255, 255, 0.9);
+				color: #1a1a1a;
+				border-bottom-left-radius: 4px;
+				align-self: flex-start;
+				box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+			}
+			.bubble-label {
+				font-size: 9px;
+				font-weight: 600;
+				opacity: 0.6;
+				margin-bottom: 1px;
+			}
+			.bubble-user .bubble-label { color: rgba(255,255,255,0.7); }
+			.bubble-iris .bubble-label { color: #888; }
 		</style>
 	</head>
 
 	<body>
+		<!-- Debug overlay -->
+		<div id="debug-panel">
+			<div id="debug-indicators">
+				<span id="dbg-ws" class="dbg-dot">WS</span>
+				<span id="dbg-mic" class="dbg-dot">MIC</span>
+				<span id="dbg-voice" class="dbg-dot">VOICE</span>
+				<span id="dbg-send" class="dbg-dot">SEND</span>
+				<span id="dbg-think" class="dbg-dot">THINK</span>
+				<span id="dbg-speak" class="dbg-dot">SPEAK</span>
+				<span id="dbg-tool" class="dbg-dot">TOOL</span>
+			</div>
+			<div id="dbg-status">Initializing...</div>
+		</div>
+
+		<!-- Speech bubbles -->
+		<div id="bubble-container">
+			<div id="bubble-user" class="bubble bubble-user">
+				<div class="bubble-label">You</div>
+				<div id="dbg-user-text"></div>
+			</div>
+			<div id="bubble-iris" class="bubble bubble-iris">
+				<div class="bubble-label">Iris</div>
+				<div id="dbg-model-text"></div>
+			</div>
+		</div>
+
 		<!-- Import map: resolve bare specifiers to CDN URLs -->
 		<script type="importmap">
 			{
@@ -125,8 +255,19 @@
 					}
 					expr.setValue('blink', blinkVal);
 
-					const smileVal = Math.max(0, Math.sin(time * 0.2) * 0.3);
-					expr.setValue('happy', smileVal);
+					// Lip sync — drive mouth from playback volume
+					const vol = window._voicePipeline?.getSpeakingVolume() || 0;
+					if (vol > 0.01) {
+						const open = Math.min(1, vol * 4);
+						expr.setValue('aa', open * 0.7);
+						expr.setValue('oh', open * 0.3);
+						expr.setValue('happy', 0.15);
+					} else {
+						expr.setValue('aa', 0);
+						expr.setValue('oh', 0);
+						const smileVal = Math.max(0, Math.sin(time * 0.2) * 0.3);
+						expr.setValue('happy', smileVal);
+					}
 				}
 			}
 
@@ -154,6 +295,12 @@
 			}
 
 			animate();
+
+			// ── Voice pipeline ────────────────────────────────────────
+			import { VoicePipeline } from './voice-pipeline.js';
+			const voice = new VoicePipeline();
+			window._voicePipeline = voice;
+			voice.start().catch(err => console.error('[Voice] Start error:', err));
 		</script>
 	</body>
 </html>
