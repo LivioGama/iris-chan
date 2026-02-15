@@ -1,5 +1,6 @@
 // Plays PCM16 24kHz audio from Gemini via Web Audio API
 import { Emitter } from '../../shared/emitter.js';
+import { info as logInfo, error as logError } from '../logger.js';
 
 export class AudioPlayback extends Emitter {
 	constructor() {
@@ -10,6 +11,12 @@ export class AudioPlayback extends Emitter {
 		this.nextStartTime = 0;
 		this.playing = false;
 		this.sources = [];
+		this.referenceCallback = null;
+		this.referenceProcessor = null;
+	}
+
+	setReferenceCallback(callback) {
+		this.referenceCallback = callback;
 	}
 
 	init() {
@@ -21,6 +28,28 @@ export class AudioPlayback extends Emitter {
 		this.gainNode = this.ctx.createGain();
 		this.gainNode.connect(this.analyser);
 		this.analyser.connect(this.ctx.destination);
+
+		// Set up reference signal extraction (for echo cancellation)
+		this._setupReferenceExtraction();
+	}
+
+	_setupReferenceExtraction() {
+		// Instead of using ScriptProcessor (deprecated, timing issues),
+		// we'll extract reference signal directly when enqueuing audio
+		// This is more reliable for echo cancellation
+		this._lastEnqueuedSamples = null;
+	}
+
+	// Called when audio is enqueued - extract and send reference signal
+	_sendReferenceSignal(float32Samples) {
+		if (this.referenceCallback && float32Samples && float32Samples.length > 0) {
+			// Resample from 24kHz to 16kHz before sending
+			const resampled = this._resample24kTo16k(float32Samples);
+			logInfo('Playback', `Reference signal ready: ${float32Samples.length} → ${resampled.length} samples`);
+			this.referenceCallback(resampled);
+		} else {
+			logError('Playback', `Ref signal failed: callback=${!!this.referenceCallback}, samples=${float32Samples?.length}`);
+		}
 	}
 
 	getVolume() {
@@ -43,6 +72,14 @@ export class AudioPlayback extends Emitter {
 		for (let i = 0; i < pcm16.length; i++) {
 			float32[i] = pcm16[i] / 32768;
 		}
+
+		// Send reference signal immediately for echo cancellation
+		if (!this._enqueueCount) this._enqueueCount = 0;
+		this._enqueueCount++;
+		if (this._enqueueCount % 10 === 1) {
+			logInfo('Playback', `Enqueuing audio chunk #${this._enqueueCount}: ${float32.length} samples`);
+		}
+		this._sendReferenceSignal(float32);
 
 		const audioBuffer = this.ctx.createBuffer(1, float32.length, 24000);
 		audioBuffer.getChannelData(0).set(float32);
@@ -91,6 +128,26 @@ export class AudioPlayback extends Emitter {
 		this.playing = false;
 		this.queue = [];
 		this.emit('stopped');
+	}
+
+	// Resample from 24kHz to 16kHz
+	_resample24kTo16k(float32Data) {
+		const inputLength = float32Data.length;
+		const outputLength = Math.floor((inputLength * 16000) / 24000);
+		const output = new Float32Array(outputLength);
+
+		const ratio = inputLength / outputLength;
+		for (let i = 0; i < outputLength; i++) {
+			const pos = i * ratio;
+			const index = Math.floor(pos);
+			const nextIndex = Math.min(index + 1, inputLength - 1);
+			const frac = pos - index;
+
+			// Linear interpolation
+			output[i] = float32Data[index] * (1 - frac) + float32Data[nextIndex] * frac;
+		}
+
+		return output;
 	}
 
 	_base64ToInt16(base64) {

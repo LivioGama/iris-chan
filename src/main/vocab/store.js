@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('../../shared/config');
+const log = require('../logger');
 
 const vocabPath = path.join(config.paths.irisDir, 'vocabulary.json');
 const hotVocabPath = path.join(config.paths.irisDir, 'vocabulary-hot.json');
@@ -71,10 +72,10 @@ function addCorrection(wrong, right) {
 		if (!vocab.corrections[wrong]) {
 			vocab.corrections[wrong] = right;
 			fs.writeFileSync(vocabPath, JSON.stringify(vocab, null, '\t') + '\n', 'utf-8');
-			console.log(`[Vocab] Saved correction: "${wrong}" \u2192 "${right}"`);
+			log.info('Vocab', `Saved correction: "${wrong}" → "${right}"`);
 		}
 	} catch (err) {
-		console.error('[Vocab] Failed to save correction:', err.message);
+		log.error('Vocab', 'Failed to save correction:', err.message);
 	}
 }
 
@@ -89,7 +90,7 @@ function addHotTerm(term) {
 		hot[term].lastSeen = now;
 	} else {
 		hot[term] = { count: 1, firstSeen: now, lastSeen: now };
-		console.log('[VocabHot] New hot term:', term);
+		log.info('VocabHot', 'New hot term:', term);
 	}
 	saveHot(hot);
 	return true;
@@ -111,12 +112,12 @@ function promoteAndCleanHot() {
 			if (!vocab.terms.includes(term)) {
 				vocab.terms.push(term);
 				vocabChanged = true;
-				console.log('[VocabHot] Promoted to permanent:', term, `(${data.count}x)`);
+				log.info('VocabHot', `Promoted to permanent: ${term} (${data.count}x)`);
 			}
 			delete hot[term];
 			changed = true;
 		} else if (age > config.vocab.hotExpireMs) {
-			console.log('[VocabHot] Expired:', term);
+			log.info('VocabHot', 'Expired:', term);
 			delete hot[term];
 			changed = true;
 		}

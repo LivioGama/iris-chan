@@ -14,6 +14,11 @@ try {
 		GET_VOCABULARY_CORE: 'get-vocabulary-core', ADD_CORRECTION: 'add-correction',
 		SEARCH_SPINNER: 'search-spinner', SEARCH_RESULT: 'search-result', SEARCH_HIDE: 'search-hide',
 		MESSAGING_APP_FOCUSED: 'messaging-app-focused', MESSAGING_APP_LEFT: 'messaging-app-left',
+		GET_SKILL_DECLARATIONS: 'get-skill-declarations', GET_SKILL_PROMPTS: 'get-skill-prompts',
+		GET_SKILL_CATALOG: 'get-skill-catalog', SET_IGNORE_MOUSE: 'set-ignore-mouse',
+		RELOAD_SESSION: 'reload-session',
+		LOG_TO_FILE: 'log-to-file',
+		KILL_SKILL: 'kill-skill',
 	};
 }
 
@@ -34,4 +39,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	addCorrection: (wrong, right) => ipcRenderer.send(ch.ADD_CORRECTION, wrong, right),
 	onMessagingAppFocused: (cb) => ipcRenderer.on(ch.MESSAGING_APP_FOCUSED, (_, app) => cb(app)),
 	onMessagingAppLeft: (cb) => ipcRenderer.on(ch.MESSAGING_APP_LEFT, cb),
+	getSkillDeclarations: () => ipcRenderer.invoke(ch.GET_SKILL_DECLARATIONS),
+	getSkillPrompts: () => ipcRenderer.invoke(ch.GET_SKILL_PROMPTS),
+	getSkillCatalog: () => ipcRenderer.invoke(ch.GET_SKILL_CATALOG),
+	setIgnoreMouseEvents: (ignore) => ipcRenderer.send(ch.SET_IGNORE_MOUSE, ignore),
+	reloadSession: () => ipcRenderer.invoke(ch.RELOAD_SESSION),
+	onReloadSession: (cb) => ipcRenderer.on(ch.RELOAD_SESSION, cb),
+	logToFile: (level, tag, message) => ipcRenderer.send(ch.LOG_TO_FILE, level, tag, message),
+	killSkill: () => ipcRenderer.invoke(ch.KILL_SKILL),
 });

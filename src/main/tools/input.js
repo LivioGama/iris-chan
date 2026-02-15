@@ -52,4 +52,11 @@ async function scroll(args) {
 	});
 }
 
-module.exports = { type_text, press_key, click_at, double_click, mouse_move, drag, scroll };
+async function activate_app(args) {
+	return runHelper({
+		action: 'activate_app',
+		name: args.name || '',
+	});
+}
+
+module.exports = { type_text, press_key, click_at, double_click, mouse_move, drag, scroll, activate_app };

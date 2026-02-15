@@ -7,5 +7,12 @@
   },
   "devDependencies": {
     "electron": "^40.4.1"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "^4.3.0",
+    "@gltf-transform/extensions": "^4.3.0",
+    "meshopt-decoder": "^1.0.2",
+    "meshoptimizer": "^1.0.1",
+    "three-mesh-bvh": "^0.9.8"
   }
 }
