@@ -19,8 +19,14 @@ try {
 		RELOAD_SESSION: 'reload-session',
 		LOG_TO_FILE: 'log-to-file',
 		KILL_SKILL: 'kill-skill',
+		TOGGLE_AVATAR: 'toggle-avatar',
 	};
 }
+
+// Get avatar config from main process
+const avatarConfig = await ipcRenderer.invoke('get-avatar-config');
+
+contextBridge.exposeInMainWorld('avatarConfig', avatarConfig);
 
 contextBridge.exposeInMainWorld('electronAPI', {
 	getApiKey: () => ipcRenderer.invoke(ch.GET_API_KEY),
@@ -47,4 +53,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	onReloadSession: (cb) => ipcRenderer.on(ch.RELOAD_SESSION, cb),
 	logToFile: (level, tag, message) => ipcRenderer.send(ch.LOG_TO_FILE, level, tag, message),
 	killSkill: () => ipcRenderer.invoke(ch.KILL_SKILL),
+	toggleAvatar: () => ipcRenderer.invoke(ch.TOGGLE_AVATAR),
 });

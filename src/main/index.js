@@ -74,6 +74,15 @@ app.whenReady().then(async () => {
 	globalShortcut.register('CommandOrControl+I', () => {
 		if (win) win.webContents.send('toggle-voice');
 	});
+
+	// Ctrl+Shift+A toggles between avatars
+	globalShortcut.register('CommandOrControl+Shift+A', () => {
+		if (win) {
+			win.webContents.invoke('toggle-avatar').then(newAvatarType => {
+				console.log(`Avatar toggled to: ${newAvatarType}`);
+			});
+		}
+	});
 });
 
 // Watch tool modules for changes and auto-reload

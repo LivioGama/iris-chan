@@ -8,6 +8,7 @@ const searchWindow = require('./windows/search-window');
 const skills = require('./skills');
 const avatarWindow = require('./windows/avatar-window');
 const log = require('./logger');
+const config = require('../shared/config');
 
 function register(apiKey) {
 	ipcMain.handle(ch.GET_API_KEY, () => apiKey);
@@ -52,6 +53,24 @@ function register(apiKey) {
 		const win = avatarWindow.get();
 		if (win) win.webContents.send(ch.RELOAD_SESSION);
 		return { ok: true };
+	});
+
+	// Avatar configuration
+	ipcMain.handle('get-avatar-config', () => config.avatar);
+
+	ipcMain.handle(ch.TOGGLE_AVATAR, () => {
+		// Toggle between 'tripo3d' and 'original'
+		const current = config.avatar.current;
+		config.avatar.current = current === 'tripo3d' ? 'original' : 'tripo3d';
+		log.info('Avatar', `Switched to ${config.avatar.current}`);
+
+		// Reload the avatar window
+		const win = avatarWindow.get();
+		if (win) {
+			win.reload();
+		}
+
+		return config.avatar.current;
 	});
 }
 
