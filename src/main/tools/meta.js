@@ -88,7 +88,8 @@ async function self_fix(args) {
 		`## Rules`,
 		`- Edit files in place, don't recreate them`,
 		`- Don't touch audio playback scheduling unless explicitly asked`,
-		`- After changes, the app needs a manual restart (no hot-reload)`,
+		`- Tool module changes (src/main/tools/) hot-reload automatically — no restart needed`,
+		`- For other file changes, restart the app: pkill -f "Electron"; sleep 1; npx electron . &`,
 		`- Keep changes minimal and focused`,
 	].filter(Boolean).join('\n');
 

@@ -14,12 +14,19 @@ function show(query, content) {
 	const ow = Math.min(650, dw - 80);
 	const oh = Math.min(520, dh - 80);
 
+	let wx = cursor.x + 16;
+	let wy = cursor.y + 16;
+	if (wx + ow > dx + dw) wx = cursor.x - ow - 16;
+	if (wy + oh > dy + dh) wy = cursor.y - oh - 16;
+	wx = Math.max(dx, wx);
+	wy = Math.max(dy, wy);
+
 	if (!searchWin || searchWin.isDestroyed()) {
 		searchWin = new BrowserWindow({
 			width: ow,
 			height: oh,
-			x: dx + Math.round((dw - ow) / 2),
-			y: dy + Math.round((dh - oh) / 2),
+			x: wx,
+			y: wy,
 			transparent: true,
 			frame: false,
 			hasShadow: false,
@@ -41,12 +48,7 @@ function show(query, content) {
 			}
 		});
 	} else {
-		searchWin.setBounds({
-			x: dx + Math.round((dw - ow) / 2),
-			y: dy + Math.round((dh - oh) / 2),
-			width: ow,
-			height: oh,
-		});
+		searchWin.setBounds({ x: wx, y: wy, width: ow, height: oh });
 		searchWin.show();
 		if (content !== null) {
 			searchWin.webContents.send('search-result', query, content);
@@ -57,7 +59,10 @@ function show(query, content) {
 
 	clearTimeout(searchHideTimeout);
 	if (content !== null) {
-		searchHideTimeout = setTimeout(() => hide(), config.search.autoHideMs);
+		// Scale auto-hide based on content length — long research reports need more reading time
+		const baseMs = config.search.autoHideMs;
+		const ms = content.length > 2000 ? baseMs * 4 : baseMs;
+		searchHideTimeout = setTimeout(() => hide(), ms);
 	}
 }
 

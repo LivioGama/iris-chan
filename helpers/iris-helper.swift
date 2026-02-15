@@ -19,6 +19,9 @@ struct Command: Decodable {
     let x2: Double?
     let y2: Double?
     let button: String? // "left", "right"
+    let region: String? // "fullscreen", "window"
+    let width: Int?
+    let height: Int?
 }
 
 struct Response: Encodable {
@@ -200,24 +203,68 @@ case "drag":
     guard let x = cmd.x, let y = cmd.y, let x2 = cmd.x2, let y2 = cmd.y2 else {
         respond(false, "Missing coordinates (need x, y, x2, y2)")
     }
-    let dragSrc = CGEventSource(stateID: .hidSystemState)
+
     let from = CGPoint(x: x, y: y)
-    let to = CGPoint(x: x2, y: y2)
+    var to = CGPoint(x: x2, y: y2)
+
+    // Find the screen containing the start position
+    guard let startScreen = NSScreen.screens.first(where: { screen in
+        let frame = screen.frame
+        return from.x >= frame.minX && from.x <= frame.maxX &&
+               from.y >= frame.minY && from.y <= frame.maxY
+    }) else {
+        respond(false, "Start position not on any screen: (\(Int(x)),\(Int(y)))")
+    }
+
+    let screenBounds = startScreen.frame
+
+    // CRITICAL: Clamp end position to stay on the same screen
+    // This prevents jumping to other screens during chess moves
+    to.x = max(screenBounds.minX, min(screenBounds.maxX - 1, to.x))
+    to.y = max(screenBounds.minY, min(screenBounds.maxY - 1, to.y))
+
+    // Validate start position is on screen
+    guard from.x >= screenBounds.minX, from.x <= screenBounds.maxX,
+          from.y >= screenBounds.minY, from.y <= screenBounds.maxY else {
+        respond(false, "Start coordinates not on detected screen")
+    }
+
+    let dragSrc = CGEventSource(stateID: .hidSystemState)
+
+    // Move to start position without clicking
+    let moveStart = CGEvent(mouseEventSource: dragSrc, mouseType: .mouseMoved, mouseCursorPosition: from, mouseButton: .left)!
+    moveStart.post(tap: .cghidEventTap)
+    usleep(50_000) // 50ms settle
+
+    // Press down - LOCK focus to current window
     let dragDown = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseDown, mouseCursorPosition: from, mouseButton: .left)!
     dragDown.post(tap: .cghidEventTap)
-    usleep(100_000)
-    // Smooth drag in steps
-    let steps = 10
+    usleep(60_000) // 60ms - lock button state
+
+    // Smooth drag in 30 steps, staying within screen bounds
+    let steps = 30
     for i in 1...steps {
         let t = Double(i) / Double(steps)
-        let mid = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
-        let dragMove = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseDragged, mouseCursorPosition: mid, mouseButton: .left)!
+        var progress = CGPoint(
+            x: from.x + (to.x - from.x) * t,
+            y: from.y + (to.y - from.y) * t
+        )
+        // Extra safety: clamp each intermediate position to screen bounds
+        progress.x = max(screenBounds.minX, min(screenBounds.maxX - 1, progress.x))
+        progress.y = max(screenBounds.minY, min(screenBounds.maxY - 1, progress.y))
+
+        let dragMove = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseDragged, mouseCursorPosition: progress, mouseButton: .left)!
         dragMove.post(tap: .cghidEventTap)
-        usleep(20_000)
+        usleep(12_000) // 12ms between steps
     }
+
+    // Release at clamped end position
+    usleep(40_000)
     let dragUp = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseUp, mouseCursorPosition: to, mouseButton: .left)!
     dragUp.post(tap: .cghidEventTap)
-    respond(true, "Dragged from (\(Int(x)),\(Int(y))) to (\(Int(x2)),\(Int(y2)))")
+    usleep(30_000) // Final settle
+
+    respond(true, "Dragged from (\(Int(x)),\(Int(y))) to (\(Int(to.x)),\(Int(to.y))) on screen")
 
 case "get_mouse_position":
     let pos = NSEvent.mouseLocation
@@ -393,6 +440,58 @@ case "window_manage":
     try? proc.run()
     proc.waitUntilExit()
     respond(true, "Window moved to \(pos)")
+
+case "slow_move":
+    guard let x = cmd.x, let y = cmd.y else {
+        respond(false, "Missing x or y coordinates")
+    }
+    let movePoint = CGPoint(x: x, y: y)
+    let moveSrc = CGEventSource(stateID: .hidSystemState)
+
+    // Smooth animation: move in 20 steps over 500ms
+    let steps = 20
+    let startPos = NSEvent.mouseLocation
+    let screenH = NSScreen.main?.frame.height ?? 800
+    let currentY = screenH - startPos.y // Convert to CGEvent coordinates
+
+    for i in 0...steps {
+        let progress = Double(i) / Double(steps)
+        let mid = CGPoint(
+            x: startPos.x + (movePoint.x - startPos.x) * progress,
+            y: currentY + (movePoint.y - currentY) * progress
+        )
+        let moveEvent = CGEvent(mouseEventSource: moveSrc, mouseType: .mouseMoved, mouseCursorPosition: mid, mouseButton: .left)!
+        moveEvent.post(tap: .cghidEventTap)
+        usleep(25_000) // 25ms between steps
+    }
+
+    respond(true, "Slowly moved to (\(Int(x)), \(Int(y)))")
+
+case "activate_app":
+    guard let name = cmd.name, !name.isEmpty else {
+        respond(false, "Missing app name")
+    }
+
+    let script = """
+    tell application "System Events"
+        activate application "\(name)"
+    end tell
+    """
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    proc.arguments = ["-e", script]
+    do {
+        try proc.run()
+        proc.waitUntilExit()
+        if proc.terminationStatus == 0 {
+            usleep(100_000) // 100ms to ensure focus is established
+            respond(true, "Activated \(name)")
+        } else {
+            respond(false, "Failed to activate \(name)")
+        }
+    } catch {
+        respond(false, "Error activating app: \(error.localizedDescription)")
+    }
 
 default:
     respond(false, "Unknown action: \(cmd.action)")

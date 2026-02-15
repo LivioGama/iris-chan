@@ -1,5 +1,6 @@
 // Screen capture: periodic screenshots via Electron desktopCapturer
 const { desktopCapturer, screen } = require('electron');
+const log = require('./logger');
 
 async function capture() {
 	try {
@@ -23,7 +24,7 @@ async function capture() {
 
 		return { ok: true, data: base64 };
 	} catch (err) {
-		console.error('[ScreenCapture] Error:', err.message);
+		log.error('ScreenCapture', err.message);
 		return { ok: false, data: null };
 	}
 }

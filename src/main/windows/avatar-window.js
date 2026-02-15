@@ -2,6 +2,7 @@
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
 const config = require('../../shared/config');
+const log = require('../logger');
 
 let win = null;
 let currentDisplayId = null;
@@ -9,7 +10,7 @@ let currentDisplayId = null;
 function getBottomLeftPosition(display) {
 	const { x, y, height } = display.bounds;
 	return {
-		x: x + 40,
+		x: x - 60,
 		y: y + height - config.window.avatarHeight,
 	};
 }
@@ -48,10 +49,16 @@ function create() {
 	win.setIgnoreMouseEvents(true, { forward: true });
 	win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
 
-	// Forward renderer console to main process stdout
+	// Forward renderer console output to unified log (skip messages already sent via IPC logToFile)
 	win.webContents.on('console-message', (ev) => {
-		if (ev.message.startsWith('[Vocab]') || ev.message.startsWith('[Voice]'))
-			console.log(ev.message);
+		const m = ev.message;
+		if (!m) return;
+		// Skip messages already logged via IPC (renderer logger calls console.log then sends IPC)
+		// Only forward messages NOT from our renderer logger (those that don't have [Tag] prefix)
+		const tagMatch = m.match(/^\[(\w+)\]\s*(.*)/s);
+		if (tagMatch) return; // already forwarded by renderer logger via IPC
+		const level = ev.level <= 0 ? 'info' : ev.level === 1 ? 'warn' : 'error';
+		log[level]('Renderer', m);
 	});
 
 	// Poll cursor position to follow it across displays

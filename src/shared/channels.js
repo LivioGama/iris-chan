@@ -17,4 +17,11 @@ module.exports = {
 	SEARCH_HIDE: 'search-hide',
 	MESSAGING_APP_FOCUSED: 'messaging-app-focused',
 	MESSAGING_APP_LEFT: 'messaging-app-left',
+	GET_SKILL_DECLARATIONS: 'get-skill-declarations',
+	GET_SKILL_PROMPTS: 'get-skill-prompts',
+	GET_SKILL_CATALOG: 'get-skill-catalog',
+	SET_IGNORE_MOUSE: 'set-ignore-mouse',
+	RELOAD_SESSION: 'reload-session',
+	LOG_TO_FILE: 'log-to-file',
+	KILL_SKILL: 'kill-skill',
 };

@@ -5,6 +5,9 @@ const toolExecutor = require('./tools');
 const screenCapture = require('./screen-capture');
 const vocabStore = require('./vocab/store');
 const searchWindow = require('./windows/search-window');
+const skills = require('./skills');
+const avatarWindow = require('./windows/avatar-window');
+const log = require('./logger');
 
 function register(apiKey) {
 	ipcMain.handle(ch.GET_API_KEY, () => apiKey);
@@ -24,6 +27,32 @@ function register(apiKey) {
 	ipcMain.on(ch.SEARCH_SPINNER, (_, query) => searchWindow.show(query, null));
 	ipcMain.on(ch.SEARCH_RESULT, (_, query, content) => searchWindow.show(query, content));
 	ipcMain.on(ch.SEARCH_HIDE, () => searchWindow.hide());
+
+	ipcMain.handle(ch.GET_SKILL_DECLARATIONS, () => skills.getDeclarations());
+	ipcMain.handle(ch.GET_SKILL_PROMPTS, () => skills.getSystemPrompts());
+	ipcMain.handle(ch.GET_SKILL_CATALOG, () => skills.getCatalog());
+
+	ipcMain.on(ch.SET_IGNORE_MOUSE, (_, ignore) => {
+		const win = avatarWindow.get();
+		if (win) win.setIgnoreMouseEvents(ignore, { forward: true });
+	});
+
+	// Renderer log forwarding
+	ipcMain.on(ch.LOG_TO_FILE, (_, level, tag, message) => {
+		if (level === 'error') log.error(tag, message);
+		else if (level === 'warn') log.warn(tag, message);
+		else log.info(tag, message);
+	});
+
+	ipcMain.handle(ch.KILL_SKILL, () => skills.killSkill());
+
+	ipcMain.handle(ch.RELOAD_SESSION, () => {
+		toolExecutor.reload();
+		skills.scan();
+		const win = avatarWindow.get();
+		if (win) win.webContents.send(ch.RELOAD_SESSION);
+		return { ok: true };
+	});
 }
 
 module.exports = { register };

@@ -37,7 +37,7 @@ module.exports = {
 		correctionPromoteCount: 2,
 	},
 	window: {
-		avatarWidth: 400,
+		avatarWidth: 700,
 		avatarHeight: 600,
 	},
 	search: {

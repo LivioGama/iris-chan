@@ -2,6 +2,7 @@
 const config = require('../../shared/config');
 const vocabStore = require('./store');
 const toolExecutor = require('../tools');
+const log = require('../logger');
 
 let vocabBuffer = [];
 let lastClipboard = '';
@@ -43,7 +44,7 @@ async function extractTermsWithGemini(textChunks, apiKey) {
 			return terms.filter(t => typeof t === 'string' && t.length >= 2 && t.length <= 40);
 		}
 	} catch (err) {
-		console.error('[VocabAI] Gemini extraction error:', err.message);
+		log.error('VocabAI', 'Gemini extraction error:', err.message);
 	}
 	return [];
 }
@@ -95,7 +96,7 @@ function start(apiKey, getWin) {
 		const chunks = vocabBuffer.splice(0);
 		const terms = await extractTermsWithGemini(chunks, apiKey);
 		for (const t of terms) vocabStore.addHotTerm(t);
-		console.log('[VocabAI] Batch:', chunks.length, 'chunks \u2192', terms.length, 'terms:', terms.join(', '));
+		log.info('VocabAI', `Batch: ${chunks.length} chunks → ${terms.length} terms: ${terms.join(', ')}`);
 	}, config.vocab.batchExtractMs);
 
 	// Promote/expire hot terms — every 60 seconds

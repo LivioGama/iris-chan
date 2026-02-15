@@ -7,6 +7,9 @@ import { VocabMatcher } from '../vocab/matcher.js';
 import { findBestNgram } from '../vocab/learner.js';
 import { updateIndicator, updateStatus } from '../ui/debug-panel.js';
 import { showBubble, hideBubbles } from '../ui/bubbles.js';
+import { showToolStart, showToolDone, hideToolLog } from '../ui/tool-log.js';
+import { refreshWorkspace, updateIfWorkspaceTool } from '../ui/workspace-bar.js';
+import { info as logInfo, error as logError } from '../logger.js';
 
 const STATES = {
 	IDLE: 'IDLE',
@@ -39,6 +42,19 @@ export class VoicePipeline {
 		this._lastUserTurn = '';
 		this._lastReplyPromptTime = 0;
 		this._replyCooldownMs = 45000;
+		this.needsReconnect = false;
+		this._echoSuppressionEnabled = true;
+		this._echoSuppressionGain = 1.0; // Maximum suppression
+
+		// Wire playback reference signals to capture for echo cancellation
+		this.playback.setReferenceCallback((float32Samples) => {
+			// Always send reference signal if suppression is enabled
+			// Capture will only process it if it's active
+			if (this._echoSuppressionEnabled) {
+				this.capture.sendReferenceSignal(float32Samples);
+				logInfo('Echo', `Ref signal sent: ${float32Samples.length} samples`);
+			}
+		});
 	}
 
 	async _loadVocabulary() {
@@ -51,9 +67,9 @@ export class VoicePipeline {
 			const corrections = await window.electronAPI.getVocabularyCorrections() || {};
 			this._matcher.build(corrections, allTerms);
 			const corrCount = Object.keys(corrections).length;
-			console.log(`[Vocab] Matcher built: ${allTerms.length} terms, ${corrCount} corrections`);
+			logInfo('Vocab', `Matcher built: ${allTerms.length} terms, ${corrCount} corrections`);
 		} catch (err) {
-			console.error('[Vocab] Failed to load vocabulary:', err);
+			logError('Vocab', 'Failed to load vocabulary:', err);
 		}
 	}
 
@@ -67,7 +83,7 @@ export class VoicePipeline {
 	_correctTranscript(text) {
 		const result = this._matcher.correct(text);
 		if (result !== text) {
-			console.log('[Vocab] FIXED:', JSON.stringify(text), '\u2192', JSON.stringify(result));
+			logInfo('Vocab', `FIXED: ${JSON.stringify(text)} → ${JSON.stringify(result)}`);
 		}
 		return result;
 	}
@@ -99,13 +115,13 @@ export class VoicePipeline {
 			const candidate = this._correctionCandidates.get(key);
 			if (candidate.target !== term) continue;
 			candidate.count++;
-			console.log(`[Vocab] Correction candidate: "${match.ngram}" \u2192 "${term}" (\u00d7${candidate.count})`);
+			logInfo('Vocab', `Correction candidate: "${match.ngram}" → "${term}" (×${candidate.count})`);
 
 			if (candidate.count >= 2) {
 				this._correctionCandidates.delete(key);
 				this._matcher.addCorrection(key, term);
 				window.electronAPI.addCorrection(key, term);
-				console.log(`[Vocab] AUTO-LEARNED: "${key}" \u2192 "${term}"`);
+				logInfo('Vocab', `AUTO-LEARNED: "${key}" → "${term}"`);
 			}
 		}
 	}
@@ -119,11 +135,15 @@ export class VoicePipeline {
 
 		await this._loadVocabulary();
 		this._vocabRefreshInterval = setInterval(() => this._loadVocabulary(), 60000);
+		refreshWorkspace();
 		this._bindEvents();
 
 		window.electronAPI.onToggleVoice(() => this.toggle());
 		window.electronAPI.onMessagingAppFocused((app) => this._onMessagingAppFocused(app));
 		window.electronAPI.onMessagingAppLeft(() => { this._lastReplyPromptTime = 0; });
+		window.electronAPI.onReloadSession(() => {
+			if (this._active) this.reconnect();
+		});
 
 		await this._activate();
 	}
@@ -136,10 +156,12 @@ export class VoicePipeline {
 
 		this.gemini.on('ready', async () => {
 			updateStatus('Session ready \u2014 starting mic');
+			this.capture.stop();
+			this.playback.stop();
 			try {
 				await this.capture.start();
 			} catch (err) {
-				console.error('[Voice] Mic error:', err);
+				logError('Voice', 'Mic error:', err);
 				updateStatus('Mic error: ' + err.message);
 			}
 			this._startScreenCapture();
@@ -148,7 +170,7 @@ export class VoicePipeline {
 		this.gemini.on('disconnected', () => {
 			updateIndicator('ws', false);
 			updateIndicator('send', false);
-			updateStatus('Disconnected');
+			updateStatus('Disconnected \u2014 reconnecting...');
 			this._setState(STATES.IDLE);
 		});
 
@@ -157,12 +179,16 @@ export class VoicePipeline {
 		});
 
 		this.gemini.on('maxRetriesReached', () => {
-			updateStatus('Max retries reached \u2014 reload to reconnect');
+			this.needsReconnect = true;
+			updateStatus('Disconnected \u2014 click Iris to reconnect');
 		});
 
 		this.gemini.on('audio', (data) => {
 			if (this.state !== STATES.RESPONDING) {
-				if (this._accum.user) this._lastUserTurn = this._accum.user;
+				if (this._accum.user) {
+					logInfo('Conversation', `[USER] ${this._accum.user}`);
+					this._lastUserTurn = this._accum.user;
+				}
 				this._accum.user = '';
 			}
 			this._setState(STATES.RESPONDING);
@@ -181,7 +207,10 @@ export class VoicePipeline {
 		this.gemini.on('turnComplete', () => {
 			this._setState(STATES.LISTENING);
 			updateIndicator('think', false);
-			if (this._accum.model) this._scanVocabulary(this._accum.model);
+			if (this._accum.model) {
+				logInfo('Conversation', `[IRIS] ${this._accum.model}`);
+				this._scanVocabulary(this._accum.model);
+			}
 			if (this._lastUserTurn && this._accum.model) {
 				this._learnCorrections(this._lastUserTurn, this._accum.model);
 			}
@@ -200,6 +229,10 @@ export class VoicePipeline {
 			updateIndicator('send', true);
 			this._setState(STATES.LISTENING);
 			updateStatus('Listening...');
+			// Configure echo suppression
+			this.capture.setEchoSuppression(this._echoSuppressionEnabled);
+			this.capture.setSuppressionGain(this._echoSuppressionGain);
+			logInfo('Echo', `Echo cancellation active (browser AEC + software suppression at ${(this._echoSuppressionGain * 100).toFixed(0)}%)`);
 		});
 
 		this.capture.on('data', (base64) => {
@@ -228,6 +261,8 @@ export class VoicePipeline {
 
 		this.playback.on('ended', () => {
 			updateIndicator('speak', false);
+			// Notify capture that playback has ended (for echo suppression)
+			this.capture.notifyPlaybackStop();
 			if (this.state === STATES.RESPONDING) {
 				this._setState(STATES.LISTENING);
 			}
@@ -246,10 +281,41 @@ export class VoicePipeline {
 		}
 	}
 
+	async reconnect() {
+		this.needsReconnect = false;
+		this.capture.stop();
+		this.playback.stop();
+		this.gemini.disconnect();
+		updateStatus('Reconnecting...');
+		await this.gemini.connect(this._apiKey);
+	}
+
 	async _activate() {
 		this._active = true;
 		updateStatus('Connecting...');
 		await this.gemini.connect(this._apiKey);
+	}
+
+	// Control echo suppression (software-based, in addition to browser AEC)
+	setEchoSuppressionEnabled(enabled) {
+		this._echoSuppressionEnabled = !!enabled;
+		this.capture.setEchoSuppression(this._echoSuppressionEnabled);
+		logInfo('Echo', `Echo suppression ${enabled ? 'enabled' : 'disabled'}`);
+	}
+
+	// Set suppression aggressiveness (0-1, where 1 is most aggressive)
+	setEchoSuppressionGain(gain) {
+		this._echoSuppressionGain = Math.max(0, Math.min(1, gain));
+		this.capture.setSuppressionGain(this._echoSuppressionGain);
+		logInfo('Echo', `Echo suppression gain set to ${(this._echoSuppressionGain * 100).toFixed(0)}%`);
+	}
+
+	getEchoSuppressionEnabled() {
+		return this._echoSuppressionEnabled;
+	}
+
+	getEchoSuppressionGain() {
+		return this._echoSuppressionGain;
 	}
 
 	_deactivate() {
@@ -305,6 +371,27 @@ export class VoicePipeline {
 		showBubble(who, this._correctTranscript(this._accum[who]));
 	}
 
+	_isSearchTool(name, args) {
+		if (name === 'web_search' || name === 'ask_chatgpt' || name === 'research') return true;
+		if (name === 'run_terminal_command') {
+			const cmd = (args?.command || '').toLowerCase();
+			if (cmd.includes('search.py') || cmd.includes('perplexity')) return true;
+		}
+		if (name.includes('search')) return true;
+		return false;
+	}
+
+	_searchLabel(name, args) {
+		if (name === 'web_search') return args?.query || 'Searching...';
+		if (name === 'ask_chatgpt') return args?.prompt || 'Asking ChatGPT...';
+		if (name === 'research') return args?.query || 'Deep researching...';
+		if (name === 'run_terminal_command') {
+			const m = (args?.command || '').match(/search\.py\s+["']([^"']+)["']/);
+			return m ? m[1] : 'Searching...';
+		}
+		return args?.query || 'Searching...';
+	}
+
 	async _handleToolCalls(calls) {
 		this._setState(STATES.TOOL_EXECUTING);
 		this._toolExecuting = true;
@@ -314,27 +401,38 @@ export class VoicePipeline {
 			const { name, args, id } = calls[i];
 			if (i > 0) await new Promise(r => setTimeout(r, 200));
 
-			if (name === 'web_search') {
-				window.electronAPI.searchSpinner(args.query || 'Searching...');
+			showToolStart(name, args, i, calls.length);
+			logInfo('Tool', `Executing: ${name}(${JSON.stringify(args || {})})`.slice(0, 500));
+
+			const isSearch = this._isSearchTool(name, args);
+			if (isSearch) {
+				window.electronAPI.searchSpinner(this._searchLabel(name, args));
 				updateIndicator('srch', true);
 			}
 
 			try {
 				const result = await window.electronAPI.executeTool(name, args);
+				showToolDone(name, i, result.ok !== false);
+				updateIfWorkspaceTool(name);
+				logInfo('Tool', `Result: ${name} → ${result.ok !== false ? 'OK' : 'FAIL'}: ${(result.result || 'done').slice(0, 300)}`);
 				this.gemini.sendToolResponse(id, name, result.result || 'done');
 
-				if (name === 'web_search') {
+				if (isSearch) {
 					updateIndicator('srch', false);
-					window.electronAPI.searchResult(args.query || 'Search', result.ok ? result.result : (result.result || 'Search failed'));
+					window.electronAPI.searchResult(this._searchLabel(name, args), result.ok ? result.result : (result.result || 'Search failed'));
 				}
 			} catch (err) {
+				showToolDone(name, i, false);
+				logError('Tool', `Error: ${name} → ${err.message}`);
 				this.gemini.sendToolResponse(id, name, 'Error: ' + err.message);
-				if (name === 'web_search') {
+				if (isSearch) {
 					updateIndicator('srch', false);
-					window.electronAPI.searchResult(args.query || 'Search', 'Error: ' + err.message);
+					window.electronAPI.searchResult(this._searchLabel(name, args), 'Error: ' + err.message);
 				}
 			}
 		}
+
+		hideToolLog();
 
 		if (calls.some(c => c.name === 'manage_vocabulary' && (c.args?.action === 'add' || c.args?.action === 'remove'))) {
 			await this._loadVocabulary();
@@ -355,7 +453,7 @@ export class VoicePipeline {
 				this.gemini.sendImage(capture.data);
 			}
 		} catch (err) {
-			console.error('[Voice] Screen capture error:', err);
+			logError('Voice', 'Screen capture error:', err);
 		}
 	}
 

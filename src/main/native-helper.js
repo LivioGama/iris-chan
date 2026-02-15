@@ -2,6 +2,7 @@
 const { execFile, exec } = require('child_process');
 const fs = require('fs');
 const config = require('../shared/config');
+const log = require('./logger');
 
 let compiled = false;
 
@@ -11,13 +12,13 @@ function ensureCompiled() {
 			compiled = true;
 			return resolve();
 		}
-		console.log('[NativeHelper] Compiling Swift helper...');
+		log.info('NativeHelper', 'Compiling Swift helper...');
 		exec(`swiftc -O -o "${config.paths.helperBin}" "${config.paths.helperSrc}"`, (err, stdout, stderr) => {
 			if (err) {
-				console.error('[NativeHelper] Compile error:', stderr);
+				log.error('NativeHelper', 'Compile error:', stderr);
 				return reject(new Error('Swift compile failed: ' + stderr));
 			}
-			console.log('[NativeHelper] Helper compiled successfully');
+			log.info('NativeHelper', 'Helper compiled successfully');
 			compiled = true;
 			resolve();
 		});

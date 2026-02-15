@@ -1,0 +1,25 @@
+# 3D Model Generation dependencies
+# Install with: pip install -r requirements-3d.txt
+# macOS: Uses Metal GPU acceleration via PyTorch
+
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+Pillow>=9.0.0
+numpy>=1.21.0
+scikit-image>=0.19.0
+scipy>=1.10.0
+
+# For depth estimation (macOS optimized)
+transformers>=4.30.0
+timm>=0.9.0
+
+# DreamGaussian (install from GitHub)
+# pip install git+https://github.com/dreamgaussian/dreamgaussian.git
+
+# Alternative: Install specific version
+# Or build from source: https://github.com/dreamgaussian/dreamgaussian
+
+# Optional: For advanced features (not available on Python 3.13 macOS)
+trimesh>=3.15.0  # 3D mesh processing
+# pytorch3d>=0.7.0  # 3D deep learning (optional, build from source if needed)

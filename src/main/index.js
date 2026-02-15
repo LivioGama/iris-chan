@@ -1,3 +1,11 @@
+// Suppress EPIPE crashes (broken stdout/stderr pipe in packaged Electron)
+process.stdout?.on('error', () => {});
+process.stderr?.on('error', () => {});
+process.on('uncaughtException', (err) => {
+	if (err.code === 'EPIPE') return;
+	try { require('./logger').error('Uncaught', err.stack || err.message); } catch {}
+});
+
 // App lifecycle only: ready, quit, permissions
 const { app, session, systemPreferences, globalShortcut } = require('electron');
 const path = require('path');
@@ -24,13 +32,16 @@ try {
 	}
 } catch {}
 
-// Make Ollama key available to tool modules
+// Make API keys available to skill scripts (child processes)
+process.env.GEMINI_API_KEY = apiKey;
 process.env.OLLAMA_API_KEY = ollamaApiKey;
 
 const ipc = require('./ipc');
 const avatarWindow = require('./windows/avatar-window');
 const vocabStore = require('./vocab/store');
 const vocabMonitor = require('./vocab/monitor');
+const skills = require('./skills');
+skills.scan();
 
 // Register all IPC handlers
 ipc.register(apiKey);
@@ -63,6 +74,21 @@ app.whenReady().then(async () => {
 	globalShortcut.register('CommandOrControl+I', () => {
 		if (win) win.webContents.send('toggle-voice');
 	});
+});
+
+// Watch tool modules for changes and auto-reload
+const toolsDir = path.join(__dirname, 'tools');
+let reloadDebounce = null;
+fs.watch(toolsDir, { recursive: true }, (eventType, filename) => {
+	if (!filename || !filename.endsWith('.js')) return;
+	clearTimeout(reloadDebounce);
+	reloadDebounce = setTimeout(() => {
+		const toolExecutor = require('./tools');
+		toolExecutor.reload();
+		skills.scan();
+		const win = avatarWindow.get();
+		if (win) win.webContents.send('reload-session');
+	}, 500);
 });
 
 app.on('window-all-closed', () => {
