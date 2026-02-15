@@ -23,6 +23,9 @@ export function createScene() {
 
 	const scene = new THREE.Scene();
 
+	const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
+	scene.add(ambientLight);
+
 	const dirLight = new THREE.DirectionalLight(0xffffff, Math.PI);
 	dirLight.position.set(1.0, 1.0, 1.0).normalize();
 	scene.add(dirLight);

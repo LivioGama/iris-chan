@@ -53,4 +53,8 @@ module.exports = {
 	messaging: {
 		apps: ['whatsapp', 'telegram', 'signal', 'messages', 'imessage', 'discord', 'slack', 'messenger'],
 	},
+	avatar: {
+		// 'original' or 'tripo3d'
+		current: 'original',
+	},
 };

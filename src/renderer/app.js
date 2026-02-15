@@ -6,8 +6,11 @@ import { applyOverlays } from './avatar/overlays.js';
 import { VoicePipeline } from './voice/pipeline.js';
 import { error as logError } from './logger.js';
 
+// Get avatar type from window (set by preload)
+const avatarType = window.avatarConfig?.current || 'tripo3d';
+
 const { renderer, camera, scene } = createScene();
-const { vrm, mixer } = await loadAvatar(scene);
+const { vrm, mixer, glowMaterials = [] } = await loadAvatar(scene, avatarType);
 
 // Voice pipeline
 const voice = new VoicePipeline();
@@ -47,7 +50,7 @@ window.addEventListener('click', () => {
 const clock = new THREE.Clock();
 let elapsedTime = 0;
 
-// Set avatar to position 12 (front-facing)
+// Keep figure rotation unchanged
 const targetPosition = 12;
 const totalPositions = 16;
 const targetAngle = (targetPosition / totalPositions) * Math.PI * 2;
@@ -62,6 +65,13 @@ function animate() {
 	mixer.update(delta);
 	applyOverlays(vrm, elapsedTime, () => voice.getSpeakingVolume());
 	vrm.update(delta);
+
+	for (const mat of glowMaterials) {
+		const shader = mat.userData?._glowShader;
+		if (shader?.uniforms?.uGlowTime) {
+			shader.uniforms.uGlowTime.value = elapsedTime;
+		}
+	}
 
 	renderer.render(scene, camera);
 }
