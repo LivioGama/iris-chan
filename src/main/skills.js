@@ -221,7 +221,10 @@ function runSkillByName(skillName, args) {
 		const allSkills = scan();
 		const skill = allSkills.find(s => s.name === skillName);
 		
+		log.info(`Skill:${skillName}`, `[runSkillByName] Called with args: ${JSON.stringify(args || {}).slice(0, 200)}`);
+		
 		if (!skill) {
+			log.error(`Skill:${skillName}`, `[runSkillByName] Skill not found. Available: ${allSkills.map(s => s.name).join(', ')}`);
 			resolve({ ok: false, result: `Skill "${skillName}" not found. Available: ${allSkills.map(s => s.name).join(', ')}` });
 			return;
 		}
@@ -229,12 +232,14 @@ function runSkillByName(skillName, args) {
 		// Get first available script
 		const scriptNames = Object.keys(skill.scriptMap);
 		if (scriptNames.length === 0) {
+			log.error(`Skill:${skillName}`, `[runSkillByName] No scripts found in skillMap`);
 			resolve({ ok: false, result: `Skill "${skillName}" has no scripts` });
 			return;
 		}
 
 		const scriptName = scriptNames[0];
 		const scriptPath = skill.scriptMap[scriptName];
+		log.info(`Skill:${skillName}`, `[runSkillByName] Using script: ${scriptName} at ${scriptPath}`);
 
 		const homedir = os.homedir();
 		const extraPaths = [`${homedir}/.local/bin`, '/opt/homebrew/bin', '/usr/local/bin'];
@@ -242,13 +247,30 @@ function runSkillByName(skillName, args) {
 		const env = { ...process.env, CLAUDECODE: '1', IRIS_WORKSPACE: wsDir, PATH: extraPaths.join(':') + ':' + (process.env.PATH || '') };
 		
 		// Build script arguments based on skill type
-		let scriptArgs = [];
-		if (skillName === 'claude-code-assistant' && args && args.description) {
-			// Claude CLI: -p (print mode) + prompt as positional argument
-			scriptArgs = ['-p', args.description];
+		let scriptArgs = [scriptPath];  // First arg is the script path when using python3
+		let executablePath = scriptPath;
+		let inputData = null;
+		
+		if (scriptPath.endsWith('.py')) {
+			// Python scripts: use python3 as executable instead of relying on shebang
+			executablePath = 'python3';
+			log.info(`Skill:${skillName}`, `[runSkillByName] Python script detected, using python3 as executable`);
 		}
 		
-		const child = spawn(scriptPath, scriptArgs, { env, stdio: ['pipe', 'pipe', 'pipe'] });
+		if (skillName === 'claude-code-assistant' && args && args.description) {
+			// For claude-code-assistant, pass the prompt to the python wrapper which expects it via stdin
+			// or as a proper --prompt argument (not as positional arguments)
+			scriptArgs.push('--prompt', args.description);
+			inputData = null; // Don't send JSON args via stdin
+			log.info(`Skill:${skillName}`, `[runSkillByName] Added --prompt argument (${args.description.length} bytes)`);
+		} else {
+			// For other skills, pass args via stdin as before
+			inputData = JSON.stringify(args || {});
+			log.info(`Skill:${skillName}`, `[runSkillByName] Will pass args via stdin`);
+		}
+		
+		log.info(`Skill:${skillName}`, `[runSkillByName] Spawning: ${executablePath} with ${scriptArgs.length} args`);
+		const child = spawn(executablePath, scriptArgs, { env, stdio: ['pipe', 'pipe', 'pipe'] });
 
 		activeSkillProcess = child;
 		activeSkillName = skillName;
@@ -259,12 +281,13 @@ function runSkillByName(skillName, args) {
 
 		child.stdout.on('data', (d) => {
 			stdout += d;
+			log.info(`Skill:${skillName}`, `[STDOUT] ${d.toString().slice(0, 100)}`);
 		});
 		child.stderr.on('data', (d) => {
 			stderr += d;
 			const lines = d.toString().split('\n').filter(l => l.trim());
 			for (const line of lines) {
-				log.info(`Skill:${skillName}`, line.trim());
+				log.info(`Skill:${skillName}`, `[STDERR] ${line.trim().slice(0, 100)}`);
 			}
 		});
 
@@ -272,17 +295,21 @@ function runSkillByName(skillName, args) {
 			activeSkillProcess = null;
 			activeSkillName = null;
 			const ts = new Date().toISOString();
-			const logLines = [`\n=== [${ts}] skill: ${skillName} ===`, `SCRIPT: ${scriptName}`, `PATH: ${scriptPath}`, `ARGS: ${JSON.stringify(args || {})}`, stdout ? `STDOUT:\n${stdout.slice(0, 2000)}` : 'STDOUT: (empty)', stderr ? `STDERR:\n${stderr.slice(0, 2000)}` : 'STDERR: (empty)', signal ? `SIGNAL: ${signal}` : `EXIT: ${code}`, '---'];
+			log.info(`Skill:${skillName}`, `[close] Exit code: ${code}, Signal: ${signal}`);
+			const logLines = [`\n=== [${ts}] skill: ${skillName} ===`, `SCRIPT: ${scriptName}`, `PATH: ${scriptPath}`, `EXECUTABLE: ${executablePath}`, `SCRIPT_ARGS: ${scriptArgs.map(a => a.slice(0, 50)).join(' | ')}`, `ARGS: ${JSON.stringify(args || {}).slice(0, 200)}`, stdout ? `STDOUT:\n${stdout.slice(0, 2000)}` : 'STDOUT: (empty)', stderr ? `STDERR:\n${stderr.slice(0, 2000)}` : 'STDERR: (empty)', signal ? `SIGNAL: ${signal}` : `EXIT: ${code}`, '---'];
 			try { fs.appendFileSync(SKILL_LOG, logLines.join('\n') + '\n'); } catch {}
 
 			if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+				log.error(`Skill:${skillName}`, `[close] Skill was killed`);
 				resolve({ ok: false, result: `Skill "${skillName}" was killed` });
 				return;
 			}
 			if (code !== 0) {
+				log.error(`Skill:${skillName}`, `[close] Non-zero exit code: ${code}`);
 				resolve({ ok: false, result: `Script error (exit ${code})${stderr ? '\n' + stderr.slice(0, 500) : ''}` });
 				return;
 			}
+			log.info(`Skill:${skillName}`, `[close] Success! Output length: ${stdout.length}`);
 			try { resolve(JSON.parse(stdout)); }
 			catch { resolve({ ok: true, result: stdout.trim().slice(0, 500) }); }
 		});
@@ -290,11 +317,15 @@ function runSkillByName(skillName, args) {
 		child.on('error', (err) => {
 			activeSkillProcess = null;
 			activeSkillName = null;
+			log.error(`Skill:${skillName}`, `[error] ${err.message}`);
 			resolve({ ok: false, result: `Script error: ${err.message}` });
 		});
 
 		if (child.stdin) {
-			child.stdin.write(JSON.stringify(args || {}));
+			if (inputData !== null) {
+				log.info(`Skill:${skillName}`, `[stdin] Writing ${inputData.length} bytes to stdin`);
+				child.stdin.write(inputData);
+			}
 			child.stdin.end();
 		}
 	});
