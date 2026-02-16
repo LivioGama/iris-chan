@@ -804,9 +804,20 @@
 				});
 				
 				if (result?.ok) {
-					alert(`✓ Executed /ship with ${todoTasks.length} aggregated task(s)`);
-					btnEl.textContent = '✓ Done';
-					setTimeout(() => { btnEl.textContent = 'Run All'; btnEl.disabled = false; }, 1000);
+					// Parse spec.md and recreate tasks.json
+					const parseResult = await window.electron?.ipcRenderer?.invoke('parse-spec-md');
+					if (parseResult?.ok) {
+						// Reload tasks from the newly created tasks.json
+						await loadTasksFromFile();
+						syncTasksToConvex();
+						alert(`✓ Executed /ship with ${todoTasks.length} aggregated task(s)\n✓ Created ${parseResult.count} tasks - ready to run!`);
+						btnEl.textContent = '✓ Done';
+						setTimeout(() => { btnEl.textContent = 'Run All'; btnEl.disabled = false; }, 1000);
+					} else {
+						alert(`✓ /ship completed, but failed to parse spec.md: ${parseResult?.error || 'Unknown error'}`);
+						btnEl.textContent = 'Run All';
+						btnEl.disabled = false;
+					}
 				} else {
 					alert(`Error: ${result?.result?.result || result?.result || 'Unknown error'}`);
 					btnEl.textContent = 'Run All';
