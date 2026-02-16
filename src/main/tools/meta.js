@@ -1,8 +1,8 @@
 // Tool handlers: self_fix, propose_reply, manage_vocabulary, get_mouse_position
-const { exec } = require('child_process');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
+const { exec } = require('node:child_process');
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 const { runHelper } = require('../native-helper');
 const config = require('../../shared/config');
 
@@ -54,37 +54,60 @@ async function manage_vocabulary(args) {
 }
 
 async function self_fix(args) {
-	const desc = args.description || '';
-	const files = args.files_to_touch || '';
-	if (!desc) return { ok: false, result: 'No description provided' };
+	const description = args.description || '';
+	if (!description) return { ok: false, result: 'No description provided' };
 
-	const prompt = [
-		`[IRIS SELF-FIX REQUEST]`,
-		``,
-		`Iris (the AI assistant whose code is in this directory) is asking you to modify her own source code.`,
-		``,
-		`## What to do`,
-		desc,
-		``,
-		files ? `## Files likely involved\n${files}\n` : '',
-		`## Rules`,
-		`- Edit files in place, don't recreate them`,
-		`- Don't touch audio playback scheduling unless explicitly asked`,
-		`- Tool module changes (src/main/tools/) hot-reload automatically — no restart needed`,
-		`- For other file changes, restart the app: pkill -f "Electron"; sleep 1; npx electron . &`,
-		`- Keep changes minimal and focused`,
-	].filter(Boolean).join('\n');
+	try {
+		const fs = require('node:fs');
+		// Use process.cwd() to match where kanban expects tasks.json
+		const tasksPath = path.join(process.cwd(), 'tasks.json');
+		
+		// Load or create tasks.json
+		let data = { version: 1, updatedAt: new Date().toISOString(), tasks: [] };
+		if (fs.existsSync(tasksPath)) {
+			data = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
+		}
 
-	await new Promise((resolve) => {
-		exec(`osascript -e 'tell application "Warp" to activate'`, { timeout: 3000 }, resolve);
-	});
-	await new Promise(r => setTimeout(r, 500));
+		// Get next task ID
+		let maxId = 0;
+		for (const task of data.tasks || []) {
+			if (task.id?.startsWith('task-')) {
+				const num = Number.parseInt(task.id.split('-')[1]);
+				if (!Number.isNaN(num)) maxId = Math.max(maxId, num);
+			}
+		}
+		const nextId = maxId + 1;
+		const taskId = `task-${nextId}`;
 
-	await runHelper({ action: 'type_text', text: prompt });
-	await new Promise(r => setTimeout(r, 300));
-	await runHelper({ action: 'press_key', key: 'return' });
+		// Create task
+		const newTask = {
+			id: taskId,
+			title: description.split('\n')[0].substring(0, 80),
+			description: description,
+			status: 'PENDING',
+			order: (data.tasks?.length || 0) + 1,
+			files: [],
+			action: '',
+			verify: '',
+			done: '',
+			dependsOn: [],
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		};
 
-	return { ok: true, result: 'Self-fix prompt submitted to Claude Code' };
+		data.tasks = data.tasks || [];
+		data.tasks.push(newTask);
+		data.updatedAt = new Date().toISOString();
+
+		fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+
+		return { 
+			ok: true, 
+			result: `✓ Created ${taskId}: ${newTask.title}\n\nView in kanban: Ctrl+K` 
+		};
+	} catch (err) {
+		return { ok: false, result: `Self-fix error: ${err.message}` };
+	}
 }
 
 module.exports = { self_fix, propose_reply, manage_vocabulary, get_mouse_position };
