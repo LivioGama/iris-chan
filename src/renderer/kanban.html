@@ -773,42 +773,49 @@
 			
 			// Consolidate all TODO tasks into a spec
 			const spec = todoTasks
-				.map(t => `- ${t.title}\n  ${t.description}`)
+				.map(t => `## ${t.title}\n${t.description}`)
 				.join('\n\n');
 			
 			btnEl.disabled = true;
 			btnEl.textContent = '⏳';
 			
 			try {
-				// Invoke claude-code-assistant skill with consolidated spec
-				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'claude-code-assistant', {
+				// First, write spec.md
+				const specResult = await window.electron?.ipcRenderer?.invoke('write-spec-md', spec);
+				if (!specResult?.ok) {
+					alert(`Failed to write spec.md: ${specResult?.error || 'Unknown error'}`);
+					btnEl.textContent = 'Run All';
+					btnEl.disabled = false;
+					return;
+				}
+
+				// Then, remove tasks.json
+				const deleteResult = await window.electron?.ipcRenderer?.invoke('delete-tasks-file');
+				if (!deleteResult?.ok) {
+					alert(`Failed to delete tasks.json: ${deleteResult?.error || 'Unknown error'}`);
+					btnEl.textContent = 'Run All';
+					btnEl.disabled = false;
+					return;
+				}
+
+				// Finally, run /ship skill
+				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'ship', {
 					description: spec
 				});
 				
 				if (result?.ok) {
-					// Mark all TODO tasks as IN_PROGRESS
-					todoTasks.forEach(t => t.status = 'IN_PROGRESS');
-					renderTasks();
-					saveTasksToFile();
-					syncTasksToConvex();
-					alert(`✓ Executed ${todoTasks.length} task(s) via claude-code-assistant`);
-					
-					// Auto-clean completed tasks after a short delay
-					setTimeout(async () => {
-						const cleanResult = await window.electron?.ipcRenderer?.invoke('remove-completed-tasks');
-						if (cleanResult?.ok && cleanResult?.removed > 0) {
-							console.log(`[Kanban] Auto-cleaned ${cleanResult.removed} completed tasks`);
-							await loadTasksFromFile();
-						}
-					}, 1000);
+					alert(`✓ Executed /ship with ${todoTasks.length} aggregated task(s)`);
+					btnEl.textContent = '✓ Done';
+					setTimeout(() => { btnEl.textContent = 'Run All'; btnEl.disabled = false; }, 1000);
 				} else {
 					alert(`Error: ${result?.result?.result || result?.result || 'Unknown error'}`);
+					btnEl.textContent = 'Run All';
+					btnEl.disabled = false;
 				}
 			} catch (err) {
 				alert(`Failed to run all tasks: ${err.message}`);
-			} finally {
-				btnEl.disabled = false;
 				btnEl.textContent = 'Run All';
+				btnEl.disabled = false;
 			}
 		};
 

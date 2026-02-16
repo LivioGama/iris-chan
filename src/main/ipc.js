@@ -288,6 +288,40 @@ function register(apiKey) {
 			return { ok: false, error: err.message };
 		}
 	});
+
+	// Write spec.md from aggregated tasks
+	ipcMain.handle('write-spec-md', async (_, spec) => {
+		const fs = require('node:fs');
+		const path = require('node:path');
+		const specPath = path.join(process.cwd(), 'spec.md');
+		
+		try {
+			fs.writeFileSync(specPath, spec, 'utf8');
+			log.info('Kanban', 'Wrote spec.md');
+			return { ok: true };
+		} catch (err) {
+			log.error('Kanban', `Failed to write spec.md: ${err.message}`);
+			return { ok: false, error: err.message };
+		}
+	});
+
+	// Delete tasks.json file
+	ipcMain.handle('delete-tasks-file', async () => {
+		const fs = require('node:fs');
+		const path = require('node:path');
+		const tasksPath = path.join(process.cwd(), 'tasks.json');
+		
+		try {
+			if (fs.existsSync(tasksPath)) {
+				fs.unlinkSync(tasksPath);
+				log.info('Kanban', 'Deleted tasks.json');
+			}
+			return { ok: true };
+		} catch (err) {
+			log.error('Kanban', `Failed to delete tasks.json: ${err.message}`);
+			return { ok: false, error: err.message };
+		}
+	});
 }
 
 module.exports = { register };
