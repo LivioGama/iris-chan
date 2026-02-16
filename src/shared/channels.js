@@ -32,4 +32,7 @@ module.exports = {
 	LOAD_KANBAN_TASKS: 'load-kanban-tasks',
 	SAVE_KANBAN_TASKS: 'save-kanban-tasks',
 	UPDATE_KANBAN_TASK: 'update-kanban-task',
+	RUN_SKILL: 'run-skill',
+	RUN_TASK: 'run-task',
+	RESIZE_KANBAN: 'resize-kanban',
 };

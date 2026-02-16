@@ -32,7 +32,7 @@
 			display: flex;
 			justify-content: space-between;
 			align-items: center;
-			padding: 10px 14px;
+			padding: 7px 12px;
 			border-bottom: 0.5px solid rgba(255, 255, 255, 0.06);
 			-webkit-app-region: drag;
 			flex-shrink: 0;
@@ -86,7 +86,7 @@
 			display: flex;
 			flex: 1;
 			gap: 1px;
-			padding: 8px;
+			padding: 6px;
 			overflow: hidden;
 			-webkit-app-region: no-drag;
 		}
@@ -130,6 +130,38 @@
 			border-radius: 8px;
 		}
 
+		.column-clean-btn {
+			background: none;
+			border: none;
+			padding: 2px 4px;
+			font-size: 10px;
+			cursor: pointer;
+			color: rgba(255, 255, 255, 0.3);
+			opacity: 0;
+			transition: opacity 0.2s ease;
+		}
+		.column-header:hover .column-clean-btn {
+			opacity: 1;
+		}
+		.column-clean-btn:hover {
+			color: rgba(248, 113, 113, 0.8);
+		}
+
+		/* Column visibility & animation */
+		.board {
+			transition: width 0.3s ease;
+		}
+		.column {
+			transition: flex 0.3s ease, opacity 0.3s ease;
+		}
+		.column.hidden {
+			flex: 0;
+			opacity: 0;
+			overflow: hidden;
+			padding: 0;
+			min-width: 0;
+		}
+
 		/* Status colors — dark mode */
 		.col-todo .column-header { background: rgba(129, 140, 248, 0.1); }
 		.col-todo .column-header .label { color: rgba(165, 170, 255, 0.85); }
@@ -154,9 +186,9 @@
 		.task {
 			background: rgba(255, 255, 255, 0.04);
 			border: 0.5px solid rgba(255, 255, 255, 0.06);
-			border-radius: 7px;
-			padding: 8px 10px;
-			margin-bottom: 4px;
+			border-radius: 6px;
+			padding: 6px 8px;
+			margin-bottom: 3px;
 			transition: background 0.15s ease;
 			cursor: grab;
 		}
@@ -177,10 +209,10 @@
 
 		.task .title {
 			font-weight: 400;
-			font-size: 12px;
+			font-size: 11px;
 			color: rgba(255, 255, 255, 0.78);
-			margin-bottom: 6px;
-			line-height: 1.35;
+			margin-bottom: 4px;
+			line-height: 1.3;
 		}
 
 		.task .task-actions {
@@ -231,19 +263,19 @@
 		/* ── Empty state ── */
 		.empty-state {
 			text-align: center;
-			padding: 16px 8px;
+			padding: 12px 6px;
 			color: rgba(255, 255, 255, 0.15);
-			font-size: 11px;
+			font-size: 10px;
 		}
 
 		/* ── Inline input ── */
 		.add-inline { margin-top: 4px; }
 		.add-inline input {
 			width: 100%;
-			padding: 6px 8px;
+			padding: 5px 7px;
 			border: 0.5px solid rgba(255, 255, 255, 0.06);
 			border-radius: 5px;
-			font-size: 11px;
+			font-size: 10px;
 			font-family: inherit;
 			background: rgba(255, 255, 255, 0.03);
 			outline: none;
@@ -274,6 +306,36 @@
 			text-decoration: line-through;
 			color: rgba(255, 255, 255, 0.25);
 		}
+
+		/* ── Task Logs Display ── */
+		.task-logs {
+			margin-top: 6px;
+			padding: 6px;
+			background: rgba(0, 0, 0, 0.3);
+			border-radius: 4px;
+			font-family: 'Monaco', 'Courier New', monospace;
+			font-size: 9px;
+			color: rgba(165, 170, 255, 0.7);
+			line-height: 1.4;
+			max-height: 100px;
+			overflow-y: auto;
+			white-space: pre-wrap;
+			word-break: break-word;
+		}
+
+		.task-logs.empty {
+			display: none;
+		}
+
+		/* ── Loading Indicator Animation ── */
+		@keyframes pulse {
+			0%, 100% { opacity: 1; }
+			50% { opacity: 0.6; }
+		}
+
+		.loading-indicator {
+			animation: pulse 1.5s ease-in-out infinite;
+		}
 	</style>
 </head>
 <body>
@@ -283,6 +345,15 @@
 				<h3>Kanban</h3>
 			</div>
 			<div class="actions">
+				<button class="btn-secondary" id="commit-push-btn" title="Commit and push to git">
+					📝 Commit & Push
+				</button>
+				<button class="btn-secondary" id="reorganize-btn" title="AI-reorganize all tasks">
+					🔄 Reorganize
+				</button>
+				<button class="btn-secondary" id="clean-tasks" title="Remove completed tasks">
+					🗑️ Clean
+				</button>
 				<button class="btn-secondary" id="run-all">
 					<svg width="10" height="10" viewBox="0 0 10 10" fill="none" style="vertical-align: -1px; margin-right: 3px;">
 						<path d="M2 1.5L8 5L2 8.5V1.5Z" fill="currentColor"/>
@@ -315,6 +386,7 @@
 				<div class="column-header">
 					<span class="label">Done</span>
 					<span class="count" id="done-count">0</span>
+					<button id="clean-done-btn" class="column-clean-btn" title="Remove all done tasks">🗑️</button>
 				</div>
 				<div class="tasks" id="done-tasks"></div>
 			</div>
@@ -325,6 +397,49 @@
 		let tasks = [];
 		let taskIdCounter = 1;
 		let draggedTask = null;
+		let reloadTimeout = null;
+
+		// Debounced reload to prevent rapid successive reloads
+		function scheduleReload() {
+			if (reloadTimeout) clearTimeout(reloadTimeout);
+			reloadTimeout = setTimeout(() => {
+				loadTasksFromFile();
+				reloadTimeout = null;
+			}, 500);
+		}
+
+		// Calculate and apply window size based on visible columns
+		let resizeTimeout = null;
+		function updateWindowSize() {
+			if (resizeTimeout) clearTimeout(resizeTimeout);
+			resizeTimeout = setTimeout(() => {
+				const progressCol = document.querySelector('.col-progress');
+				const doneCol = document.querySelector('.col-done');
+				
+				const hasWip = !progressCol.classList.contains('hidden');
+				const hasDone = !doneCol.classList.contains('hidden');
+				
+				// Calculate width: wider when single column
+				// TODO (always visible) = 320px when alone, 240px with others
+				// WIP (240px if visible)
+				// DONE (240px if visible)
+				// Plus padding (6*2) and gaps
+				let width;
+				if (!hasWip && !hasDone) {
+					// Single column (TODO only) - make it wider
+					width = 320 + 12 + 6;  // TODO column (wider) + padding + gap
+				} else {
+					width = 240 + 12 + 6;  // TODO column + padding + gap
+					if (hasWip) width += 240 + 6;  // WIP column + gap
+					if (hasDone) width += 240;     // DONE column
+				}
+				
+				// Send resize request to main process
+				window.electron?.ipcRenderer?.invoke('resize-kanban', width).catch(err => {
+					console.warn('[Kanban] Resize failed:', err.message);
+				});
+			}, 300);
+		}
 
 		// Map task.status to kanban column status
 		function mapTaskStatus(status) {
@@ -372,10 +487,10 @@
 					
 					const maxId = Math.max(...tasks.map(t => {
 						const match = t.id.match(/task-(\d+)/);
-						return match ? parseInt(match[1]) : 0;
+						return match ? Number.parseInt(match[1]) : 0;
 					}), 0);
 					taskIdCounter = maxId + 1;
-					console.log('[Kanban] Loaded', tasks.length, 'tasks from tasks.json');
+					console.log('[Kanban] Loaded', tasks.length, 'tasks:', tasks.map(t => `${t.id}(${t.status})`).join(', '));
 				}
 			} catch (err) {
 				console.error('[Kanban] Error loading tasks:', err);
@@ -395,7 +510,8 @@
 					files: t.files,
 					action: t.action,
 					verify: t.verify,
-					done: t.done
+					done: t.done,
+					logs: t.logs || ''
 				}));
 				
 				const result = await window.electron?.ipcRenderer?.invoke('save-kanban-tasks', toSave);
@@ -417,6 +533,46 @@
 			document.getElementById('todo-count').textContent = countByStatus('TODO');
 			document.getElementById('progress-count').textContent = countByStatus('IN_PROGRESS');
 			document.getElementById('done-count').textContent = countByStatus('DONE');
+			
+			// Show/hide columns based on task counts
+			const wipCount = countByStatus('IN_PROGRESS');
+			const doneCount = countByStatus('DONE');
+			const progressCol = document.querySelector('.col-progress');
+			const doneCol = document.querySelector('.col-done');
+			
+			// Only show WIP and DONE columns if they have tasks
+			if (wipCount === 0) {
+				progressCol.classList.add('hidden');
+			} else {
+				progressCol.classList.remove('hidden');
+			}
+			
+			if (doneCount === 0) {
+				doneCol.classList.add('hidden');
+			} else {
+				doneCol.classList.remove('hidden');
+			}
+			
+			// Trigger window resize animation
+			updateWindowSize();
+			
+			// Attach clean button handler for DONE column
+			const cleanDoneBtn = document.getElementById('clean-done-btn');
+			if (cleanDoneBtn && !cleanDoneBtn.dataset.attached) {
+				cleanDoneBtn.dataset.attached = 'true';
+				cleanDoneBtn.onclick = (e) => {
+					e.stopPropagation();
+					const doneTasks = tasks.filter(t => t.status === 'DONE');
+					if (doneTasks.length === 0) {
+						alert('No done tasks to clean.');
+						return;
+					}
+					tasks = tasks.filter(t => t.status !== 'DONE');
+					renderTasks();
+					saveTasksToFile();
+					console.log(`[Kanban] Cleaned ${doneTasks.length} done tasks`);
+				};
+			}
 		}
 
 		function renderTasks() {
@@ -469,28 +625,58 @@
 					const actionsEl = document.createElement('div');
 					actionsEl.className = 'task-actions';
 
-					if (task.status !== 'DONE') {
-						const statusBtn = document.createElement('button');
-						statusBtn.textContent = task.status === 'TODO' ? 'Start' : 'Finish';
-						statusBtn.className = task.status === 'TODO' ? 'start-btn' : 'finish-btn';
-						statusBtn.onclick = () => {
-							task.status = task.status === 'TODO' ? 'IN_PROGRESS' : 'DONE';
+				if (task.status !== 'DONE') {
+					const statusBtn = document.createElement('button');
+					statusBtn.textContent = task.status === 'TODO' ? 'Start' : 'Finish';
+					statusBtn.className = task.status === 'TODO' ? 'start-btn' : 'finish-btn';
+					statusBtn.onclick = () => {
+						task.status = task.status === 'TODO' ? 'IN_PROGRESS' : 'DONE';
+						renderTasks();
+						saveTasksToFile();
+						syncTasksToConvex();
+					};
+					actionsEl.appendChild(statusBtn);
+				}
+
+			const runBtn = document.createElement('button');
+			
+			// Only show Run button for TODO tasks, show loading for IN_PROGRESS
+			if (task.status === 'IN_PROGRESS') {
+				// Show loading indicator for IN_PROGRESS tasks
+				runBtn.innerHTML = '⏳ Running...';
+				runBtn.className = 'run-btn loading-indicator';
+				runBtn.disabled = true;
+				runBtn.style.cursor = 'default';
+			} else {
+				// Show Run button for TODO tasks
+				runBtn.textContent = 'Run';
+				runBtn.className = 'run-btn';
+				runBtn.title = task.action ? 'Run this task via /ship skill' : 'No action defined';
+				runBtn.disabled = !task.action;
+				runBtn.onclick = async () => {
+					runBtn.disabled = true;
+					runBtn.textContent = '⏳';
+					try {
+						const result = await window.electron?.ipcRenderer?.invoke('run-task', task.id);
+						if (result?.ok) {
+							task.status = 'IN_PROGRESS';
 							renderTasks();
 							saveTasksToFile();
-						};
-						actionsEl.appendChild(statusBtn);
-					}
-
-					const runBtn = document.createElement('button');
-					runBtn.textContent = 'Run';
-					runBtn.className = 'run-btn';
-					runBtn.title = task.action ? 'Click to see task action' : 'No action defined';
-					runBtn.onclick = () => {
-						if (task.action) {
-							alert(`Task: ${task.title}\n\nAction:\n${task.action.substring(0, 500)}...`);
+							syncTasksToConvex();
+							runBtn.textContent = '✓';
+						} else {
+							alert(`Error: ${result?.result || 'Unknown error'}`);
+							runBtn.textContent = 'Run';
+							runBtn.disabled = false;
 						}
-					};
-					actionsEl.appendChild(runBtn);
+					} catch (err) {
+						alert(`Failed to run task: ${err.message}`);
+						runBtn.textContent = 'Run';
+						runBtn.disabled = false;
+					}
+				};
+			}
+			actionsEl.appendChild(runBtn);
 
 					const delBtn = document.createElement('button');
 					delBtn.innerHTML = '&times;';
@@ -500,11 +686,21 @@
 						tasks = tasks.filter(t => t.id !== task.id);
 						renderTasks();
 						saveTasksToFile();
+						syncTasksToConvex();
 					};
 					actionsEl.appendChild(delBtn);
 
 					taskEl.appendChild(titleEl);
 					taskEl.appendChild(actionsEl);
+
+					// Add logs display for IN_PROGRESS tasks
+					if (task.status === 'IN_PROGRESS' && task.logs) {
+						const logsEl = document.createElement('div');
+						logsEl.className = 'task-logs';
+						logsEl.textContent = task.logs;
+						taskEl.appendChild(logsEl);
+					}
+
 					container.appendChild(taskEl);
 				});
 			});
@@ -529,6 +725,7 @@
 					draggedTask.status = col.dataset.status;
 					renderTasks();
 					saveTasksToFile();
+					syncTasksToConvex();
 				}
 			});
 		});
@@ -550,11 +747,13 @@
 					files: [],
 					action: '',
 					verify: '',
-					done: ''
+					done: '',
+					logs: ''
 				});
 				e.target.value = '';
 				renderTasks();
 				saveTasksToFile();
+				syncTasksToConvex();
 			}
 			if (e.key === 'Escape') {
 				e.target.value = '';
@@ -563,13 +762,174 @@
 		});
 
 		// Run all
-		document.getElementById('run-all').onclick = () => {
-			tasks.forEach(task => {
-				console.log('Running task:', task.title);
-			});
+		document.getElementById('run-all').onclick = async () => {
+			const btnEl = document.getElementById('run-all');
+			const todoTasks = tasks.filter(t => t.status === 'TODO');
+			
+			if (todoTasks.length === 0) {
+				alert('No tasks to run. Add tasks in the TODO column first.');
+				return;
+			}
+			
+			// Consolidate all TODO tasks into a spec
+			const spec = todoTasks
+				.map(t => `- ${t.title}\n  ${t.description}`)
+				.join('\n\n');
+			
+			btnEl.disabled = true;
+			btnEl.textContent = '⏳';
+			
+			try {
+				// Invoke claude-code-assistant skill with consolidated spec
+				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'claude-code-assistant', {
+					description: spec
+				});
+				
+				if (result?.ok) {
+					// Mark all TODO tasks as IN_PROGRESS
+					todoTasks.forEach(t => t.status = 'IN_PROGRESS');
+					renderTasks();
+					saveTasksToFile();
+					syncTasksToConvex();
+					alert(`✓ Executed ${todoTasks.length} task(s) via claude-code-assistant`);
+					
+					// Auto-clean completed tasks after a short delay
+					setTimeout(async () => {
+						const cleanResult = await window.electron?.ipcRenderer?.invoke('remove-completed-tasks');
+						if (cleanResult?.ok && cleanResult?.removed > 0) {
+							console.log(`[Kanban] Auto-cleaned ${cleanResult.removed} completed tasks`);
+							await loadTasksFromFile();
+						}
+					}, 1000);
+				} else {
+					alert(`Error: ${result?.result?.result || result?.result || 'Unknown error'}`);
+				}
+			} catch (err) {
+				alert(`Failed to run all tasks: ${err.message}`);
+			} finally {
+				btnEl.disabled = false;
+				btnEl.textContent = 'Run All';
+			}
+		};
+
+		// Clean up completed tasks
+		document.getElementById('clean-tasks').onclick = async () => {
+			try {
+				const result = await window.electron?.ipcRenderer?.invoke('remove-completed-tasks');
+				if (result?.ok) {
+					if (result.removed > 0) {
+						console.log(`[Kanban] Cleaned ${result.removed} completed tasks`);
+						await loadTasksFromFile();
+						syncTasksToConvex();
+					} else {
+						alert('No completed tasks to clean.');
+					}
+				} else {
+					alert(`Error: ${result?.error || 'Unknown error'}`);
+				}
+			} catch (err) {
+				alert(`Failed to clean tasks: ${err.message}`);
+			}
+		};
+
+		// Sync tasks to Convex (one-way sync)
+		async function syncTasksToConvex() {
+			try {
+				await window.electron?.ipcRenderer?.invoke('sync-tasks-to-convex', tasks);
+				console.log('[Kanban] Tasks synced to Convex');
+			} catch (err) {
+				console.warn('[Kanban] Convex sync failed:', err);
+			}
+		}
+
+		// Commit & Push button (combined)
+		document.getElementById('commit-push-btn').onclick = async () => {
+			const btn = document.getElementById('commit-push-btn');
+			const msg = prompt('Commit message:', 'Update tasks');
+			if (msg === null) return;
+
+			btn.disabled = true;
+			btn.textContent = '⏳';
+
+			try {
+				// Commit first
+				const commitResult = await window.electron?.ipcRenderer?.invoke('git-commit', msg);
+				if (!commitResult?.ok) {
+					alert(`Commit failed: ${commitResult?.error || 'Unknown error'}`);
+					btn.textContent = '📝 Commit & Push';
+					btn.disabled = false;
+					return;
+				}
+
+				// Then push
+				const pushResult = await window.electron?.ipcRenderer?.invoke('git-push');
+				if (pushResult?.ok) {
+					alert('✓ Committed and pushed to git');
+					btn.textContent = '✓ Done';
+					setTimeout(() => { btn.textContent = '📝 Commit & Push'; btn.disabled = false; }, 1000);
+				} else {
+					alert(`Push failed: ${pushResult?.error || 'Unknown error'}`);
+					btn.textContent = '📝 Commit & Push';
+					btn.disabled = false;
+				}
+			} catch (err) {
+				alert(`Error: ${err.message}`);
+				btn.textContent = '📝 Commit & Push';
+				btn.disabled = false;
+			}
+		};
+
+		// Reorganize button - AI reorganization
+		document.getElementById('reorganize-btn').onclick = async () => {
+			const btn = document.getElementById('reorganize-btn');
+			const todoTasks = tasks.filter(t => t.status === 'TODO');
+
+			if (todoTasks.length === 0) {
+				alert('No tasks to reorganize. Add tasks in the TODO column first.');
+				return;
+			}
+
+			btn.disabled = true;
+			btn.textContent = '⏳';
+
+			try {
+				// Create a reorganization spec
+				const spec = `Reorganize the following tasks into a better structure with subtasks, dependencies, and clear ordering:\n\n${todoTasks.map((t, i) => `${i + 1}. ${t.title}\n   ${t.description}`).join('\n\n')}\n\nReturn the reorganized tasks as a structured list with clear hierarchy.`;
+
+				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'claude-code-assistant', {
+					description: spec
+				});
+
+				if (result?.ok) {
+					alert('✓ Tasks reorganized! The AI has restructured your tasks.');
+					// Mark all TODO tasks as IN_PROGRESS to show work is being done
+					todoTasks.forEach(t => t.status = 'IN_PROGRESS');
+					renderTasks();
+					saveTasksToFile();
+					syncTasksToConvex();
+					btn.textContent = '✓ Reorganize';
+					setTimeout(() => { btn.textContent = '🔄 Reorganize'; btn.disabled = false; }, 1000);
+				} else {
+					alert(`Reorganization failed: ${result?.result?.result || result?.result || 'Unknown error'}`);
+					btn.textContent = '🔄 Reorganize';
+					btn.disabled = false;
+				}
+			} catch (err) {
+				alert(`Error: ${err.message}`);
+				btn.textContent = '🔄 Reorganize';
+				btn.disabled = false;
+			}
 		};
 
 		loadTasksFromFile();
+
+		// Listen for tasks.json updates from file watcher
+		if (window.electron?.ipcRenderer) {
+			window.electron.ipcRenderer.on('tasks-file-updated', () => {
+				console.log('[Kanban] Detected tasks.json change, scheduling reload...');
+				scheduleReload();
+			});
+		}
 	</script>
 </body>
 </html>

@@ -133,6 +133,169 @@ function register(apiKey) {
 			return { ok: false, error: err.message };
 		}
 	});
+
+	// Run skill by name (e.g., 'ship', 'claude-code-assistant')
+	ipcMain.handle(ch.RUN_SKILL, async (_, skillName, args) => {
+		try {
+			const skillHandler = skills.getHandler(skillName);
+			if (skillHandler) {
+				const result = await skillHandler(args || {});
+				return { ok: true, result };
+			}
+			return { ok: false, result: `Skill "${skillName}" not found` };
+		} catch (err) {
+			return { ok: false, result: `Skill error: ${err.message}` };
+		}
+	});
+
+	// Run individual task via /ship skill
+	ipcMain.handle(ch.RUN_TASK, async (_, taskId) => {
+		try {
+			// Load task from tasks.json
+			const fs = require('node:fs');
+			const path = require('node:path');
+			const tasksPath = path.join(process.cwd(), 'tasks.json');
+			
+			if (!fs.existsSync(tasksPath)) {
+				return { ok: false, result: 'No tasks file found' };
+			}
+			
+			const content = fs.readFileSync(tasksPath, 'utf8');
+			const data = JSON.parse(content);
+			const tasks = data.tasks || data;
+			const task = tasks.find(t => t.id === taskId);
+			
+			if (!task) {
+				return { ok: false, result: `Task "${taskId}" not found` };
+			}
+			
+			// Run /ship skill with the task description
+			const skillHandler = skills.getHandler('ship');
+			if (skillHandler) {
+				const result = await skillHandler({ description: task.description });
+				return { ok: true, result };
+			}
+			return { ok: false, result: 'Ship skill not found' };
+		} catch (err) {
+			return { ok: false, result: `Error running task: ${err.message}` };
+		}
+	});
+
+	// Remove completed tasks
+	ipcMain.handle('remove-completed-tasks', () => {
+		const fs = require('node:fs');
+		const path = require('node:path');
+		const tasksPath = path.join(process.cwd(), 'tasks.json');
+		
+		try {
+			if (!fs.existsSync(tasksPath)) {
+				return { ok: true, removed: 0 };
+			}
+			
+			const content = fs.readFileSync(tasksPath, 'utf8');
+			const data = JSON.parse(content);
+			const tasks = data.tasks || data;
+			
+			// Keep only non-DONE tasks
+			const remaining = tasks.filter(t => t.status !== 'COMPLETED' && t.status !== 'DONE');
+			const removed = tasks.length - remaining.length;
+			
+			data.tasks = remaining;
+			data.updatedAt = new Date().toISOString();
+			
+			fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+			log.info('Kanban', `Removed ${removed} completed tasks`);
+			
+			return { ok: true, removed };
+		} catch (err) {
+			return { ok: false, error: err.message };
+		}
+	});
+
+	// Resize kanban window
+	ipcMain.handle(ch.RESIZE_KANBAN, (_, width) => {
+		const kanbanWindow = require('./windows/kanban-window');
+		const win = kanbanWindow.get();
+		if (win && !win.isDestroyed()) {
+			const bounds = win.getBounds();
+			win.setBounds({ width, height: bounds.height }, false);
+			return { ok: true };
+		}
+		return { ok: false, result: 'Kanban window not found' };
+	});
+
+	// Git operations
+	ipcMain.handle('git-commit', async (_, message) => {
+		const { execSync } = require('node:child_process');
+		try {
+			execSync('git add .', { cwd: process.cwd() });
+			execSync(`git commit -m "${message || 'Update tasks'}"`, { cwd: process.cwd() });
+			log.info('Kanban', 'Git commit successful');
+			return { ok: true };
+		} catch (err) {
+			log.warn('Kanban', `Git commit failed: ${err.message}`);
+			return { ok: false, error: err.message };
+		}
+	});
+
+	ipcMain.handle('git-push', async () => {
+		const { execSync } = require('node:child_process');
+		try {
+			execSync('git push', { cwd: process.cwd() });
+			log.info('Kanban', 'Git push successful');
+			return { ok: true };
+		} catch (err) {
+			log.warn('Kanban', `Git push failed: ${err.message}`);
+			return { ok: false, error: err.message };
+		}
+	});
+
+	// Sync tasks to Convex
+	ipcMain.handle('sync-tasks-to-convex', async (_, tasks) => {
+		try {
+			// Store tasks in Convex for history/audit trail
+			// This is one-way sync: kanban → Convex
+			for (const task of tasks) {
+				await convexStore.saveTurn('system', `Task: ${task.id} - ${task.title} (${task.status})`);
+			}
+			log.info('Kanban', `Synced ${tasks.length} tasks to Convex`);
+			return { ok: true };
+		} catch (err) {
+			log.warn('Kanban', `Convex sync failed: ${err.message}`);
+			return { ok: false, error: err.message };
+		}
+	});
+
+	// Update task logs
+	ipcMain.handle('update-task-logs', async (_, taskId, logs) => {
+		const fs = require('node:fs');
+		const path = require('node:path');
+		const tasksPath = path.join(process.cwd(), 'tasks.json');
+		
+		try {
+			if (!fs.existsSync(tasksPath)) {
+				return { ok: false, error: 'Tasks file not found' };
+			}
+			
+			const content = fs.readFileSync(tasksPath, 'utf8');
+			const data = JSON.parse(content);
+			const tasks = data.tasks || data;
+			const task = tasks.find(t => t.id === taskId);
+			
+			if (task) {
+				task.logs = logs;
+				data.tasks = tasks;
+				data.updatedAt = new Date().toISOString();
+				fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+				log.info('Kanban', `Updated logs for task ${taskId}`);
+				return { ok: true };
+			}
+			return { ok: false, error: 'Task not found' };
+		} catch (err) {
+			log.error('Kanban', `Failed to update task logs: ${err.message}`);
+			return { ok: false, error: err.message };
+		}
+	});
 }
 
 module.exports = { register };
