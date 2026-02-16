@@ -240,7 +240,14 @@ function runSkillByName(skillName, args) {
 		const extraPaths = [`${homedir}/.local/bin`, '/opt/homebrew/bin', '/usr/local/bin'];
 		const wsDir = (args && args.workspace) || workspace.get();
 		const env = { ...process.env, CLAUDECODE: '1', IRIS_WORKSPACE: wsDir, PATH: extraPaths.join(':') + ':' + (process.env.PATH || '') };
-		const child = spawn(scriptPath, [], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+		
+		// Build script arguments based on skill type
+		let scriptArgs = [];
+		if (skillName === 'claude-code-assistant' && args && args.description) {
+			scriptArgs = ['-p', args.description];
+		}
+		
+		const child = spawn(scriptPath, scriptArgs, { env, stdio: ['pipe', 'pipe', 'pipe'] });
 
 		activeSkillProcess = child;
 		activeSkillName = skillName;
