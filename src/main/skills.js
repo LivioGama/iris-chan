@@ -244,6 +244,7 @@ function runSkillByName(skillName, args) {
 		// Build script arguments based on skill type
 		let scriptArgs = [];
 		if (skillName === 'claude-code-assistant' && args && args.description) {
+			// Claude CLI: -p (print mode) + prompt as positional argument
 			scriptArgs = ['-p', args.description];
 		}
 		
