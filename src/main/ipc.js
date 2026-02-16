@@ -93,6 +93,46 @@ function register(apiKey) {
 	ipcMain.on(ch.END_CONVEX_SESSION, () => {
 		convexStore.endSession();
 	});
+
+	// Kanban tasks
+	ipcMain.handle(ch.LOAD_KANBAN_TASKS, () => {
+		const fs = require('node:fs');
+		const path = require('node:path');
+		const tasksPath = path.join(process.cwd(), 'tasks.json');
+		
+		try {
+			if (!fs.existsSync(tasksPath)) {
+				return [];
+			}
+			const content = fs.readFileSync(tasksPath, 'utf8');
+			const data = JSON.parse(content);
+			// Extract tasks array from the JSON structure
+			return (data.tasks || data) || [];
+		} catch (err) {
+			log.error('Kanban', `Failed to load tasks.json: ${err.message}`);
+			return [];
+		}
+	});
+
+	ipcMain.handle(ch.SAVE_KANBAN_TASKS, (_, tasks) => {
+		const fs = require('node:fs');
+		const path = require('node:path');
+		const tasksPath = path.join(process.cwd(), 'tasks.json');
+		
+		try {
+			const data = {
+				version: 1,
+				updatedAt: new Date().toISOString(),
+				tasks: tasks
+			};
+			fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+			log.info('Kanban', 'Tasks saved successfully');
+			return { ok: true };
+		} catch (err) {
+			log.error('Kanban', `Failed to save tasks.json: ${err.message}`);
+			return { ok: false, error: err.message };
+		}
+	});
 }
 
 module.exports = { register };
