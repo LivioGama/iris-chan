@@ -215,4 +215,81 @@ function getLoaded() {
 	}));
 }
 
-module.exports = { scan, getDeclarations, getSystemPrompts, getHandler, getLoaded, getCatalog, getSkillContent, killSkill };
+// Run a skill by name (looks for first available script)
+function runSkillByName(skillName, args) {
+	return new Promise((resolve) => {
+		const allSkills = scan();
+		const skill = allSkills.find(s => s.name === skillName);
+		
+		if (!skill) {
+			resolve({ ok: false, result: `Skill "${skillName}" not found. Available: ${allSkills.map(s => s.name).join(', ')}` });
+			return;
+		}
+
+		// Get first available script
+		const scriptNames = Object.keys(skill.scriptMap);
+		if (scriptNames.length === 0) {
+			resolve({ ok: false, result: `Skill "${skillName}" has no scripts` });
+			return;
+		}
+
+		const scriptName = scriptNames[0];
+		const scriptPath = skill.scriptMap[scriptName];
+
+		const homedir = os.homedir();
+		const extraPaths = [`${homedir}/.local/bin`, '/opt/homebrew/bin', '/usr/local/bin'];
+		const wsDir = (args && args.workspace) || workspace.get();
+		const env = { ...process.env, CLAUDECODE: '1', IRIS_WORKSPACE: wsDir, PATH: extraPaths.join(':') + ':' + (process.env.PATH || '') };
+		const child = spawn(scriptPath, [], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+
+		activeSkillProcess = child;
+		activeSkillName = skillName;
+		log.info(`Skill:${skillName}`, `Started (pid ${child.pid})`);
+
+		let stdout = '';
+		let stderr = '';
+
+		child.stdout.on('data', (d) => {
+			stdout += d;
+		});
+		child.stderr.on('data', (d) => {
+			stderr += d;
+			const lines = d.toString().split('\n').filter(l => l.trim());
+			for (const line of lines) {
+				log.info(`Skill:${skillName}`, line.trim());
+			}
+		});
+
+		child.on('close', (code, signal) => {
+			activeSkillProcess = null;
+			activeSkillName = null;
+			const ts = new Date().toISOString();
+			const logLines = [`\n=== [${ts}] skill: ${skillName} ===`, `SCRIPT: ${scriptName}`, `PATH: ${scriptPath}`, `ARGS: ${JSON.stringify(args || {})}`, stdout ? `STDOUT:\n${stdout.slice(0, 2000)}` : 'STDOUT: (empty)', stderr ? `STDERR:\n${stderr.slice(0, 2000)}` : 'STDERR: (empty)', signal ? `SIGNAL: ${signal}` : `EXIT: ${code}`, '---'];
+			try { fs.appendFileSync(SKILL_LOG, logLines.join('\n') + '\n'); } catch {}
+
+			if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+				resolve({ ok: false, result: `Skill "${skillName}" was killed` });
+				return;
+			}
+			if (code !== 0) {
+				resolve({ ok: false, result: `Script error (exit ${code})${stderr ? '\n' + stderr.slice(0, 500) : ''}` });
+				return;
+			}
+			try { resolve(JSON.parse(stdout)); }
+			catch { resolve({ ok: true, result: stdout.trim().slice(0, 500) }); }
+		});
+
+		child.on('error', (err) => {
+			activeSkillProcess = null;
+			activeSkillName = null;
+			resolve({ ok: false, result: `Script error: ${err.message}` });
+		});
+
+		if (child.stdin) {
+			child.stdin.write(JSON.stringify(args || {}));
+			child.stdin.end();
+		}
+	});
+}
+
+module.exports = { scan, getDeclarations, getSystemPrompts, getHandler, getLoaded, getCatalog, getSkillContent, killSkill, runSkillByName };
