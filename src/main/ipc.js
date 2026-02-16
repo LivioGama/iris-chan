@@ -322,6 +322,83 @@ function register(apiKey) {
 			return { ok: false, error: err.message };
 		}
 	});
+
+	// Parse spec.md and recreate tasks.json
+	ipcMain.handle('parse-spec-md', async () => {
+		const fs = require('node:fs');
+		const path = require('node:path');
+		const specPath = path.join(process.cwd(), 'spec.md');
+		const tasksPath = path.join(process.cwd(), 'tasks.json');
+		
+		try {
+			if (!fs.existsSync(specPath)) {
+				return { ok: false, error: 'spec.md not found' };
+			}
+			
+			const spec = fs.readFileSync(specPath, 'utf8');
+			const tasks = [];
+			let taskId = 1;
+			
+			// Parse spec.md: each task starts with "## Title" followed by description
+			const lines = spec.split('\n');
+			let i = 0;
+			while (i < lines.length) {
+				const line = lines[i];
+				
+				// Look for title line starting with ##
+				if (line.startsWith('## ')) {
+					const title = line.substring(3).trim();
+					i++;
+					
+					// Collect description lines until next ## or end
+					const descriptionLines = [];
+					while (i < lines.length && !lines[i].startsWith('## ')) {
+						const descLine = lines[i].trim();
+						if (descLine) {
+							descriptionLines.push(descLine);
+						}
+						i++;
+					}
+					
+					const description = descriptionLines.join(' ');
+					
+					if (title && description) {
+						tasks.push({
+							id: `task-${taskId}`,
+							title: title.length > 70 ? `${title.substring(0, 67)}...` : title,
+							description: description.length > 500 ? `${description.substring(0, 497)}...` : description,
+							status: 'PENDING',
+							order: taskId,
+							files: [],
+							action: '',
+							verify: '',
+							done: '',
+							dependsOn: [],
+							createdAt: new Date().toISOString(),
+							updatedAt: new Date().toISOString()
+						});
+						taskId++;
+					}
+				} else {
+					i++;
+				}
+			}
+			
+			// Write tasks.json
+			const data = {
+				version: 1,
+				updatedAt: new Date().toISOString(),
+				tasks: tasks
+			};
+			fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+			log.info('Kanban', `Parsed spec.md and created ${tasks.length} tasks`);
+			
+			return { ok: true, count: tasks.length };
+		} catch (err) {
+			log.error('Kanban', `Failed to parse spec.md: ${err.message}`);
+			return { ok: false, error: err.message };
+		}
+	});
 }
 
 module.exports = { register };
