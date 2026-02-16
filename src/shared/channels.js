@@ -29,4 +29,7 @@ module.exports = {
 	SEMANTIC_SEARCH: 'semantic-search',
 	NEW_CONVEX_SESSION: 'new-convex-session',
 	END_CONVEX_SESSION: 'end-convex-session',
+	LOAD_KANBAN_TASKS: 'load-kanban-tasks',
+	SAVE_KANBAN_TASKS: 'save-kanban-tasks',
+	UPDATE_KANBAN_TASK: 'update-kanban-task',
 };

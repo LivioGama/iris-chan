@@ -25,6 +25,9 @@ try {
 		SEMANTIC_SEARCH: 'semantic-search',
 		NEW_CONVEX_SESSION: 'new-convex-session',
 		END_CONVEX_SESSION: 'end-convex-session',
+		LOAD_KANBAN_TASKS: 'load-kanban-tasks',
+		SAVE_KANBAN_TASKS: 'save-kanban-tasks',
+		UPDATE_KANBAN_TASK: 'update-kanban-task',
 	};
 }
 
@@ -65,4 +68,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	semanticSearch: (query, limit, roleFilter) => ipcRenderer.invoke(ch.SEMANTIC_SEARCH, query, limit, roleFilter),
 	newConvexSession: () => ipcRenderer.send(ch.NEW_CONVEX_SESSION),
 	endSession: () => ipcRenderer.send(ch.END_CONVEX_SESSION),
+	loadKanbanTasks: () => ipcRenderer.invoke(ch.LOAD_KANBAN_TASKS),
+	saveKanbanTasks: (tasks) => ipcRenderer.invoke(ch.SAVE_KANBAN_TASKS, tasks),
+	updateKanbanTask: (taskId, updates) => ipcRenderer.invoke(ch.UPDATE_KANBAN_TASK, taskId, updates),
+});
+
+// Also expose ipcRenderer directly for kanban.html compatibility
+contextBridge.exposeInMainWorld('electron', {
+	ipcRenderer: {
+		invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+		send: (channel, ...args) => ipcRenderer.send(channel, ...args),
+		on: (channel, listener) => ipcRenderer.on(channel, listener),
+		off: (channel, listener) => ipcRenderer.off(channel, listener),
+	},
 });

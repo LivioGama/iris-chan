@@ -326,6 +326,89 @@
 		let taskIdCounter = 1;
 		let draggedTask = null;
 
+		// Map task.status to kanban column status
+		function mapTaskStatus(status) {
+			if (!status) return 'TODO';
+			// Ship skill uses: PENDING, IN_PROGRESS, COMPLETED, FAILED
+			// Kanban uses: TODO, IN_PROGRESS, DONE
+			switch (status.toUpperCase()) {
+				case 'PENDING': return 'TODO';
+				case 'IN_PROGRESS': return 'IN_PROGRESS';
+				case 'COMPLETED':
+				case 'DONE': return 'DONE';
+				case 'FAILED': return 'TODO';
+				default: return 'TODO';
+			}
+		}
+
+		// Reverse map: kanban status back to ship status
+		function mapStatusToOriginal(status) {
+			switch (status) {
+				case 'TODO': return 'PENDING';
+				case 'IN_PROGRESS': return 'IN_PROGRESS';
+				case 'DONE': return 'COMPLETED';
+				default: return 'PENDING';
+			}
+		}
+
+		// Load tasks from tasks.json via IPC
+		async function loadTasksFromFile() {
+			try {
+				const loaded = await window.electron?.ipcRenderer?.invoke('load-kanban-tasks') || [];
+				
+				if (Array.isArray(loaded) && loaded.length > 0) {
+					tasks = loaded.map((task, idx) => ({
+						id: task.id || `task-${idx + 1}`,
+						title: task.title || 'Untitled',
+						description: task.description || '',
+						status: mapTaskStatus(task.status),
+						originalStatus: task.status,
+						order: task.order || idx,
+						files: task.files || [],
+						action: task.action || '',
+						verify: task.verify || '',
+						done: task.done || ''
+					}));
+					
+					const maxId = Math.max(...tasks.map(t => {
+						const match = t.id.match(/task-(\d+)/);
+						return match ? parseInt(match[1]) : 0;
+					}), 0);
+					taskIdCounter = maxId + 1;
+					console.log('[Kanban] Loaded', tasks.length, 'tasks from tasks.json');
+				}
+			} catch (err) {
+				console.error('[Kanban] Error loading tasks:', err);
+			}
+			renderTasks();
+		}
+
+		// Save tasks back to tasks.json
+		async function saveTasksToFile() {
+			try {
+				const toSave = tasks.map(t => ({
+					id: t.id,
+					title: t.title,
+					description: t.description,
+					status: mapStatusToOriginal(t.status),
+					order: t.order,
+					files: t.files,
+					action: t.action,
+					verify: t.verify,
+					done: t.done
+				}));
+				
+				const result = await window.electron?.ipcRenderer?.invoke('save-kanban-tasks', toSave);
+				if (result?.ok) {
+					console.log('[Kanban] Tasks saved to tasks.json');
+				} else {
+					console.error('[Kanban] Failed to save tasks:', result?.error);
+				}
+			} catch (err) {
+				console.error('[Kanban] Error saving tasks:', err);
+			}
+		}
+
 		function countByStatus(status) {
 			return tasks.filter(t => t.status === status).length;
 		}
@@ -364,6 +447,7 @@
 					taskEl.className = 'task' + (task.status === 'DONE' ? ' task-done' : '');
 					taskEl.draggable = true;
 					taskEl.dataset.taskId = task.id;
+					taskEl.title = task.description;
 
 					// Drag events
 					taskEl.addEventListener('dragstart', (e) => {
@@ -392,6 +476,7 @@
 						statusBtn.onclick = () => {
 							task.status = task.status === 'TODO' ? 'IN_PROGRESS' : 'DONE';
 							renderTasks();
+							saveTasksToFile();
 						};
 						actionsEl.appendChild(statusBtn);
 					}
@@ -399,8 +484,11 @@
 					const runBtn = document.createElement('button');
 					runBtn.textContent = 'Run';
 					runBtn.className = 'run-btn';
+					runBtn.title = task.action ? 'Click to see task action' : 'No action defined';
 					runBtn.onclick = () => {
-						console.log('Running task:', task.title);
+						if (task.action) {
+							alert(`Task: ${task.title}\n\nAction:\n${task.action.substring(0, 500)}...`);
+						}
 					};
 					actionsEl.appendChild(runBtn);
 
@@ -411,6 +499,7 @@
 					delBtn.onclick = () => {
 						tasks = tasks.filter(t => t.id !== task.id);
 						renderTasks();
+						saveTasksToFile();
 					};
 					actionsEl.appendChild(delBtn);
 
@@ -439,6 +528,7 @@
 				if (draggedTask) {
 					draggedTask.status = col.dataset.status;
 					renderTasks();
+					saveTasksToFile();
 				}
 			});
 		});
@@ -453,12 +543,18 @@
 		document.getElementById('todo-input').addEventListener('keydown', (e) => {
 			if (e.key === 'Enter' && e.target.value.trim()) {
 				tasks.push({
-					id: taskIdCounter++,
+					id: `task-${taskIdCounter++}`,
 					title: e.target.value.trim(),
-					status: 'TODO'
+					status: 'TODO',
+					description: '',
+					files: [],
+					action: '',
+					verify: '',
+					done: ''
 				});
 				e.target.value = '';
 				renderTasks();
+				saveTasksToFile();
 			}
 			if (e.key === 'Escape') {
 				e.target.value = '';
@@ -473,7 +569,7 @@
 			});
 		};
 
-		renderTasks();
+		loadTasksFromFile();
 	</script>
 </body>
 </html>
