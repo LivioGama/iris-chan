@@ -6,8 +6,9 @@ import { applyOverlays } from './avatar/overlays.js';
 import { VoicePipeline } from './voice/pipeline.js';
 import { error as logError } from './logger.js';
 
-// Get avatar type from window (set by preload)
-const avatarType = window.avatarConfig?.current || 'tripo3d';
+// Get avatar type from main process (async via preload)
+const avatarConfig = window.getAvatarConfig ? await window.getAvatarConfig() : null;
+const avatarType = avatarConfig?.current || 'tripo3d';
 
 const { renderer, camera, scene } = createScene();
 const { vrm, mixer, glowMaterials = [] } = await loadAvatar(scene, avatarType);
@@ -50,12 +51,15 @@ window.addEventListener('click', () => {
 const clock = new THREE.Clock();
 let elapsedTime = 0;
 
-// Keep figure rotation unchanged
-const targetPosition = 12;
-const totalPositions = 16;
-const targetAngle = (targetPosition / totalPositions) * Math.PI * 2;
-vrm.scene.rotation.y = targetAngle;
-console.log(`✓ Avatar set to position ${targetPosition}`);
+// Set rotation based on avatar type
+if (avatarType === 'original') {
+	vrm.scene.rotation.y = Math.PI;
+} else {
+	const targetPosition = 12;
+	const totalPositions = 16;
+	const targetAngle = (targetPosition / totalPositions) * Math.PI * 2;
+	vrm.scene.rotation.y = targetAngle;
+}
 
 function animate() {
 	requestAnimationFrame(animate);

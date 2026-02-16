@@ -9,6 +9,7 @@ const skills = require('./skills');
 const avatarWindow = require('./windows/avatar-window');
 const log = require('./logger');
 const config = require('../shared/config');
+const convexStore = require('./convex-store');
 
 function register(apiKey) {
 	ipcMain.handle(ch.GET_API_KEY, () => apiKey);
@@ -71,6 +72,26 @@ function register(apiKey) {
 		}
 
 		return config.avatar.current;
+	});
+
+	ipcMain.on(ch.SAVE_CONVERSATION_TURN, (_, role, text) => {
+		convexStore.saveTurn(role, text);
+	});
+
+	ipcMain.on(ch.SAVE_TOOL_EXECUTION, (_, name, args, result, success, durationMs) => {
+		convexStore.saveToolExecution(name, args, result, success, durationMs);
+	});
+
+	ipcMain.handle(ch.SEMANTIC_SEARCH, (_, query, limit, roleFilter) => {
+		return convexStore.semanticSearch(query, limit, roleFilter);
+	});
+
+	ipcMain.on(ch.NEW_CONVEX_SESSION, () => {
+		convexStore.newSession();
+	});
+
+	ipcMain.on(ch.END_CONVEX_SESSION, () => {
+		convexStore.endSession();
 	});
 }
 

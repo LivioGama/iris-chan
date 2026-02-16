@@ -58,21 +58,6 @@ async function self_fix(args) {
 	const files = args.files_to_touch || '';
 	if (!desc) return { ok: false, result: 'No description provided' };
 
-	const projectRoot = path.join(__dirname, '..', '..', '..');
-	const fileList = [
-		'src/main/index.js', 'src/renderer/index.html', 'src/renderer/voice/pipeline.js',
-		'src/renderer/gemini/client.js', 'src/renderer/voice/capture.js',
-		'src/renderer/voice/playback.js', 'src/main/tools/index.js',
-		'src/main/screen-capture.js', 'helpers/iris-helper.swift',
-	];
-
-	const fileInfo = fileList.map(f => {
-		try {
-			const stat = fs.statSync(path.join(projectRoot, f));
-			return `  - ${f} (${stat.size} bytes)`;
-		} catch { return `  - ${f} (not found)`; }
-	}).join('\n');
-
 	const prompt = [
 		`[IRIS SELF-FIX REQUEST]`,
 		``,
@@ -82,9 +67,6 @@ async function self_fix(args) {
 		desc,
 		``,
 		files ? `## Files likely involved\n${files}\n` : '',
-		`## Project files`,
-		fileInfo,
-		``,
 		`## Rules`,
 		`- Edit files in place, don't recreate them`,
 		`- Don't touch audio playback scheduling unless explicitly asked`,

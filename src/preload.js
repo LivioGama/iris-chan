@@ -20,13 +20,19 @@ try {
 		LOG_TO_FILE: 'log-to-file',
 		KILL_SKILL: 'kill-skill',
 		TOGGLE_AVATAR: 'toggle-avatar',
+		SAVE_CONVERSATION_TURN: 'save-conversation-turn',
+		SAVE_TOOL_EXECUTION: 'save-tool-execution',
+		SEMANTIC_SEARCH: 'semantic-search',
+		NEW_CONVEX_SESSION: 'new-convex-session',
+		END_CONVEX_SESSION: 'end-convex-session',
 	};
 }
 
-// Get avatar config from main process
-const avatarConfig = await ipcRenderer.invoke('get-avatar-config');
+// Get avatar config from main process (async, exposed as a promise)
+const avatarConfigPromise = ipcRenderer.invoke('get-avatar-config');
 
-contextBridge.exposeInMainWorld('avatarConfig', avatarConfig);
+contextBridge.exposeInMainWorld('avatarConfig', null);
+contextBridge.exposeInMainWorld('getAvatarConfig', () => avatarConfigPromise);
 
 contextBridge.exposeInMainWorld('electronAPI', {
 	getApiKey: () => ipcRenderer.invoke(ch.GET_API_KEY),
@@ -54,4 +60,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	logToFile: (level, tag, message) => ipcRenderer.send(ch.LOG_TO_FILE, level, tag, message),
 	killSkill: () => ipcRenderer.invoke(ch.KILL_SKILL),
 	toggleAvatar: () => ipcRenderer.invoke(ch.TOGGLE_AVATAR),
+	saveConversationTurn: (role, text) => ipcRenderer.send(ch.SAVE_CONVERSATION_TURN, role, text),
+	saveToolExecution: (name, args, result, success, durationMs) => ipcRenderer.send(ch.SAVE_TOOL_EXECUTION, name, args, result, success, durationMs),
+	semanticSearch: (query, limit, roleFilter) => ipcRenderer.invoke(ch.SEMANTIC_SEARCH, query, limit, roleFilter),
+	newConvexSession: () => ipcRenderer.send(ch.NEW_CONVEX_SESSION),
+	endSession: () => ipcRenderer.send(ch.END_CONVEX_SESSION),
 });

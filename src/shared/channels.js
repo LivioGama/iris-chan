@@ -24,4 +24,9 @@ module.exports = {
 	RELOAD_SESSION: 'reload-session',
 	LOG_TO_FILE: 'log-to-file',
 	KILL_SKILL: 'kill-skill',
+	SAVE_CONVERSATION_TURN: 'save-conversation-turn',
+	SAVE_TOOL_EXECUTION: 'save-tool-execution',
+	SEMANTIC_SEARCH: 'semantic-search',
+	NEW_CONVEX_SESSION: 'new-convex-session',
+	END_CONVEX_SESSION: 'end-convex-session',
 };

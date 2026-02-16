@@ -2,7 +2,7 @@ const skills = require('../skills');
 const log = require('../logger');
 const workspace = require('../workspace');
 
-const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './meta', './design', './game', './3d-gen'];
+const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './meta', './design', './3d-gen', './auth'];
 
 function loadHandlers() {
 	const input = require('./input');
@@ -13,8 +13,8 @@ function loadHandlers() {
 	const system = require('./system');
 	const meta = require('./meta');
 	const design = require('./design');
-	const game = require('./game');
 	const gen3d = require('./3d-gen');
+	const auth = require('./auth');
 	return {
 		type_text: input.type_text, press_key: input.press_key,
 		click_at: input.click_at, double_click: input.double_click,
@@ -35,10 +35,8 @@ function loadHandlers() {
 		drag_with_snap: design.drag_with_snap, multi_click: design.multi_click,
 		measure_vector: design.measure_vector, pause_and_wait: design.pause_and_wait,
 		slow_move: design.slow_move,
-		make_game_move: game.make_game_move, analyze_board_state: game.analyze_board_state,
-		highlight_moves: game.highlight_moves, click_piece: game.click_piece,
-		detect_board_layout: game.detect_board_layout,
 		generate_3d_model: gen3d.generate_3d_model, check_3d_setup: gen3d.check_3d_setup,
+		auto_2fa: auth.auto_2fa,
 	};
 }
 

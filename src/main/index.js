@@ -21,6 +21,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 // Load API keys from .env or process.env
 let apiKey = process.env.GEMINI_API_KEY || '';
 let ollamaApiKey = process.env.OLLAMA_API_KEY || '';
+let openrouterApiKey = process.env.OPENROUTER_API_KEY || '';
 try {
 	const envPath = path.join(__dirname, '..', '..', '.env');
 	const envContent = fs.readFileSync(envPath, 'utf-8');
@@ -29,19 +30,25 @@ try {
 		if (geminiMatch) apiKey = geminiMatch[1].trim();
 		const ollamaMatch = line.match(/^OLLAMA_API_KEY=(.+)$/);
 		if (ollamaMatch) ollamaApiKey = ollamaMatch[1].trim();
+		const openrouterMatch = line.match(/^OPENROUTER_API_KEY=(.+)$/);
+		if (openrouterMatch) openrouterApiKey = openrouterMatch[1].trim();
 	}
 } catch {}
 
 // Make API keys available to skill scripts (child processes)
 process.env.GEMINI_API_KEY = apiKey;
 process.env.OLLAMA_API_KEY = ollamaApiKey;
+process.env.OPENROUTER_API_KEY = openrouterApiKey;
 
 const ipc = require('./ipc');
 const avatarWindow = require('./windows/avatar-window');
+const kanbanWindow = require('./windows/kanban-window');
 const vocabStore = require('./vocab/store');
 const vocabMonitor = require('./vocab/monitor');
 const skills = require('./skills');
+const convexStore = require('./convex-store');
 skills.scan();
+convexStore.init();
 
 // Register all IPC handlers
 ipc.register(apiKey);
@@ -68,11 +75,24 @@ app.whenReady().then(async () => {
 	exec('osascript -e "set volume input volume 100"', () => {});
 
 	const win = avatarWindow.create();
+	const kanbanWin = kanbanWindow.create();
 	vocabMonitor.start(apiKey, () => avatarWindow.get());
 
 	// Ctrl+I toggles voice on/off
 	globalShortcut.register('CommandOrControl+I', () => {
 		if (win) win.webContents.send('toggle-voice');
+	});
+
+	// Ctrl+K toggles kanban board
+	globalShortcut.register('CommandOrControl+K', () => {
+		const kanbanWin = kanbanWindow.get();
+		if (kanbanWin) {
+			if (kanbanWin.isVisible()) {
+				kanbanWin.hide();
+			} else {
+				kanbanWin.show();
+			}
+		}
 	});
 
 	// Ctrl+Shift+A toggles between avatars
@@ -101,5 +121,6 @@ fs.watch(toolsDir, { recursive: true }, (eventType, filename) => {
 });
 
 app.on('window-all-closed', () => {
+	convexStore.shutdown();
 	app.quit();
 });
