@@ -9,10 +9,74 @@ async function initMeshoptDecoder(loader) {
 	// Meshopt decoder is optional - only needed for compressed models
 }
 
-function getGlobeFit(parent) {
-	const fallback = { center: new THREE.Vector3(0.0, -0.036, 0.0), radius: 0.108 };
+function getGlobeFit(parent, vrmInstance) {
+	const fallback = { center: new THREE.Vector3(0.0, 0.9, 0.0), radius: 0.12 };
 	if (!parent) return fallback;
 
+	// If we have a VRM instance, try to get the head bone position directly
+	if (vrmInstance?.humanoid) {
+		try {
+			const headNode = vrmInstance.humanoid.getNormalizedBoneNode('head');
+			if (headNode) {
+				// Get world position of head bone
+				const worldPos = new THREE.Vector3();
+				headNode.getWorldPosition(worldPos);
+				
+				// Transform to parent space
+				parent.updateMatrixWorld(true);
+				const invParentWorld = new THREE.Matrix4().copy(parent.matrixWorld).invert();
+				worldPos.applyMatrix4(invParentWorld);
+				
+				return { center: worldPos, radius: 0.12 };
+			}
+		} catch (e) {
+			console.warn('Could not get head bone position from VRM:', e);
+		}
+	}
+
+	// Try to find the head bone or mesh first
+	let headObject = null;
+	parent.traverse((obj) => {
+		// Look for a mesh that might be the head
+		if (obj?.isMesh && obj.geometry) {
+			// Check if this mesh is likely to be the head based on position and name
+			const name = obj.name?.toLowerCase() || '';
+			if (name.includes('head') || name.includes('skull') || name.includes('face')) {
+				headObject = obj;
+				return;
+			}
+			
+			// If no named head object, look for object at approximate head height
+			const worldPos = new THREE.Vector3();
+			obj.getWorldPosition(worldPos);
+			if (worldPos.y > 0.7 && worldPos.y < 1.2) {
+				// Likely in head region
+				if (!headObject || worldPos.y > headObject.getWorldPosition(new THREE.Vector3()).y) {
+					headObject = obj;
+				}
+			}
+		}
+	});
+
+	// If we found a head object, compute its bounding sphere
+	if (headObject) {
+		const geo = headObject.geometry;
+		if (!geo.boundingSphere) geo.computeBoundingSphere();
+		if (geo.boundingSphere) {
+			const center = geo.boundingSphere.center.clone();
+			headObject.updateMatrixWorld(true);
+			center.applyMatrix4(headObject.matrixWorld);
+			
+			// Transform to parent space
+			parent.updateMatrixWorld(true);
+			const invParentWorld = new THREE.Matrix4().copy(parent.matrixWorld).invert();
+			center.applyMatrix4(invParentWorld);
+			
+			return { center, radius: geo.boundingSphere.radius };
+		}
+	}
+
+	// Fall back to original algorithm if head detection fails
 	parent.updateMatrixWorld(true);
 	const invParentWorld = new THREE.Matrix4().copy(parent.matrixWorld).invert();
 	let best = null;
@@ -53,10 +117,10 @@ function getGlobeFit(parent) {
 	return best ? { center: best.center, radius: best.radius } : fallback;
 }
 
-function addGlobeOverlay(parent) {
+function addGlobeOverlay(parent, vrmInstance) {
 	if (!parent) return [];
 
-	const fit = getGlobeFit(parent);
+	const fit = getGlobeFit(parent, vrmInstance);
 	const center = fit.center;
 	const radius = fit.radius;
 
@@ -234,6 +298,9 @@ export async function loadAvatar(scene, avatarType = 'tripo3d') {
 		for (let i = 0; i < 60; i++) vrm.update(1 / 60);
 		scene.add(vrm.scene);
 
+		// Add globe overlay using VRM instance for precise head positioning
+		const glowMaterials = avatarType !== 'original' ? addGlobeOverlay(vrm.scene, vrm) : [];
+
 		// Try to load animation
 		const mixer = new THREE.AnimationMixer(vrm.scene);
 		try {
@@ -244,7 +311,7 @@ export async function loadAvatar(scene, avatarType = 'tripo3d') {
 			console.warn('Animation not found, using model without animation');
 		}
 
-		return { vrm, mixer, glowMaterials: [] };
+		return { vrm, mixer, glowMaterials };
 	}
 
 	// Regular glTF/GLB format (e.g., from Tripo3D)
@@ -260,7 +327,7 @@ export async function loadAvatar(scene, avatarType = 'tripo3d') {
 
 	for (const file of textureFiles) {
 		try {
-			await textureLoader.loadAsync('../../assets/' + file);
+			await textureLoader.loadAsync(`../../assets/${file}`);
 			console.log('✓ Loaded texture:', file);
 		} catch (e) {
 			console.warn('Could not load texture:', file);
@@ -283,7 +350,7 @@ export async function loadAvatar(scene, avatarType = 'tripo3d') {
 	model.scale.multiplyScalar(0.8);
 
 	scene.add(model);
-	const glowMaterials = addGlobeOverlay(model);
+	const glowMaterials = avatarType !== 'original' ? addGlobeOverlay(model, null) : [];
 
 	const mixer = new THREE.AnimationMixer(model);
 	if (gltf.animations && gltf.animations.length > 0) {

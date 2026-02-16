@@ -43,6 +43,8 @@ export class VoicePipeline {
 		this._lastReplyPromptTime = 0;
 		this._replyCooldownMs = 45000;
 		this.needsReconnect = false;
+		this._lastUserSpeechTime = 0;
+		this._unpromptedTurnCount = 0;
 		this._echoSuppressionEnabled = true;
 		this._echoSuppressionGain = 1.0; // Maximum suppression
 
@@ -152,6 +154,7 @@ export class VoicePipeline {
 		this.gemini.on('connected', () => {
 			updateIndicator('ws', true);
 			updateStatus('WebSocket connected, setting up...');
+			window.electronAPI.newConvexSession();
 		});
 
 		this.gemini.on('ready', async () => {
@@ -211,10 +214,30 @@ export class VoicePipeline {
 				logInfo('Conversation', `[IRIS] ${this._accum.model}`);
 				this._scanVocabulary(this._accum.model);
 			}
+			if (this._lastUserTurn) {
+				window.electronAPI.saveConversationTurn('user', this._lastUserTurn);
+			}
+			if (this._accum.model) {
+				window.electronAPI.saveConversationTurn('iris', this._accum.model);
+			}
 			if (this._lastUserTurn && this._accum.model) {
 				this._learnCorrections(this._lastUserTurn, this._accum.model);
 			}
 			this._accum.model = '';
+
+			// Idle loop prevention: if the user hasn't spoken recently and
+			// the model keeps producing turns, pause passive screen captures
+			// to stop feeding it visual input that triggers more responses.
+			const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
+			if (timeSinceUserSpoke > 30000) {
+				this._unpromptedTurnCount++;
+				if (this._unpromptedTurnCount >= 2) {
+					logInfo('Voice', `Idle loop detected (${this._unpromptedTurnCount} unprompted turns, ${Math.round(timeSinceUserSpoke / 1000)}s idle) — pausing passive screen captures`);
+					this._stopScreenCapture();
+				}
+			} else {
+				this._unpromptedTurnCount = 0;
+			}
 		});
 
 		this.gemini.on('interrupted', () => {
@@ -283,6 +306,8 @@ export class VoicePipeline {
 
 	async reconnect() {
 		this.needsReconnect = false;
+		this._lastUserSpeechTime = Date.now();
+		this._unpromptedTurnCount = 0;
 		this.capture.stop();
 		this.playback.stop();
 		this.gemini.disconnect();
@@ -292,6 +317,8 @@ export class VoicePipeline {
 
 	async _activate() {
 		this._active = true;
+		this._lastUserSpeechTime = Date.now();
+		this._unpromptedTurnCount = 0;
 		updateStatus('Connecting...');
 		await this.gemini.connect(this._apiKey);
 	}
@@ -335,6 +362,7 @@ export class VoicePipeline {
 		}
 		hideBubbles();
 		window.electronAPI.searchHide();
+		window.electronAPI.endSession?.();
 		updateStatus('Voice off (Ctrl+I to enable)');
 	}
 
@@ -348,6 +376,17 @@ export class VoicePipeline {
 
 		if (prev === STATES.LISTENING && state === STATES.USER_SPEAKING) {
 			this._sendScreenFrame();
+		}
+
+		// Track user speech activity for idle loop prevention
+		if (state === STATES.USER_SPEAKING) {
+			this._lastUserSpeechTime = Date.now();
+			this._unpromptedTurnCount = 0;
+			// Resume passive screen captures if they were paused
+			if (!this._screenInterval && this._active) {
+				logInfo('Voice', 'User speaking — resuming passive screen captures');
+				this._startScreenCapture();
+			}
 		}
 
 		updateIndicator('voice', state === STATES.USER_SPEAKING);
@@ -410,12 +449,14 @@ export class VoicePipeline {
 				updateIndicator('srch', true);
 			}
 
+			const toolStart = Date.now();
 			try {
 				const result = await window.electronAPI.executeTool(name, args);
 				showToolDone(name, i, result.ok !== false);
 				updateIfWorkspaceTool(name);
 				logInfo('Tool', `Result: ${name} → ${result.ok !== false ? 'OK' : 'FAIL'}: ${(result.result || 'done').slice(0, 300)}`);
 				this.gemini.sendToolResponse(id, name, result.result || 'done');
+				window.electronAPI.saveToolExecution(name, args, result.result || 'done', result.ok !== false, Date.now() - toolStart);
 
 				if (isSearch) {
 					updateIndicator('srch', false);
@@ -425,6 +466,7 @@ export class VoicePipeline {
 				showToolDone(name, i, false);
 				logError('Tool', `Error: ${name} → ${err.message}`);
 				this.gemini.sendToolResponse(id, name, 'Error: ' + err.message);
+				window.electronAPI.saveToolExecution(name, args, err.message, false, Date.now() - toolStart);
 				if (isSearch) {
 					updateIndicator('srch', false);
 					window.electronAPI.searchResult(this._searchLabel(name, args), 'Error: ' + err.message);
@@ -446,10 +488,16 @@ export class VoicePipeline {
 		this._setState(STATES.LISTENING);
 	}
 
-	async _sendScreenFrame() {
+	async _sendScreenFrame(passive = false) {
 		try {
 			const capture = await window.electronAPI.captureScreen();
 			if (capture?.ok && capture.data) {
+				// Only send context text for active captures (user speaking, post-tool).
+				// Periodic captures send the image silently to avoid triggering a response.
+				if (!passive && capture.context) {
+					const ctx = capture.context;
+					this.gemini.sendText(`[SCREEN CONTEXT] Image: ${ctx.imageWidth}x${ctx.imageHeight}px, Display: ${ctx.displayWidth}x${ctx.displayHeight}, Scale: ${ctx.scaleFactor}x, Cursor: (${ctx.cursorX}, ${ctx.cursorY}). IMPORTANT: Use the IMAGE pixel coordinates (from ${ctx.imageWidth}x${ctx.imageHeight} image) directly for mouse_move, click_at, and drag. The image shows exactly what is at each pixel location.`);
+				}
 				this.gemini.sendImage(capture.data);
 			}
 		} catch (err) {
@@ -462,7 +510,7 @@ export class VoicePipeline {
 		this._sendScreenFrame();
 		this._screenInterval = setInterval(() => {
 			if (!this._toolExecuting && this._active) {
-				this._sendScreenFrame();
+				this._sendScreenFrame(true); // passive: image only, no turn trigger
 			}
 		}, 10000);
 	}

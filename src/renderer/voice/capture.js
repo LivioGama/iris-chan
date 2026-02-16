@@ -157,10 +157,9 @@ export class AudioCapture extends Emitter {
 		// Enable AGGRESSIVE browser-level echo cancellation
 		this.stream = await navigator.mediaDevices.getUserMedia({
 			audio: {
-				echoCancellation: { ideal: true },
-				noiseSuppression: { ideal: true },
-				autoGainControl: false
-				// Note: Browser's echo cancellation should be handling most of it
+				echoCancellation: true,
+				noiseSuppression: true,
+				autoGainControl: true,
 			}
 		});
 		this.ctx = new AudioContext({ sampleRate: 16000 });

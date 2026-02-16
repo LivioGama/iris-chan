@@ -1,5 +1,12 @@
 // Tool handlers: type_text, press_key, click_at, double_click, mouse_move, drag, scroll
 const { runHelper } = require('../native-helper');
+const { getMapping } = require('../screen-capture');
+
+// Convert image-pixel coordinates (from Gemini) → logical screen coordinates (for CGEvent)
+function toScreen(imgX, imgY) {
+	const m = getMapping();
+	return { x: Math.round(imgX * m.scaleX), y: Math.round(imgY * m.scaleY) };
+}
 
 async function type_text(args) {
 	return runHelper({ action: 'type_text', text: args.text || '' });
@@ -10,38 +17,29 @@ async function press_key(args) {
 }
 
 async function click_at(args) {
-	return runHelper({
-		action: 'click_at',
-		x: parseFloat(args.x || 0),
-		y: parseFloat(args.y || 0),
-		button: args.button || 'left',
-	});
+	const { x, y } = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
+	return runHelper({ action: 'click_at', x, y, button: args.button || 'left' });
 }
 
 async function double_click(args) {
-	return runHelper({
-		action: 'double_click',
-		x: parseFloat(args.x || 0),
-		y: parseFloat(args.y || 0),
-	});
+	const { x, y } = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
+	return runHelper({ action: 'double_click', x, y });
 }
 
 async function mouse_move(args) {
-	return runHelper({
-		action: 'mouse_move',
-		x: parseFloat(args.x || 0),
-		y: parseFloat(args.y || 0),
-	});
+	const { x, y } = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
+	const result = await runHelper({ action: 'mouse_move', x, y });
+	if (!result.ok && result.result?.includes('off by')) {
+		await new Promise(r => setTimeout(r, 50));
+		return runHelper({ action: 'mouse_move', x, y });
+	}
+	return result;
 }
 
 async function drag(args) {
-	return runHelper({
-		action: 'drag',
-		x: parseFloat(args.x || 0),
-		y: parseFloat(args.y || 0),
-		x2: parseFloat(args.x2 || 0),
-		y2: parseFloat(args.y2 || 0),
-	});
+	const from = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
+	const to = toScreen(parseFloat(args.x2 || 0), parseFloat(args.y2 || 0));
+	return runHelper({ action: 'drag', x: from.x, y: from.y, x2: to.x, y2: to.y });
 }
 
 async function scroll(args) {

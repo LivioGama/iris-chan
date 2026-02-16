@@ -155,21 +155,32 @@ case "click_at":
     let src = CGEventSource(stateID: .hidSystemState)
     let isRight = cmd.button?.lowercased() == "right"
 
+    // Move cursor to target first so CGEvent click lands correctly
+    let preMove = CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!
+    preMove.post(tap: .cghidEventTap)
+    usleep(20_000)
+
     if isRight {
         let down = CGEvent(mouseEventSource: src, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right)!
         let up = CGEvent(mouseEventSource: src, mouseType: .rightMouseUp, mouseCursorPosition: point, mouseButton: .right)!
         down.post(tap: .cghidEventTap)
         usleep(50_000)
         up.post(tap: .cghidEventTap)
-        respond(true, "Right-clicked at (\(Int(x)), \(Int(y)))")
     } else {
         let down = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)!
         let up = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)!
         down.post(tap: .cghidEventTap)
         usleep(50_000)
         up.post(tap: .cghidEventTap)
-        respond(true, "Clicked at (\(Int(x)), \(Int(y)))")
     }
+    usleep(20_000)
+    // Read back actual position
+    let clickActual = NSEvent.mouseLocation
+    let clickScreenH = NSScreen.main?.frame.height ?? 0
+    let clickActualX = Int(clickActual.x)
+    let clickActualY = Int(clickScreenH - clickActual.y)
+    let clickLabel = isRight ? "Right-clicked" : "Clicked"
+    respond(true, "\(clickLabel) at (\(Int(x)),\(Int(y))) — cursor verified at (\(clickActualX),\(clickActualY))")
 
 case "double_click":
     guard let x = cmd.x, let y = cmd.y else {
@@ -197,7 +208,17 @@ case "mouse_move":
     let moveSrc = CGEventSource(stateID: .hidSystemState)
     let moveEvent = CGEvent(mouseEventSource: moveSrc, mouseType: .mouseMoved, mouseCursorPosition: movePoint, mouseButton: .left)!
     moveEvent.post(tap: .cghidEventTap)
-    respond(true, "Moved mouse to (\(Int(x)), \(Int(y)))")
+    usleep(30_000) // 30ms settle before reading back
+    // Read back actual position to verify
+    let actualPos = NSEvent.mouseLocation
+    let moveScreenH = NSScreen.main?.frame.height ?? 0
+    let actualX = Int(actualPos.x)
+    let actualY = Int(moveScreenH - actualPos.y) // Convert AppKit→CGEvent coords
+    let moveDist = abs(actualX - Int(x)) + abs(actualY - Int(y))
+    if moveDist > 5 {
+        respond(false, "Move may have failed: requested (\(Int(x)),\(Int(y))) but cursor is at (\(actualX),\(actualY)), off by \(moveDist)px")
+    }
+    respond(true, "Moved to (\(Int(x)),\(Int(y))) — verified at (\(actualX),\(actualY))")
 
 case "drag":
     guard let x = cmd.x, let y = cmd.y, let x2 = cmd.x2, let y2 = cmd.y2 else {

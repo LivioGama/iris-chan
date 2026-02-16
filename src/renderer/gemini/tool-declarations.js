@@ -166,44 +166,6 @@ export const toolDeclarations = [
 		}, required: ['description'] },
 	},
 	{
-		name: 'make_game_move',
-		description: 'Execute a move in an interactive game (e.g., chess, checkers). Specify the source and destination squares using standard notation (e.g., "a2" to "e4"). Optionally provide board information including board position, square size, and coordinate system.',
-		parameters: { type: 'OBJECT', properties: {
-			from: { type: 'STRING', description: 'Starting square (e.g., "e2", "a1")' },
-			to: { type: 'STRING', description: 'Destination square (e.g., "e4", "a2")' },
-			boardInfo: { type: 'OBJECT', description: 'Board layout info: {boardX, boardY, squareSize, orientation}' },
-		}, required: ['from', 'to'] },
-	},
-	{
-		name: 'click_piece',
-		description: 'Click on a specific game piece or square (e.g., to select a piece before moving). Specify the square in standard notation (a1-h8).',
-		parameters: { type: 'OBJECT', properties: {
-			square: { type: 'STRING', description: 'Target square (e.g., "e4")' },
-			boardInfo: { type: 'OBJECT', description: 'Board layout info: {boardX, boardY, squareSize}' },
-			button: { type: 'STRING', description: '"left" (default) or "right"' },
-		}, required: ['square'] },
-	},
-	{
-		name: 'analyze_board_state',
-		description: 'Analyze the current game board state by taking a screenshot. Returns piece positions and board configuration. Useful for understanding the current game situation.',
-		parameters: { type: 'OBJECT', properties: {
-			region: { type: 'STRING', description: 'Board region: "fullscreen" (default), "window", or custom coordinates' },
-		} },
-	},
-	{
-		name: 'highlight_moves',
-		description: 'Visually highlight legal moves for a selected piece. Helps indicate which moves are available from the current position.',
-		parameters: { type: 'OBJECT', properties: {
-			square: { type: 'STRING', description: 'Source square of the piece' },
-			legal_moves: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Array of legal destination squares (e.g., ["e4", "e3", "d4"])' },
-		}, required: ['square', 'legal_moves'] },
-	},
-	{
-		name: 'detect_board_layout',
-		description: 'Automatically detect the board layout, position, and square size from the current screen. Returns board configuration parameters needed for make_game_move.',
-		parameters: { type: 'OBJECT', properties: {} },
-	},
-	{
 		name: 'generate_3d_model',
 		description: 'Generate a high-quality 3D GLB model from an image using DreamGaussian AI. Perfect for converting product photos, scenes, or artwork into interactive 3D models. Results are saved to ~/Desktop/iris-3d-models/',
 		parameters: { type: 'OBJECT', properties: {
@@ -216,5 +178,14 @@ export const toolDeclarations = [
 		name: 'check_3d_setup',
 		description: 'Check if DreamGaussian 3D generation is properly installed and configured. Shows Python version, CUDA status, and installation requirements.',
 		parameters: { type: 'OBJECT', properties: {} },
+	},
+	{
+		name: 'auto_2fa',
+		description: 'Automatically retrieve a 2FA/verification code from recent Messages (iMessage/SMS), Mail, or notifications and type it into the currently focused input field. Use when you see a 2FA input field on screen or the user asks you to handle a verification code. Checks the last 5 minutes of messages by default.',
+		parameters: { type: 'OBJECT', properties: {
+			source: { type: 'STRING', description: '"auto" (default, checks all), "messages" (iMessage/SMS only), "mail" (Mail.app only), "notifications" (Notification Center only)' },
+			auto_type: { type: 'BOOLEAN', description: 'Whether to automatically type the code into the focused field (default: true)' },
+			max_age_seconds: { type: 'NUMBER', description: 'How far back to search in seconds (default: 300 = 5 minutes)' },
+		} },
 	},
 ];
