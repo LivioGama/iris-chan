@@ -767,7 +767,6 @@
 			const todoTasks = tasks.filter(t => t.status === 'TODO');
 			
 			if (todoTasks.length === 0) {
-				alert('No tasks to run. Add tasks in the TODO column first.');
 				return;
 			}
 			
@@ -783,7 +782,7 @@
 				// First, write spec.md
 				const specResult = await window.electron?.ipcRenderer?.invoke('write-spec-md', spec);
 				if (!specResult?.ok) {
-					alert(`Failed to write spec.md: ${specResult?.error || 'Unknown error'}`);
+					console.error(`Failed to write spec.md: ${specResult?.error || 'Unknown error'}`);
 					btnEl.textContent = 'Run All';
 					btnEl.disabled = false;
 					return;
@@ -792,14 +791,14 @@
 				// Then, remove tasks.json
 				const deleteResult = await window.electron?.ipcRenderer?.invoke('delete-tasks-file');
 				if (!deleteResult?.ok) {
-					alert(`Failed to delete tasks.json: ${deleteResult?.error || 'Unknown error'}`);
+					console.error(`Failed to delete tasks.json: ${deleteResult?.error || 'Unknown error'}`);
 					btnEl.textContent = 'Run All';
 					btnEl.disabled = false;
 					return;
 				}
 
-				// Finally, run /ship skill
-				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'ship', {
+				// Run claude-code-assistant skill with the spec
+				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'claude-code-assistant', {
 					description: spec
 				});
 				
@@ -810,21 +809,21 @@
 						// Reload tasks from the newly created tasks.json
 						await loadTasksFromFile();
 						syncTasksToConvex();
-						alert(`✓ Executed /ship with ${todoTasks.length} aggregated task(s)\n✓ Created ${parseResult.count} tasks - ready to run!`);
+						console.log(`[Kanban] Executed claude-code-assistant with ${todoTasks.length} aggregated task(s), created ${parseResult.count} tasks`);
 						btnEl.textContent = '✓ Done';
 						setTimeout(() => { btnEl.textContent = 'Run All'; btnEl.disabled = false; }, 1000);
 					} else {
-						alert(`✓ /ship completed, but failed to parse spec.md: ${parseResult?.error || 'Unknown error'}`);
+						console.error(`Parse spec.md failed: ${parseResult?.error || 'Unknown error'}`);
 						btnEl.textContent = 'Run All';
 						btnEl.disabled = false;
 					}
 				} else {
-					alert(`Error: ${result?.result?.result || result?.result || 'Unknown error'}`);
+					console.error(`Claude Code failed: ${result?.result?.result || result?.result || 'Unknown error'}`);
 					btnEl.textContent = 'Run All';
 					btnEl.disabled = false;
 				}
 			} catch (err) {
-				alert(`Failed to run all tasks: ${err.message}`);
+				console.error(`Run All error: ${err.message}`);
 				btnEl.textContent = 'Run All';
 				btnEl.disabled = false;
 			}
