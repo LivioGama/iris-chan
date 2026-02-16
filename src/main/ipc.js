@@ -137,12 +137,8 @@ function register(apiKey) {
 	// Run skill by name (e.g., 'ship', 'claude-code-assistant')
 	ipcMain.handle(ch.RUN_SKILL, async (_, skillName, args) => {
 		try {
-			const skillHandler = skills.getHandler(skillName);
-			if (skillHandler) {
-				const result = await skillHandler(args || {});
-				return { ok: true, result };
-			}
-			return { ok: false, result: `Skill "${skillName}" not found` };
+			const result = await skills.runSkillByName(skillName, args || {});
+			return result;
 		} catch (err) {
 			return { ok: false, result: `Skill error: ${err.message}` };
 		}
@@ -169,13 +165,9 @@ function register(apiKey) {
 				return { ok: false, result: `Task "${taskId}" not found` };
 			}
 			
-			// Run /ship skill with the task description
-			const skillHandler = skills.getHandler('ship');
-			if (skillHandler) {
-				const result = await skillHandler({ description: task.description });
-				return { ok: true, result };
-			}
-			return { ok: false, result: 'Ship skill not found' };
+			// Run ship skill with the task description
+			const result = await skills.runSkillByName('ship', { description: task.description });
+			return result;
 		} catch (err) {
 			return { ok: false, result: `Error running task: ${err.message}` };
 		}
