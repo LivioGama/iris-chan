@@ -1,38 +1,41 @@
 import { defineSchema, defineTable } from "convex/server";
-import { vector } from "convex/values";
+import { v } from "convex/values";
 
 export default defineSchema({
   conversations: defineTable({
-    role: "string",
-    text: "string",
-    cleanText: "string",
-    embedding: vector(1024),
-    sessionId: "string",
-    timestamp: "number",
-    source: "string",
-    hasToolCalls: "boolean",
+    role: v.string(),
+    text: v.string(),
+    cleanText: v.string(),
+    embedding: v.array(v.number()),
+    sessionId: v.string(),
+    timestamp: v.number(),
+    source: v.string(),
+    hasToolCalls: v.boolean(),
   })
     .index("by_session", ["sessionId", "timestamp"])
     .index("by_timestamp", ["timestamp"])
-    .index("by_embedding", ["embedding"], { vectorDimension: 1024 }),
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 1024,
+    }),
 
   tool_executions: defineTable({
-    sessionId: "string",
-    toolName: "string",
-    args: "string",
-    result: "string",
-    success: "boolean",
-    timestamp: "number",
-    durationMs: "number",
+    sessionId: v.string(),
+    toolName: v.string(),
+    args: v.string(),
+    result: v.string(),
+    success: v.boolean(),
+    timestamp: v.number(),
+    durationMs: v.number(),
   })
     .index("by_session", ["sessionId", "timestamp"])
     .index("by_tool", ["toolName", "timestamp"]),
 
   sessions: defineTable({
-    sessionId: "string",
-    startedAt: "number",
-    endedAt: "number",
-    turnCount: "number",
+    sessionId: v.string(),
+    startedAt: v.number(),
+    endedAt: v.optional(v.number()),
+    turnCount: v.number(),
   })
     .index("by_sessionId", ["sessionId"])
     .index("by_startedAt", ["startedAt"]),

@@ -204,16 +204,33 @@ function register(apiKey) {
 		}
 	});
 
-	// Resize kanban window
-	ipcMain.handle(ch.RESIZE_KANBAN, (_, width) => {
+	// Resize kanban window (width + optional height)
+	ipcMain.handle(ch.RESIZE_KANBAN, (_, width, height) => {
 		const kanbanWindow = require('./windows/kanban-window');
 		const win = kanbanWindow.get();
 		if (win && !win.isDestroyed()) {
 			const bounds = win.getBounds();
-			win.setBounds({ width, height: bounds.height }, false);
+			win.setBounds({
+				x: bounds.x,
+				y: bounds.y,
+				width: width || bounds.width,
+				height: height || bounds.height,
+			}, false);
 			return { ok: true };
 		}
 		return { ok: false, result: 'Kanban window not found' };
+	});
+
+	// Show/hide kanban window
+	ipcMain.handle('set-kanban-visible', (_, visible) => {
+		const kanbanWindow = require('./windows/kanban-window');
+		const win = kanbanWindow.get();
+		if (win && !win.isDestroyed()) {
+			if (visible) win.show();
+			else win.hide();
+			return { ok: true };
+		}
+		return { ok: false };
 	});
 
 	// Git operations
@@ -289,6 +306,21 @@ function register(apiKey) {
 		}
 	});
 
+	// Check if spec.md exists
+	ipcMain.handle('spec-md-exists', () => {
+		const fs = require('node:fs');
+		const path = require('node:path');
+		const specPath = path.join(process.cwd(), 'spec.md');
+		return { exists: fs.existsSync(specPath) };
+	});
+
+	ipcMain.handle('tasks-file-exists', () => {
+		const fs = require('node:fs');
+		const path = require('node:path');
+		const tasksPath = path.join(process.cwd(), 'tasks.json');
+		return { exists: fs.existsSync(tasksPath) };
+	});
+
 	// Write spec.md from aggregated tasks
 	ipcMain.handle('write-spec-md', async (_, spec) => {
 		const fs = require('node:fs');
@@ -323,6 +355,47 @@ function register(apiKey) {
 		}
 	});
 
+	// Import log files into Convex database
+	ipcMain.handle(ch.IMPORT_LOGS, async (_, filePaths) => {
+		const fs = require('node:fs');
+		const os = require('node:os');
+		let imported = 0;
+		const errors = [];
+
+		for (const filePath of filePaths) {
+			try {
+				if (!fs.existsSync(filePath)) {
+					errors.push(`${filePath}: not found`);
+					continue;
+				}
+				const content = fs.readFileSync(filePath, 'utf-8');
+				const lines = content.split('\n').filter(l => l.trim());
+
+				for (const line of lines) {
+					// Try to parse structured log lines
+					const match = line.match(/^\[(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\]]*)\]\s*\[?(USER|IRIS|SYSTEM|INFO|ERROR|WARN)\]?\s*(.*)/i);
+					if (match) {
+						const role = match[2].toLowerCase() === 'user' ? 'user' : 'iris';
+						const text = match[3].trim();
+						if (text.length > 2) {
+							await convexStore.saveTurn(role, text);
+							imported++;
+						}
+					} else if (line.length > 10) {
+						// Unstructured line — save as system context
+						await convexStore.saveTurn('iris', line.trim());
+						imported++;
+					}
+				}
+				log.info('Import', `Imported ${lines.length} lines from ${filePath}`);
+			} catch (err) {
+				errors.push(`${filePath}: ${err.message}`);
+			}
+		}
+
+		return { ok: errors.length === 0, imported, errors };
+	});
+
 	// Parse spec.md and recreate tasks.json
 	ipcMain.handle('parse-spec-md', async () => {
 		const fs = require('node:fs');
@@ -330,12 +403,16 @@ function register(apiKey) {
 		const specPath = path.join(process.cwd(), 'spec.md');
 		const tasksPath = path.join(process.cwd(), 'tasks.json');
 		
+		log.info('Kanban', `[parse-spec-md] Starting parse, spec path: ${specPath}`);
+		
 		try {
 			if (!fs.existsSync(specPath)) {
+				log.warn('Kanban', `[parse-spec-md] spec.md not found at ${specPath}`);
 				return { ok: false, error: 'spec.md not found' };
 			}
 			
 			const spec = fs.readFileSync(specPath, 'utf8');
+			log.info('Kanban', `[parse-spec-md] spec.md read successfully (${spec.length} bytes)`);
 			const tasks = [];
 			let taskId = 1;
 			
@@ -384,6 +461,8 @@ function register(apiKey) {
 				}
 			}
 			
+			log.info('Kanban', `[parse-spec-md] Parsed ${tasks.length} tasks from spec.md`);
+			
 			// Write tasks.json
 			const data = {
 				version: 1,
@@ -391,11 +470,11 @@ function register(apiKey) {
 				tasks: tasks
 			};
 			fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
-			log.info('Kanban', `Parsed spec.md and created ${tasks.length} tasks`);
+			log.info('Kanban', `[parse-spec-md] Wrote ${tasks.length} tasks to ${tasksPath}`);
 			
 			return { ok: true, count: tasks.length };
 		} catch (err) {
-			log.error('Kanban', `Failed to parse spec.md: ${err.message}`);
+			log.error('Kanban', `[parse-spec-md] Failed: ${err.message}`);
 			return { ok: false, error: err.message };
 		}
 	});

@@ -111,9 +111,9 @@ export class GeminiClient extends Emitter {
 					automaticActivityDetection: {
 						disabled: false,
 						startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
-						endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH',
-						prefixPaddingMs: 10,
-						silenceDurationMs: 200,
+						endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
+						prefixPaddingMs: 150,
+						silenceDurationMs: 1000,
 					},
 				},
 				outputAudioTranscription: {},

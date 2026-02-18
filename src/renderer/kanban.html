@@ -328,14 +328,24 @@
 		}
 
 		/* ── Loading Indicator Animation ── */
-		@keyframes pulse {
-			0%, 100% { opacity: 1; }
-			50% { opacity: 0.6; }
-		}
+	@keyframes pulse {
+		0%, 100% { opacity: 1; }
+		50% { opacity: 0.6; }
+	}
 
-		.loading-indicator {
-			animation: pulse 1.5s ease-in-out infinite;
-		}
+	@keyframes spin {
+		0% { transform: rotate(0deg); }
+		100% { transform: rotate(360deg); }
+	}
+
+	.loading-indicator {
+		animation: pulse 1.5s ease-in-out infinite;
+	}
+
+	.spinning {
+		display: inline-block;
+		animation: spin 1s linear infinite;
+	}
 	</style>
 </head>
 <body>
@@ -408,34 +418,45 @@
 			}, 500);
 		}
 
-		// Calculate and apply window size based on visible columns
+		// Calculate and apply window size based on visible columns and task count
 		let resizeTimeout = null;
 		function updateWindowSize() {
 			if (resizeTimeout) clearTimeout(resizeTimeout);
 			resizeTimeout = setTimeout(() => {
+				const totalTasks = tasks.length;
+
+				// Hide window when no tasks
+				if (totalTasks === 0) {
+					window.electron?.ipcRenderer?.invoke('set-kanban-visible', false).catch(() => {});
+					return;
+				}
+				window.electron?.ipcRenderer?.invoke('set-kanban-visible', true).catch(() => {});
+
 				const progressCol = document.querySelector('.col-progress');
 				const doneCol = document.querySelector('.col-done');
-				
+
 				const hasWip = !progressCol.classList.contains('hidden');
 				const hasDone = !doneCol.classList.contains('hidden');
-				
-				// Calculate width: wider when single column
-				// TODO (always visible) = 320px when alone, 240px with others
-				// WIP (240px if visible)
-				// DONE (240px if visible)
-				// Plus padding (6*2) and gaps
+
+				// Width calculation
 				let width;
 				if (!hasWip && !hasDone) {
-					// Single column (TODO only) - make it wider
-					width = 320 + 12 + 6;  // TODO column (wider) + padding + gap
+					width = 320 + 12 + 6;
 				} else {
-					width = 240 + 12 + 6;  // TODO column + padding + gap
-					if (hasWip) width += 240 + 6;  // WIP column + gap
-					if (hasDone) width += 240;     // DONE column
+					width = 240 + 12 + 6;
+					if (hasWip) width += 240 + 6;
+					if (hasDone) width += 240;
 				}
-				
-				// Send resize request to main process
-				window.electron?.ipcRenderer?.invoke('resize-kanban', width).catch(err => {
+
+				// Height: header(38) + column-header(30) + tasks(35 each) + input(30) + padding(24)
+				const maxPerColumn = Math.max(
+					countByStatus('TODO'),
+					hasWip ? countByStatus('IN_PROGRESS') : 0,
+					hasDone ? countByStatus('DONE') : 0
+				);
+				const height = Math.min(38 + 30 + maxPerColumn * 35 + 30 + 24, 600);
+
+				window.electron?.ipcRenderer?.invoke('resize-kanban', width, height).catch(err => {
 					console.warn('[Kanban] Resize failed:', err.message);
 				});
 			}, 300);
@@ -761,73 +782,168 @@
 			}
 		});
 
-		// Run all
-		document.getElementById('run-all').onclick = async () => {
-			const btnEl = document.getElementById('run-all');
-			const todoTasks = tasks.filter(t => t.status === 'TODO');
-			
-			if (todoTasks.length === 0) {
-				return;
-			}
-			
+	// Run all
+	document.getElementById('run-all').onclick = async () => {
+		const btnEl = document.getElementById('run-all');
+		const todoTasks = tasks.filter(t => t.status === 'TODO');
+		
+		console.log('[RunAll] Button clicked, TODO tasks found:', todoTasks.length);
+		
+		// Check if spec.md already exists
+		let specExists = false;
+		try {
+			const specCheckResult = await window.electron?.ipcRenderer?.invoke('spec-md-exists');
+			specExists = specCheckResult?.exists || false;
+			console.log('[RunAll] spec.md exists:', specExists);
+		} catch (err) {
+			console.error('[RunAll] Error checking spec-md-exists:', err);
+		}
+		
+		// If spec.md doesn't exist and no TODO tasks, can't proceed
+		if (!specExists && todoTasks.length === 0) {
+			console.warn('[RunAll] No TODO tasks found and no spec.md exists');
+			return;
+		}
+		
+		// If spec.md doesn't exist, create it from TODO tasks
+		let spec = null;
+		if (!specExists) {
 			// Consolidate all TODO tasks into a spec
-			const spec = todoTasks
+			spec = todoTasks
 				.map(t => `## ${t.title}\n${t.description}`)
 				.join('\n\n');
+			console.log('[RunAll] Created spec.md with', spec.length, 'bytes');
+		} else {
+			console.log('[RunAll] Skipping spec.md creation - using existing spec.md');
+		}
+		
+		btnEl.disabled = true;
+		btnEl.innerHTML = '<span class="spinning">⌛️</span>';
+		
+		// Safety timeout: always restore button after 60 seconds
+		const safetyTimeout = setTimeout(() => {
+			console.error('[RunAll] Safety timeout triggered - button forced to restore');
+			btnEl.textContent = 'Run All';
+			btnEl.disabled = false;
+		}, 60000);
+		
+		try {
+			// Determine if we need to run the skill
+			// Run skill if: 
+			// 1. spec.md was just created (normal flow), OR
+			// 2. spec.md exists but tasks.json doesn't (leverage existing spec)
+			let shouldRunSkill = !specExists; // Always run if we just created spec.md
+			let tasksFileExists = false;
 			
-			btnEl.disabled = true;
-			btnEl.textContent = '⏳';
-			
+			// Check if tasks.json exists
 			try {
-				// First, write spec.md
-				const specResult = await window.electron?.ipcRenderer?.invoke('write-spec-md', spec);
-				if (!specResult?.ok) {
-					console.error(`Failed to write spec.md: ${specResult?.error || 'Unknown error'}`);
-					btnEl.textContent = 'Run All';
-					btnEl.disabled = false;
-					return;
-				}
-
-				// Then, remove tasks.json
-				const deleteResult = await window.electron?.ipcRenderer?.invoke('delete-tasks-file');
-				if (!deleteResult?.ok) {
-					console.error(`Failed to delete tasks.json: ${deleteResult?.error || 'Unknown error'}`);
-					btnEl.textContent = 'Run All';
-					btnEl.disabled = false;
-					return;
-				}
-
-				// Run claude-code-assistant skill with the spec
-				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'claude-code-assistant', {
-					description: spec
-				});
-				
-				if (result?.ok) {
-					// Parse spec.md and recreate tasks.json
-					const parseResult = await window.electron?.ipcRenderer?.invoke('parse-spec-md');
-					if (parseResult?.ok) {
-						// Reload tasks from the newly created tasks.json
-						await loadTasksFromFile();
-						syncTasksToConvex();
-						console.log(`[Kanban] Executed claude-code-assistant with ${todoTasks.length} aggregated task(s), created ${parseResult.count} tasks`);
-						btnEl.textContent = '✓ Done';
-						setTimeout(() => { btnEl.textContent = 'Run All'; btnEl.disabled = false; }, 1000);
-					} else {
-						console.error(`Parse spec.md failed: ${parseResult?.error || 'Unknown error'}`);
-						btnEl.textContent = 'Run All';
-						btnEl.disabled = false;
-					}
-				} else {
-					console.error(`Claude Code failed: ${result?.result?.result || result?.result || 'Unknown error'}`);
-					btnEl.textContent = 'Run All';
-					btnEl.disabled = false;
-				}
+				const tasksCheckResult = await window.electron?.ipcRenderer?.invoke('tasks-file-exists');
+				tasksFileExists = tasksCheckResult?.exists || false;
+				console.log('[RunAll] tasks.json exists:', tasksFileExists);
 			} catch (err) {
-				console.error(`Run All error: ${err.message}`);
+				console.error('[RunAll] Error checking tasks-file-exists:', err);
+			}
+			
+			// If spec.md exists and tasks.json doesn't, still run skill to leverage spec.md
+			if (specExists && !tasksFileExists) {
+				shouldRunSkill = true;
+				console.log('[RunAll] spec.md exists but tasks.json missing - will run skill to leverage spec');
+			}
+			
+			// Step 1: Write spec.md only if it doesn't exist
+			if (!specExists) {
+				console.log('[RunAll] Step 1: Writing spec.md...');
+				const specResult = await window.electron?.ipcRenderer?.invoke('write-spec-md', spec);
+				console.log('[RunAll] write-spec-md result:', specResult);
+				if (!specResult?.ok) {
+					const err = `Failed to write spec.md: ${specResult?.error || 'Unknown error'}`;
+					console.error('[RunAll]', err);
+					btnEl.textContent = `❌ ${err.slice(0, 30)}...`;
+					await new Promise(r => setTimeout(r, 2000));
+					btnEl.textContent = 'Run All';
+					btnEl.disabled = false;
+					clearTimeout(safetyTimeout);
+					return;
+				}
+
+				// Step 2: Remove tasks.json only if spec.md was just created
+				console.log('[RunAll] Step 2: Deleting tasks.json...');
+				const deleteResult = await window.electron?.ipcRenderer?.invoke('delete-tasks-file');
+				console.log('[RunAll] delete-tasks-file result:', deleteResult);
+				if (!deleteResult?.ok) {
+					const err = `Failed to delete tasks.json: ${deleteResult?.error || 'Unknown error'}`;
+					console.error('[RunAll]', err);
+					btnEl.textContent = `❌ ${err.slice(0, 30)}...`;
+					await new Promise(r => setTimeout(r, 2000));
+					btnEl.textContent = 'Run All';
+					btnEl.disabled = false;
+					clearTimeout(safetyTimeout);
+					return;
+				}
+			} else {
+				console.log('[RunAll] Skipping Steps 1-2: Using existing spec.md');
+			}
+
+			// Step 3: Run claude-code-assistant skill if needed
+			if (shouldRunSkill) {
+				console.log('[RunAll] Step 3: Running claude-code-assistant skill...');
+				console.log('[RunAll] Calling run-skill with description length:', spec ? spec.length : 'N/A (using existing spec.md)');
+				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'claude-code-assistant', {
+					description: spec || ''  // Pass aggregated spec if we created it, otherwise empty (skill will use existing spec.md)
+				});
+				console.log('[RunAll] run-skill result:', result);
+				console.log('[RunAll] result?.ok:', result?.ok, 'typeof:', typeof result?.ok);
+				console.log('[RunAll] Full result object:', JSON.stringify(result));
+			} else {
+				console.log('[RunAll] Step 3 (skipped): Spec exists and tasks already loaded, not running skill');
+			}
+			
+			// Parse spec.md and recreate tasks.json (regardless of skill success/failure)
+			// This ensures we have tasks even if the skill failed
+			console.log('[RunAll] Step 4: Parsing spec.md...');
+			const parseResult = await window.electron?.ipcRenderer?.invoke('parse-spec-md');
+			console.log('[RunAll] parse-spec-md result:', parseResult);
+			console.log('[RunAll] parseResult?.ok:', parseResult?.ok, 'type:', typeof parseResult?.ok);
+			
+			if (parseResult?.ok) {
+				// Reload tasks from the newly created tasks.json
+				console.log('[RunAll] Step 5: Reloading tasks...');
+				await loadTasksFromFile();
+				syncTasksToConvex();
+				
+				let taskCountMsg;
+				if (!specExists) {
+					taskCountMsg = `aggregated ${todoTasks.length} task(s)`;
+				} else if (!tasksFileExists) {
+					taskCountMsg = 'leveraged existing spec (no tasks.json)';
+				} else {
+					taskCountMsg = 'processed existing spec with tasks';
+				}
+				console.log(`[Kanban] Executed claude-code-assistant ${taskCountMsg}, created ${parseResult.count} tasks`);
+				btnEl.textContent = '✓ Done';
+				clearTimeout(safetyTimeout);
+				setTimeout(() => { btnEl.textContent = 'Run All'; btnEl.disabled = false; }, 1500);
+			} else {
+				// Parse failed - this is more serious since we can't even read spec.md
+				const err = `Parse failed: ${parseResult?.error || 'Unknown error'}`;
+				console.error('[RunAll]', err);
+				btnEl.textContent = `❌ ${err.slice(0, 30)}...`;
+				await new Promise(r => setTimeout(r, 2000));
 				btnEl.textContent = 'Run All';
 				btnEl.disabled = false;
+				clearTimeout(safetyTimeout);
 			}
-		};
+		} catch (err) {
+			const msg = `Error: ${err.message}`;
+			console.error('[RunAll]', msg);
+			console.error('[RunAll] Stack:', err.stack);
+			btnEl.textContent = `❌ ${msg.slice(0, 30)}...`;
+			await new Promise(r => setTimeout(r, 2000));
+			btnEl.textContent = 'Run All';
+			btnEl.disabled = false;
+			clearTimeout(safetyTimeout);
+		}
+	};
 
 		// Clean up completed tasks
 		document.getElementById('clean-tasks').onclick = async () => {

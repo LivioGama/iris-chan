@@ -9,6 +9,8 @@ import { updateIndicator, updateStatus } from '../ui/debug-panel.js';
 import { showBubble, hideBubbles } from '../ui/bubbles.js';
 import { showToolStart, showToolDone, hideToolLog } from '../ui/tool-log.js';
 import { refreshWorkspace, updateIfWorkspaceTool } from '../ui/workspace-bar.js';
+import { showActivity, hideActivity } from '../ui/activity-panel.js';
+import { showPanel as showToolsPanel, hidePanel as hideToolsPanel } from '../ui/tools-skills-panel.js';
 import { info as logInfo, error as logError } from '../logger.js';
 
 const STATES = {
@@ -46,7 +48,8 @@ export class VoicePipeline {
 		this._lastUserSpeechTime = 0;
 		this._unpromptedTurnCount = 0;
 		this._echoSuppressionEnabled = true;
-		this._echoSuppressionGain = 1.0; // Maximum suppression
+		this._echoSuppressionGain = 0.8; // 80% suppression (balanced default)
+		this._muted = false;
 
 		// Wire playback reference signals to capture for echo cancellation
 		this.playback.setReferenceCallback((float32Samples) => {
@@ -54,7 +57,6 @@ export class VoicePipeline {
 			// Capture will only process it if it's active
 			if (this._echoSuppressionEnabled) {
 				this.capture.sendReferenceSignal(float32Samples);
-				logInfo('Echo', `Ref signal sent: ${float32Samples.length} samples`);
 			}
 		});
 	}
@@ -105,7 +107,7 @@ export class VoicePipeline {
 			const match = findBestNgram(userText, term, termWords.length);
 			if (!match) continue;
 
-			const threshold = Math.ceil(term.length * 0.35);
+			const threshold = Math.ceil(term.length * 0.4);
 			if (match.distance === 0 || match.distance > threshold) continue;
 
 			const key = match.ngram.toLowerCase();
@@ -168,6 +170,7 @@ export class VoicePipeline {
 				updateStatus('Mic error: ' + err.message);
 			}
 			this._startScreenCapture();
+			showToolsPanel();
 		});
 
 		this.gemini.on('disconnected', () => {
@@ -187,6 +190,10 @@ export class VoicePipeline {
 		});
 
 		this.gemini.on('audio', (data) => {
+			if (this._muted) return;
+			// Suppress unprompted responses — if user hasn't spoken since last
+			// turn completed, Gemini is talking to itself (loop). Drop the audio.
+			if (this._unpromptedTurnCount >= 1) return;
 			if (this.state !== STATES.RESPONDING) {
 				if (this._accum.user) {
 					logInfo('Conversation', `[USER] ${this._accum.user}`);
@@ -199,11 +206,14 @@ export class VoicePipeline {
 		});
 
 		this.gemini.on('inputTranscription', (text) => {
+			if (this._muted) return;
 			this._appendTranscript('user', text);
 			updateIndicator('voice', true);
 		});
 
 		this.gemini.on('outputTranscription', (text) => {
+			if (this._muted) return;
+			if (this._unpromptedTurnCount >= 1) return;
 			this._appendTranscript('model', text);
 		});
 
@@ -229,10 +239,11 @@ export class VoicePipeline {
 			// the model keeps producing turns, pause passive screen captures
 			// to stop feeding it visual input that triggers more responses.
 			const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
-			if (timeSinceUserSpoke > 30000) {
+			if (timeSinceUserSpoke > 3000) {
 				this._unpromptedTurnCount++;
-				if (this._unpromptedTurnCount >= 2) {
-					logInfo('Voice', `Idle loop detected (${this._unpromptedTurnCount} unprompted turns, ${Math.round(timeSinceUserSpoke / 1000)}s idle) — pausing passive screen captures`);
+				logInfo('Voice', `Unprompted turn #${this._unpromptedTurnCount} (${Math.round(timeSinceUserSpoke / 1000)}s since user spoke)`);
+				if (this._unpromptedTurnCount >= 1) {
+					logInfo('Voice', 'Idle loop detected \u2014 pausing passive screen captures');
 					this._stopScreenCapture();
 				}
 			} else {
@@ -242,7 +253,9 @@ export class VoicePipeline {
 
 		this.gemini.on('interrupted', () => {
 			this.playback.stop();
+			hideActivity();
 			this._setState(STATES.LISTENING);
+			logInfo('Voice', 'User interrupted — playback stopped');
 		});
 
 		this.gemini.on('toolCall', (calls) => this._handleToolCalls(calls));
@@ -259,7 +272,10 @@ export class VoicePipeline {
 		});
 
 		this.capture.on('data', (base64) => {
-			if (!this._toolExecuting) {
+			if (this._muted) return;
+			// Only send mic audio when user is actively speaking or just stopped.
+			const send = this.state === STATES.USER_SPEAKING || this.state === STATES.PROCESSING;
+			if (send && !this._toolExecuting) {
 				this.gemini.sendAudio(base64);
 			}
 		});
@@ -267,6 +283,12 @@ export class VoicePipeline {
 		this.capture.on('volume', (vol) => {
 			this.lastVolume = vol;
 			if (vol > this.volumeThreshold && this.state === STATES.LISTENING) {
+				this._setState(STATES.USER_SPEAKING);
+			} else if (vol > this.volumeThreshold && this.state === STATES.RESPONDING) {
+				// Full-duplex: user speaking over Iris — stop playback immediately
+				logInfo('Voice', 'User speaking during response — interrupting');
+				this.playback.stop();
+				hideActivity();
 				this._setState(STATES.USER_SPEAKING);
 			} else if (vol < this.volumeThreshold * 0.5 && this.state === STATES.USER_SPEAKING) {
 				this._setState(STATES.PROCESSING);
@@ -345,6 +367,20 @@ export class VoicePipeline {
 		return this._echoSuppressionGain;
 	}
 
+	toggleMute() {
+		this._muted = !this._muted;
+		if (this._muted) {
+			this.playback.stop();
+			hideBubbles();
+		}
+		logInfo('Voice', `Mute ${this._muted ? 'ON' : 'OFF'}`);
+		return this._muted;
+	}
+
+	get muted() {
+		return this._muted;
+	}
+
 	_deactivate() {
 		this._active = false;
 		this._toolExecuting = false;
@@ -361,6 +397,7 @@ export class VoicePipeline {
 			updateIndicator(id, false);
 		}
 		hideBubbles();
+		hideToolsPanel();
 		window.electronAPI.searchHide();
 		window.electronAPI.endSession?.();
 		updateStatus('Voice off (Ctrl+I to enable)');
@@ -392,6 +429,11 @@ export class VoicePipeline {
 		updateIndicator('voice', state === STATES.USER_SPEAKING);
 		updateIndicator('think', state === STATES.PROCESSING);
 		updateIndicator('speak', state === STATES.RESPONDING);
+
+		// Activity panel updates
+		if (state === STATES.PROCESSING) showActivity('\u2728 Thinking...');
+		else if (state === STATES.TOOL_EXECUTING) { /* tool name shown in _handleToolCalls */ }
+		else if (state === STATES.LISTENING && prev !== STATES.IDLE) hideActivity();
 	}
 
 	_appendTranscript(who, chunk) {
@@ -441,6 +483,10 @@ export class VoicePipeline {
 			if (i > 0) await new Promise(r => setTimeout(r, 200));
 
 			showToolStart(name, args, i, calls.length);
+			const toolLabel = this._isSearchTool(name, args)
+				? `\uD83D\uDD0D ${name}: ${(args?.query || args?.prompt || '').slice(0, 40)}`
+				: `\u2699\uFE0F ${name}`;
+			showActivity(toolLabel);
 			logInfo('Tool', `Executing: ${name}(${JSON.stringify(args || {})})`.slice(0, 500));
 
 			const isSearch = this._isSearchTool(name, args);
@@ -523,21 +569,9 @@ export class VoicePipeline {
 	}
 
 	async _onMessagingAppFocused(app) {
-		if (!this._active || !this.gemini.sessionReady) return;
-		if (this._toolExecuting) return;
-		const now = Date.now();
-		if (now - this._lastReplyPromptTime < this._replyCooldownMs) return;
-		this._lastReplyPromptTime = now;
-
-		try {
-			const capture = await window.electronAPI.captureScreen();
-			if (capture?.ok && capture.data) {
-				this.gemini.sendImage(capture.data);
-			}
-		} catch {}
-
-		this.gemini.sendText(
-			`The user just switched to ${app}. Look at the screen \u2014 if there's an unread message or ongoing conversation visible, proactively suggest a reply using the propose_reply tool. Be natural, match the conversation tone, and keep it brief. If there's nothing to reply to, stay silent.`
-		);
+		// IDLE SILENCE: Completely disabled unprompted messaging.
+		// Iris remains silent unless the user explicitly speaks or sends context.
+		// This prevents conversational looping and "how can I help?" type responses.
+		return;
 	}
 }

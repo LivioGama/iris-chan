@@ -1,35 +1,68 @@
 // Kanban overlay window creation & display tracking
 const { BrowserWindow, screen } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 const config = require('../../shared/config');
 const log = require('../logger');
 
 let win = null;
 let currentDisplayId = null;
 
-function getTopCenteredPosition(display) {
+const GEOMETRY_PATH = path.join(config.paths.irisDir, 'kanban-geometry.json');
+
+function loadGeometry() {
+	try {
+		return JSON.parse(fs.readFileSync(GEOMETRY_PATH, 'utf-8'));
+	} catch {
+		return null;
+	}
+}
+
+function saveGeometry() {
+	if (!win || win.isDestroyed()) return;
+	try {
+		const bounds = win.getBounds();
+		fs.writeFileSync(GEOMETRY_PATH, JSON.stringify(bounds), 'utf-8');
+	} catch {}
+}
+
+function getDefaultPosition(display) {
 	const { x, y, width } = display.bounds;
 	return {
-		x: x + (width - 900) / 2,
+		x: x + width - 740, // right side of screen
 		y: y + 40,
 	};
 }
 
-function moveToDisplay(display) {
-	if (!win || display.id === currentDisplayId) return;
-	currentDisplayId = display.id;
-	const pos = getTopCenteredPosition(display);
-	win.setPosition(pos.x, pos.y, false);
+function watchTasksFile() {
+	const tasksPath = path.join(process.cwd(), 'tasks.json');
+
+	try {
+		// Use fs.watchFile with polling for more reliable detection
+		fs.watchFile(tasksPath, { interval: 1000 }, (curr, prev) => {
+			// Only trigger if the file actually changed (size or mtime different)
+			if (curr.size !== prev.size || curr.mtime !== prev.mtime) {
+				if (win && !win.isDestroyed()) {
+					log.info('Kanban', 'Tasks file changed, notifying renderer');
+					win.webContents.send('tasks-file-updated');
+				}
+			}
+		});
+		log.info('Kanban', 'Watching tasks.json for changes');
+	} catch (err) {
+		log.warn('Kanban', `Could not watch tasks.json: ${err.message}`);
+	}
 }
 
 function create() {
 	const primaryDisplay = screen.getPrimaryDisplay();
-	const pos = getTopCenteredPosition(primaryDisplay);
+	const saved = loadGeometry();
+	const pos = saved || getDefaultPosition(primaryDisplay);
 	currentDisplayId = primaryDisplay.id;
 
 	win = new BrowserWindow({
-		width: 900,
-		height: 440,
+		width: saved?.width || 720,
+		height: saved?.height || 200,
 		x: pos.x,
 		y: pos.y,
 		transparent: true,
@@ -59,12 +92,20 @@ function create() {
 		log[level]('Kanban', m);
 	});
 
-	// Poll cursor position to follow it across displays
-	setInterval(() => {
-		const cursor = screen.getCursorScreenPoint();
-		const display = screen.getDisplayNearestPoint(cursor);
-		moveToDisplay(display);
-	}, 500);
+	// Watch tasks.json for changes
+	watchTasksFile();
+
+	// Save geometry on resize/move (debounced)
+	let geoDebounce = null;
+	const persistGeo = () => { clearTimeout(geoDebounce); geoDebounce = setTimeout(saveGeometry, 300); };
+	win.on('resize', persistGeo);
+	win.on('move', persistGeo);
+
+	// Clean up file watcher on window close
+	win.on('closed', () => {
+		const tasksPath = path.join(process.cwd(), 'tasks.json');
+		fs.unwatchFile(tasksPath);
+	});
 
 	return win;
 }

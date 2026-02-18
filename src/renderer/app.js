@@ -22,15 +22,15 @@ voice.start().catch(err => logError('Voice', 'Start error:', err));
 let mouseOverAvatar = false;
 let hoverTimeout = null;
 
+const muteBadge = document.getElementById('mute-badge');
+
 window.addEventListener('mousemove', () => {
-	if (!voice.needsReconnect) return;
-	// Mouse is over the window (forwarded event) — make it clickable
+	// Always make clickable on hover (for mute toggle + reconnect)
 	if (!mouseOverAvatar) {
 		mouseOverAvatar = true;
 		document.body.style.cursor = 'pointer';
 		window.electronAPI.setIgnoreMouseEvents(false);
 	}
-	// Reset leave detection timer
 	clearTimeout(hoverTimeout);
 	hoverTimeout = setTimeout(() => {
 		mouseOverAvatar = false;
@@ -40,11 +40,16 @@ window.addEventListener('mousemove', () => {
 });
 
 window.addEventListener('click', () => {
-	if (!voice.needsReconnect) return;
-	mouseOverAvatar = false;
-	document.body.style.cursor = '';
-	window.electronAPI.setIgnoreMouseEvents(true);
-	voice.reconnect();
+	if (voice.needsReconnect) {
+		mouseOverAvatar = false;
+		document.body.style.cursor = '';
+		window.electronAPI.setIgnoreMouseEvents(true);
+		voice.reconnect();
+		return;
+	}
+	// Toggle mute
+	const muted = voice.toggleMute();
+	muteBadge.classList.toggle('visible', muted);
 });
 
 // Render loop
