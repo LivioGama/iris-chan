@@ -38,53 +38,29 @@ function initConfig() {
   return convexConfig;
 }
 
-async function httpMutation(functionName, args) {
+// Convex self-hosted HTTP API: POST /api/run/{module}/{function}
+// Auth via adminKey in body, args in body.args
+async function httpRun(functionName, args) {
   const config = initConfig();
   if (!config.url) return { error: 'No URL configured' };
-  
-  try {
-    const response = await fetch(`${config.url}/api/mutations/${functionName}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(config.adminKey ? { 'Authorization': `Bearer ${config.adminKey}` } : {}),
-      },
-      body: JSON.stringify({ json: args }),
-    });
-    
-    if (!response.ok) {
-      const text = await response.text();
-      return { error: `HTTP ${response.status}: ${text}` };
-    }
-    
-    const data = await response.json();
-    return data;
-  } catch (err) {
-    return { error: err.message };
-  }
-}
 
-async function httpAction(functionName, args) {
-  const config = initConfig();
-  if (!config.url) return { error: 'No URL configured' };
-  
+  // Convert "conversations:saveTurn" → "conversations/saveTurn"
+  const apiPath = functionName.replace(':', '/');
+  const body = { args };
+  if (config.adminKey) body.adminKey = config.adminKey;
+
   try {
-    const response = await fetch(`${config.url}/api/actions/${functionName}`, {
+    const response = await fetch(`${config.url}/api/run/${apiPath}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(config.adminKey ? { 'Authorization': `Bearer ${config.adminKey}` } : {}),
-      },
-      body: JSON.stringify({ json: args }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
-    
-    if (!response.ok) {
-      const text = await response.text();
-      return { error: `HTTP ${response.status}: ${text}` };
-    }
-    
+
     const data = await response.json();
-    return data;
+    if (data.status === 'error') {
+      return { error: data.errorMessage || 'Unknown Convex error' };
+    }
+    return { value: data.value, status: data.status };
   } catch (err) {
     return { error: err.message };
   }
@@ -187,7 +163,7 @@ const convexStore = {
     const clean = cleanText(text);
     const embedding = new Array(1024).fill(0);
     
-    const result = await httpMutation('conversations:saveTurn', {
+    const result = await httpRun('conversations:saveTurn', {
       role,
       text,
       cleanText: clean,
@@ -203,10 +179,11 @@ const convexStore = {
       return;
     }
     
-    const docId = result?.txRecoveryKey || result?._id;
-    if (docId) {
+    // Convex /api/run returns { value: docId, status: "success" }
+    const docId = result?.value;
+    if (docId && typeof docId === 'string') {
       generateEmbedding(clean).then(emb => {
-        httpMutation('conversations:patchEmbedding', {
+        httpRun('conversations:patchEmbedding', {
           id: docId,
           embedding: emb,
         }).catch(err => {
@@ -221,7 +198,7 @@ const convexStore = {
     if (!config.url || !currentSessionId) return;
     
     const timestamp = Date.now();
-    await httpMutation('conversations:saveToolExecution', {
+    await httpRun('conversations:saveToolExecution', {
       sessionId: currentSessionId,
       toolName: name,
       args: JSON.stringify(args),
@@ -238,12 +215,12 @@ const convexStore = {
     
     const embedding = await generateEmbedding(queryText);
     try {
-      const results = await httpAction('search:semanticSearch', {
+      const result = await httpRun('search:semanticSearch', {
         embedding,
         limit,
         roleFilter,
       });
-      return results || [];
+      return result?.value || [];
     } catch (err) {
       console.error('[ConvexStore] semanticSearch error:', err.message);
       return [];
@@ -254,7 +231,7 @@ const convexStore = {
     currentSessionId = generateSessionId();
     const config = initConfig();
     if (config.url) {
-      httpMutation('conversations:upsertSession', {
+      httpRun('conversations:upsertSession', {
         sessionId: currentSessionId,
         startedAt: Date.now(),
         turnCount: 0,
@@ -270,7 +247,7 @@ const convexStore = {
     const config = initConfig();
     if (config.url) {
       try {
-        await httpMutation('conversations:upsertSession', {
+        await httpRun('conversations:upsertSession', {
           sessionId: currentSessionId,
           startedAt: 0,
           endedAt: Date.now(),

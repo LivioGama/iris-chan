@@ -31,6 +31,7 @@ function loadHandlers() {
 		run_terminal_command: system.run_terminal_command,
 		self_fix: meta.self_fix, propose_reply: meta.propose_reply,
 		manage_vocabulary: meta.manage_vocabulary, get_mouse_position: meta.get_mouse_position,
+		import_logs: meta.import_logs,
 		wait_for: design.wait_for, click_and_wait: design.click_and_wait,
 		drag_with_snap: design.drag_with_snap, multi_click: design.multi_click,
 		measure_vector: design.measure_vector, pause_and_wait: design.pause_and_wait,

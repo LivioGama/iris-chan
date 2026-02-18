@@ -11,8 +11,6 @@ class CaptureProcessor extends AudioWorkletProcessor {
 		this.echoSuppression = true;
 		this.suppressionGain = 1.0;
 		this.isPlaybackActive = false;
-		this.debugCounter = 0;
-
 		// LMS Adaptive Filter for echo cancellation (same algorithm as WebRTC)
 		this.filterOrder = 512; // Length of adaptive filter
 		this.filterCoeffs = new Float32Array(this.filterOrder); // Weights
@@ -59,13 +57,6 @@ class CaptureProcessor extends AudioWorkletProcessor {
 		} else {
 			// No echo cancellation needed
 			processedInput = input;
-		}
-
-		// Debug: Log occasionally
-		this.debugCounter++;
-		if (this.debugCounter % 200 === 0) {
-			const hasRef = this.referenceBuffer.length > 0;
-			this.port.postMessage({ type: 'debug', hasReference: hasRef });
 		}
 
 		// Convert float32 to int16
@@ -154,13 +145,8 @@ export class AudioCapture extends Emitter {
 
 	async start(retries = 2) {
 		this.stop();
-		// Enable AGGRESSIVE browser-level echo cancellation
 		this.stream = await navigator.mediaDevices.getUserMedia({
-			audio: {
-				echoCancellation: true,
-				noiseSuppression: true,
-				autoGainControl: true,
-			}
+			audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
 		});
 		this.ctx = new AudioContext({ sampleRate: 16000 });
 
@@ -177,14 +163,12 @@ export class AudioCapture extends Emitter {
 			this.workletNode = new AudioWorkletNode(this.ctx, 'capture-processor');
 
 			this.workletNode.port.onmessage = (ev) => {
-				const { type, value, samples, hasReference, refLength, suppEnabled } = ev.data;
+				const { type, value, samples } = ev.data;
 				if (type === 'volume') {
 					this.emit('volume', value);
 				} else if (type === 'audio') {
 					const base64 = this._arrayBufferToBase64(samples);
 					this.emit('data', base64);
-				} else if (type === 'debug') {
-					console.log(`[ECHO DEBUG] Ref signal present: ${hasReference}, Length: ${refLength}, Supp enabled: ${suppEnabled}`);
 				}
 			};
 

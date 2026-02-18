@@ -19,9 +19,13 @@ export class AudioPlayback extends Emitter {
 		this.referenceCallback = callback;
 	}
 
-	init() {
+	async init() {
 		if (this.ctx) return;
 		this.ctx = new AudioContext({ sampleRate: 24000 });
+
+		// Route to specific output device if available
+		await this._setOutputDevice();
+
 		this.analyser = this.ctx.createAnalyser();
 		this.analyser.fftSize = 256;
 		this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
@@ -31,6 +35,37 @@ export class AudioPlayback extends Emitter {
 
 		// Set up reference signal extraction (for echo cancellation)
 		this._setupReferenceExtraction();
+	}
+
+	async _setOutputDevice(preferredName) {
+		if (!this.ctx?.setSinkId) {
+			logInfo('Playback', 'setSinkId not supported, using system default');
+			return;
+		}
+		try {
+			const devices = await navigator.mediaDevices.enumerateDevices();
+			const outputs = devices.filter(d => d.kind === 'audiooutput');
+			logInfo('Playback', `Available outputs: ${outputs.map(d => d.label).join(', ')}`);
+
+			// Use preferred name, or fall back to system default
+			const name = preferredName || this._preferredOutput;
+			if (name) {
+				const match = outputs.find(d => d.label.toLowerCase().includes(name.toLowerCase()));
+				if (match) {
+					await this.ctx.setSinkId(match.deviceId);
+					logInfo('Playback', `Output device set to: ${match.label}`);
+					return;
+				}
+				logError('Playback', `Output device "${name}" not found, using default`);
+			}
+		} catch (err) {
+			logError('Playback', `Failed to set output device: ${err.message}`);
+		}
+	}
+
+	async setOutputDevice(name) {
+		this._preferredOutput = name;
+		if (this.ctx) await this._setOutputDevice(name);
 	}
 
 	_setupReferenceExtraction() {
@@ -45,10 +80,7 @@ export class AudioPlayback extends Emitter {
 		if (this.referenceCallback && float32Samples && float32Samples.length > 0) {
 			// Resample from 24kHz to 16kHz before sending
 			const resampled = this._resample24kTo16k(float32Samples);
-			logInfo('Playback', `Reference signal ready: ${float32Samples.length} → ${resampled.length} samples`);
 			this.referenceCallback(resampled);
-		} else {
-			logError('Playback', `Ref signal failed: callback=${!!this.referenceCallback}, samples=${float32Samples?.length}`);
 		}
 	}
 
@@ -63,8 +95,8 @@ export class AudioPlayback extends Emitter {
 		return Math.sqrt(sum / this.analyserData.length);
 	}
 
-	enqueue(base64Data) {
-		this.init();
+	async enqueue(base64Data) {
+		await this.init();
 		if (this.ctx.state === 'suspended') this.ctx.resume();
 
 		const pcm16 = this._base64ToInt16(base64Data);
@@ -73,12 +105,7 @@ export class AudioPlayback extends Emitter {
 			float32[i] = pcm16[i] / 32768;
 		}
 
-		// Send reference signal immediately for echo cancellation
-		if (!this._enqueueCount) this._enqueueCount = 0;
-		this._enqueueCount++;
-		if (this._enqueueCount % 10 === 1) {
-			logInfo('Playback', `Enqueuing audio chunk #${this._enqueueCount}: ${float32.length} samples`);
-		}
+		// Send reference signal for echo cancellation
 		this._sendReferenceSignal(float32);
 
 		const audioBuffer = this.ctx.createBuffer(1, float32.length, 24000);

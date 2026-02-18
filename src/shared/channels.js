@@ -35,4 +35,5 @@ module.exports = {
 	RUN_SKILL: 'run-skill',
 	RUN_TASK: 'run-task',
 	RESIZE_KANBAN: 'resize-kanban',
+	IMPORT_LOGS: 'import-logs',
 };

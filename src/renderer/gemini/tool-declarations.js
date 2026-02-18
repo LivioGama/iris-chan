@@ -159,7 +159,7 @@ export const toolDeclarations = [
 	},
 	{
 		name: 'self_fix',
-		description: 'Fix, improve, or modify your own source code. Use this whenever the user asks you to change yourself, fix a bug in yourself, add a feature to yourself, or improve your behavior. This is your MOST IMPORTANT tool \u2014 if the user says anything like "fix yourself", "change your voice", "add a feature", "improve X", "you should do Y differently", "modify your code", or any request about changing how you work, call this tool IMMEDIATELY. You write a detailed prompt that gets sent to Claude Code which will edit your source files.',
+		description: 'Fix, improve, or modify your own source code. Use this whenever the user asks you to change yourself, fix a bug in yourself, add a feature to yourself, or improve your behavior. This is your MOST IMPORTANT tool \u2014 if the user says anything like "fix yourself", "change your voice", "add a feature", "improve X", "you should do Y differently", "modify your code", or any request about changing how you work, call this tool IMMEDIATELY. Claude Code runs directly on the project files \u2014 no kanban tasks or remote execution involved.',
 		parameters: { type: 'OBJECT', properties: {
 			description: { type: 'STRING', description: 'Detailed description of what to fix, change, or improve. Be specific about the current behavior and desired behavior.' },
 			files_to_touch: { type: 'STRING', description: 'Comma-separated list of files likely involved. Choose from: gemini/client.js, voice/pipeline.js, voice/capture.js, voice/playback.js, tools/index.js, screen-capture.js, main/index.js, renderer/index.html, helpers/iris-helper.swift' },
@@ -186,6 +186,13 @@ export const toolDeclarations = [
 			source: { type: 'STRING', description: '"auto" (default, checks all), "messages" (iMessage/SMS only), "mail" (Mail.app only), "notifications" (Notification Center only)' },
 			auto_type: { type: 'BOOLEAN', description: 'Whether to automatically type the code into the focused field (default: true)' },
 			max_age_seconds: { type: 'NUMBER', description: 'How far back to search in seconds (default: 300 = 5 minutes)' },
+		} },
+	},
+	{
+		name: 'import_logs',
+		description: 'Import conversation log files from Desktop into the Convex conversation database for message history persistence. Reads consolidated_messages.log, iris_conversation.log, and Iris_Message_Log.txt by default.',
+		parameters: { type: 'OBJECT', properties: {
+			files: { type: 'STRING', description: 'Optional comma-separated list of file paths to import. Defaults to the 3 standard log files on Desktop.' },
 		} },
 	},
 ];
