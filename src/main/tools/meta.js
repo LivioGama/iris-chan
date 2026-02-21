@@ -56,6 +56,7 @@ async function manage_vocabulary(args) {
 async function self_fix(args) {
 	const description = args.description || '';
 	if (!description) return { ok: false, result: 'No description provided' };
+	if (description.length < 20) return { ok: false, result: 'Description too short. Provide detailed context: what is broken, expected behavior, files involved, and implementation approach.' };
 
 	const skills = require('../skills');
 	const tasksPath = path.join(process.cwd(), 'tasks.json');

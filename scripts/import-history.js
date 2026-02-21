@@ -1,8 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const CONVEX_URL = process.env.CONVEX_URL || 'https://backend-iris.devliv.io';
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+let CONVEX_URL = process.env.CONVEX_URL || 'https://backend-iris.devliv.io';
+let OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+let ADMIN_KEY = process.env.CONVEX_SELF_HOSTED_ADMIN_KEY || '';
 
 const DESKTOP = process.env.HOME + '/Desktop';
 
@@ -15,6 +16,9 @@ function loadEnv() {
       if (match) process.env[match[1]] = match[2].trim();
     }
   } catch {}
+  CONVEX_URL = process.env.CONVEX_URL || process.env.CONVEX_SELF_HOSTED_URL || CONVEX_URL;
+  OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || OPENROUTER_API_KEY;
+  ADMIN_KEY = process.env.CONVEX_SELF_HOSTED_ADMIN_KEY || ADMIN_KEY;
 }
 
 loadEnv();
@@ -176,12 +180,14 @@ async function generateEmbedding(text) {
 }
 
 async function callConvexMutation(turns) {
-  const url = `${CONVEX_URL}/api/mutations/saveTurnBatch`;
+  const url = `${CONVEX_URL}/api/run/conversations/saveTurnBatch`;
+  const body = { args: { turns } };
+  if (ADMIN_KEY) body.adminKey = ADMIN_KEY;
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ turns }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) {
       const err = await response.text();
@@ -199,6 +205,7 @@ async function main() {
 
   const curatedPath = path.join(DESKTOP, 'Iris_Message_Log.txt');
   const verbosePath = path.join(DESKTOP, 'iris_conversation.log');
+  // consolidated_messages.log is debug output (playback/echo), not conversation data — skip it
 
   const curatedTurns = fs.existsSync(curatedPath) ? parseFile(curatedPath, 'curated') : [];
   const verboseTurns = fs.existsSync(verbosePath) ? parseFile(verbosePath, 'historical') : [];
@@ -206,11 +213,12 @@ async function main() {
   console.log(`Curated: ${curatedTurns.length} turns`);
   console.log(`Verbose: ${verboseTurns.length} turns`);
 
+  // Deduplicate by timestamp + role + first 50 chars of text
   const seen = new Map();
   const allTurns = [...curatedTurns, ...verboseTurns];
 
   for (const turn of allTurns) {
-    const key = `${turn.timestamp}-${turn.role}`;
+    const key = `${turn.timestamp}-${turn.role}-${turn.cleanText.slice(0, 50)}`;
     if (!seen.has(key)) {
       seen.set(key, turn);
     }
@@ -222,12 +230,17 @@ async function main() {
   const finalTurns = uniqueTurns.filter(t => t.cleanText.length > 10);
   console.log(`After filtering short: ${finalTurns.length} turns`);
 
+  if (finalTurns.length === 0) {
+    console.log('No turns to import.');
+    return;
+  }
+
   console.log('\nGenerating embeddings (batches of 20)...');
   const batchSize = 20;
   for (let i = 0; i < finalTurns.length; i += batchSize) {
     const batch = finalTurns.slice(i, i + batchSize);
-    console.log(`Processing ${i + 1}-${Math.min(i + batchSize, finalTurns.length)}...`);
-    
+    console.log(`Embedding ${i + 1}-${Math.min(i + batchSize, finalTurns.length)}...`);
+
     for (const turn of batch) {
       turn.embedding = await generateEmbedding(turn.cleanText);
     }
@@ -235,10 +248,10 @@ async function main() {
     await new Promise(r => setTimeout(r, 500));
   }
 
-  console.log('\nInserting into Convex (batches of 25)...');
-  const insertBatchSize = 25;
+  console.log('\nInserting into Convex (batches of 10)...');
+  const insertBatchSize = 10;
   let inserted = 0;
-  
+
   for (let i = 0; i < finalTurns.length; i += insertBatchSize) {
     const batch = finalTurns.slice(i, i + insertBatchSize);
     const docs = batch.map(turn => ({
@@ -260,10 +273,21 @@ async function main() {
       console.error('Failed to insert batch:', err.message);
     }
 
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 300));
   }
 
   console.log(`\nDone! Inserted ${inserted} conversation turns.`);
+
+  // Delete log files after successful import
+  if (inserted > 0) {
+    const filesToDelete = [curatedPath, verbosePath, path.join(DESKTOP, 'consolidated_messages.log')];
+    for (const file of filesToDelete) {
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+        console.log(`Deleted: ${file}`);
+      }
+    }
+  }
 }
 
 main().catch(err => {

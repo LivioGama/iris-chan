@@ -196,17 +196,21 @@ canvas { display: block; }
 }
 .bubble-context {
 	background: rgba(255, 255, 255, 0.04);
-	color: rgba(255, 255, 255, 0.30);
+	color: rgba(255, 255, 255, 0.25);
 	border: none;
 	border-radius: 8px;
 	padding: 4px 10px;
-	font-size: 9.5px;
+	font-family: 'SF Mono', 'Menlo', monospace;
+	font-size: 8px;
+	line-height: 1.4;
 	align-self: flex-start;
 	box-shadow: none;
 	backdrop-filter: blur(12px);
 	-webkit-backdrop-filter: blur(12px);
 	font-style: italic;
 	letter-spacing: 0.02em;
+	max-height: 36px;
+	overflow: hidden;
 }
 .bubble-context .bubble-label { display: none; }
 .bubble-label {

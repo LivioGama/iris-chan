@@ -38,9 +38,17 @@ export function showBubble(who, text) {
 		const isContext = who === 'model' && text && (
 			text.startsWith('[SCREEN CONTEXT]') ||
 			text.startsWith('[CONTEXT]') ||
-			text.startsWith('[SYSTEM]')
+			text.startsWith('[SYSTEM]') ||
+			text.startsWith('[THINKING]')
 		);
 		bubble.classList.toggle('bubble-context', isContext);
+
+		// Truncate context messages to 2 visible lines
+		const textEl = document.getElementById(textId);
+		if (isContext && textEl) {
+			const maxLen = 120;
+			textEl.textContent = text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
+		}
 
 		bubble.classList.add('visible');
 		clearTimeout(hideTimers[who]);
