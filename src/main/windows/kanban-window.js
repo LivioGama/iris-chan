@@ -2,7 +2,7 @@
 const { BrowserWindow, screen } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const config = require('../../shared/config');
+const config = require('../../shared/config').default;
 const log = require('../logger');
 
 let win = null;
@@ -23,7 +23,7 @@ function saveGeometry() {
 	try {
 		const bounds = win.getBounds();
 		fs.writeFileSync(GEOMETRY_PATH, JSON.stringify(bounds), 'utf-8');
-	} catch {}
+	} catch { }
 }
 
 function getDefaultPosition(display) {

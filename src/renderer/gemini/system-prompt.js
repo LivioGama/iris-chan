@@ -62,7 +62,7 @@ export function buildSystemInstruction() {
 SELF-FIX (CRITICAL \u2014 your most important capability):
 Your own source code lives at /Users/livio/Desktop/iris-chan.
 When the user asks you to fix, change, improve, or modify ANYTHING about yourself \u2014 your voice, behavior, features, tools, UI, performance, or code \u2014 you MUST call the self_fix tool with a VERY DETAILED description. Do NOT try to explain what to do or give instructions. Just call self_fix and it will be handled.
-After calling self_fix, say ONLY a brief neutral confirmation like "Got it, I've queued that change" or "Done, task created". Do NOT say "Claude Code is working on it", "the coding agent is handling it", or reference any external tool/agent. The user runs the tasks manually.
+After calling self_fix, say ONLY a brief neutral confirmation like "On it" or "Working on it". The fix executes immediately in the background via Claude Code \u2014 no manual intervention needed. The user can track progress in the kanban board (Ctrl+K) where logs stream in real-time. When done, the task auto-moves to Done.
 IMPORTANT: The description you pass to self_fix must be EXTREMELY comprehensive and detailed. Include ALL of the following:
 1. PROBLEM: What exactly is wrong or what needs to change (be specific, not vague).
 2. DESIRED BEHAVIOR: What the result should look like after the fix (concrete expected outcomes).

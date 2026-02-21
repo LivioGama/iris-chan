@@ -1,5 +1,5 @@
 // Background clipboard/window scanning + Gemini extraction
-const config = require('../../shared/config');
+const config = require('../../shared/config').default;
 const vocabStore = require('./store');
 const toolExecutor = require('../tools');
 const log = require('../logger');
@@ -15,18 +15,22 @@ async function extractTermsWithGemini(textChunks, apiKey) {
 	const existingList = existing.slice(0, 200).join(', ');
 
 	const body = {
-		contents: [{ parts: [{ text: [
-			'Extract technical/proper-noun terms from the following text snippets.',
-			'Return ONLY a JSON array of strings. No explanation.',
-			'Rules:',
-			'- Only include: product names, library names, framework names, model names, tool names, programming terms, brand names, tech acronyms',
-			'- Exclude: common English words, generic verbs, common nouns, numbers, URLs, file paths',
-			'- Preserve exact casing (e.g. "LangChain" not "langchain")',
-			'- Min 2 chars, max 40 chars per term',
-			`- Max ${config.vocab.maxExtractTerms} terms total`,
-			existing.length ? `\nAlready known (skip these): ${existingList}` : '',
-			'\nText:\n' + combined,
-		].join('\n') }] }],
+		contents: [{
+			parts: [{
+				text: [
+					'Extract technical/proper-noun terms from the following text snippets.',
+					'Return ONLY a JSON array of strings. No explanation.',
+					'Rules:',
+					'- Only include: product names, library names, framework names, model names, tool names, programming terms, brand names, tech acronyms',
+					'- Exclude: common English words, generic verbs, common nouns, numbers, URLs, file paths',
+					'- Preserve exact casing (e.g. "LangChain" not "langchain")',
+					'- Min 2 chars, max 40 chars per term',
+					`- Max ${config.vocab.maxExtractTerms} terms total`,
+					existing.length ? `\nAlready known (skip these): ${existingList}` : '',
+					'\nText:\n' + combined,
+				].join('\n')
+			}]
+		}],
 		generationConfig: { temperature: 0, maxOutputTokens: 256 },
 	};
 
@@ -59,7 +63,7 @@ function start(apiKey, getWin) {
 				lastClipboard = text;
 				vocabBuffer.push(text);
 			}
-		} catch {}
+		} catch { }
 	}, config.vocab.clipboardPollMs);
 
 	// Window title collector — every 3 seconds
@@ -87,7 +91,7 @@ function start(apiKey, getWin) {
 					win.webContents.send('messaging-app-left');
 				}
 			}
-		} catch {}
+		} catch { }
 	}, config.vocab.windowPollMs);
 
 	// Gemini Flash batch extraction — every 60 seconds

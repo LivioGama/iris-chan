@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const config = require('../shared/config');
+const config = require('../shared/config').default;
 const log = require('./logger');
 
 const WORKSPACE_FILE = path.join(config.paths.irisDir, 'workspace.json');
@@ -18,7 +18,7 @@ function _load() {
 			_current = data.directory;
 			return _current;
 		}
-	} catch {}
+	} catch { }
 	_current = DEFAULT_DIR;
 	return _current;
 }
@@ -42,7 +42,7 @@ function set(dir) {
 	_current = resolved;
 	try {
 		fs.writeFileSync(WORKSPACE_FILE, JSON.stringify({ directory: resolved }, null, '\t') + '\n', 'utf-8');
-	} catch {}
+	} catch { }
 	log.info('Workspace', `Set to: ${resolved}`);
 	return { ok: true, result: `Workspace set to: ${resolved}` };
 }

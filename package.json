@@ -6,7 +6,11 @@
     "start": "electron ."
   },
   "devDependencies": {
-    "electron": "^40.4.1"
+    "@types/node": "^25.3.0",
+    "@types/three": "^0.183.0",
+    "electron": "^40.4.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@gltf-transform/core": "^4.3.0",
