@@ -29,6 +29,32 @@ canvas { display: block; }
 	transform: translateX(-50%) translateY(0);
 }
 
+/* Autonomous mode badge */
+#auto-badge {
+	position: fixed;
+	top: 12px;
+	left: 40%;
+	transform: translateX(-50%) translateY(-40px);
+	font-family: 'SF Pro Text', 'Helvetica Neue', sans-serif;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 1.5px;
+	color: #fff;
+	background: rgba(34, 197, 94, 0.85);
+	padding: 4px 14px;
+	border-radius: 12px;
+	pointer-events: none;
+	z-index: 10000;
+	opacity: 0;
+	transition: opacity 0.25s ease, transform 0.25s ease;
+	backdrop-filter: blur(8px);
+	box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+#auto-badge.visible {
+	opacity: 1;
+	transform: translateX(-50%) translateY(0);
+}
+
 /* Workspace indicator */
 #workspace-bar {
 	position: fixed;
@@ -99,6 +125,8 @@ canvas { display: block; }
 #dbg-tool.active::before { animation: pulse 0.6s ease-in-out infinite; }
 #dbg-srch::before { background: #a78bfa; }
 #dbg-srch.active::before { animation: pulse 0.5s ease-in-out infinite; }
+#dbg-auto::before { background: #22c55e; }
+#dbg-auto.active::before { animation: pulse 0.8s ease-in-out infinite; }
 @keyframes pulse {
 	0%, 100% { opacity: 1; }
 	50% { opacity: 0.3; }

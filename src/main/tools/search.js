@@ -1,7 +1,7 @@
 // Tool handlers: web_search, ask_chatgpt
 const { exec } = require('child_process');
 const { runHelper } = require('../native-helper');
-const config = require('../../shared/config');
+const config = require('../../shared/config').default;
 
 async function web_search(args) {
 	const query = args.query || '';

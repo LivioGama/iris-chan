@@ -1,7 +1,7 @@
 // Search overlay window management
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
-const config = require('../../shared/config');
+const config = require('../../shared/config').default;
 
 let searchWin = null;
 let searchHideTimeout = null;

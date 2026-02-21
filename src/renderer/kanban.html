@@ -317,10 +317,17 @@
 			font-size: 9px;
 			color: rgba(165, 170, 255, 0.7);
 			line-height: 1.4;
-			max-height: 100px;
+			max-height: 120px;
 			overflow-y: auto;
 			white-space: pre-wrap;
 			word-break: break-word;
+			border-left: 2px solid rgba(251, 191, 36, 0.3);
+		}
+
+		.task-done .task-logs {
+			max-height: 60px;
+			border-left-color: rgba(52, 211, 153, 0.3);
+			color: rgba(110, 231, 183, 0.5);
 		}
 
 		.task-logs.empty {
@@ -448,13 +455,16 @@
 					if (hasDone) width += 240;
 				}
 
-				// Height: header(38) + column-header(30) + tasks(35 each) + input(30) + padding(24)
+				// Height: header(38) + column-header(30) + tasks(35 each, 140 with logs) + input(30) + padding(24)
+				const wipCount = countByStatus('IN_PROGRESS');
+				const wipWithLogs = tasks.filter(t => t.status === 'IN_PROGRESS' && t.logs).length;
 				const maxPerColumn = Math.max(
 					countByStatus('TODO'),
-					hasWip ? countByStatus('IN_PROGRESS') : 0,
+					hasWip ? wipCount : 0,
 					hasDone ? countByStatus('DONE') : 0
 				);
-				const height = Math.min(38 + 30 + maxPerColumn * 35 + 30 + 24, 600);
+				const logsExtra = wipWithLogs * 110; // extra height for logs sections
+				const height = Math.min(38 + 30 + maxPerColumn * 35 + logsExtra + 30 + 24, 700);
 
 				window.electron?.ipcRenderer?.invoke('resize-kanban', width, height).catch(err => {
 					console.warn('[Kanban] Resize failed:', err.message);
@@ -503,7 +513,8 @@
 						files: task.files || [],
 						action: task.action || '',
 						verify: task.verify || '',
-						done: task.done || ''
+						done: task.done || '',
+						logs: task.logs || ''
 					}));
 					
 					const maxId = Math.max(...tasks.map(t => {
@@ -668,36 +679,30 @@
 				runBtn.className = 'run-btn loading-indicator';
 				runBtn.disabled = true;
 				runBtn.style.cursor = 'default';
-			} else {
-				// Show Run button for TODO tasks
+			} else if (task.status === 'TODO') {
+				// Show Run button for TODO tasks — always enabled (direct Claude Code execution)
 				runBtn.textContent = 'Run';
 				runBtn.className = 'run-btn';
-				runBtn.title = task.action ? 'Run this task via /ship skill' : 'No action defined';
-				runBtn.disabled = !task.action;
+				runBtn.title = 'Run this task via Claude Code';
 				runBtn.onclick = async () => {
 					runBtn.disabled = true;
 					runBtn.textContent = '⏳';
+					task.status = 'IN_PROGRESS';
+					task.logs = '';
+					renderTasks();
+					saveTasksToFile();
 					try {
 						const result = await window.electron?.ipcRenderer?.invoke('run-task', task.id);
-						if (result?.ok) {
-							task.status = 'IN_PROGRESS';
-							renderTasks();
-							saveTasksToFile();
-							syncTasksToConvex();
-							runBtn.textContent = '✓';
-						} else {
-							alert(`Error: ${result?.result || 'Unknown error'}`);
-							runBtn.textContent = 'Run';
-							runBtn.disabled = false;
-						}
+						// Task status is updated by the backend — just reload
+						await loadTasksFromFile();
+						syncTasksToConvex();
 					} catch (err) {
 						alert(`Failed to run task: ${err.message}`);
-						runBtn.textContent = 'Run';
-						runBtn.disabled = false;
+						await loadTasksFromFile();
 					}
 				};
 			}
-			actionsEl.appendChild(runBtn);
+			if (task.status !== 'DONE') actionsEl.appendChild(runBtn);
 
 					const delBtn = document.createElement('button');
 					delBtn.innerHTML = '&times;';
@@ -714,12 +719,16 @@
 					taskEl.appendChild(titleEl);
 					taskEl.appendChild(actionsEl);
 
-					// Add logs display for IN_PROGRESS tasks
-					if (task.status === 'IN_PROGRESS' && task.logs) {
+					// Add logs display for tasks that have logs
+					if (task.logs) {
 						const logsEl = document.createElement('div');
 						logsEl.className = 'task-logs';
 						logsEl.textContent = task.logs;
 						taskEl.appendChild(logsEl);
+						// Auto-scroll to bottom for in-progress tasks
+						if (task.status === 'IN_PROGRESS') {
+							requestAnimationFrame(() => { logsEl.scrollTop = logsEl.scrollHeight; });
+						}
 					}
 
 					container.appendChild(taskEl);

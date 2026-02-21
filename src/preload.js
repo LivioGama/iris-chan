@@ -1,5 +1,6 @@
 // Context bridge — uses shared channel names
 const { contextBridge, ipcRenderer } = require('electron');
+try { require('ts-node').register({ transpileOnly: true }); } catch {}
 let ch;
 try {
 	ch = require('./shared/channels');
@@ -20,6 +21,7 @@ try {
 		LOG_TO_FILE: 'log-to-file',
 		KILL_SKILL: 'kill-skill',
 		TOGGLE_AVATAR: 'toggle-avatar',
+		TOGGLE_AUTONOMOUS: 'toggle-autonomous',
 		SAVE_CONVERSATION_TURN: 'save-conversation-turn',
 		SAVE_TOOL_EXECUTION: 'save-tool-execution',
 		SEMANTIC_SEARCH: 'semantic-search',
@@ -63,6 +65,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	logToFile: (level, tag, message) => ipcRenderer.send(ch.LOG_TO_FILE, level, tag, message),
 	killSkill: () => ipcRenderer.invoke(ch.KILL_SKILL),
 	toggleAvatar: () => ipcRenderer.invoke(ch.TOGGLE_AVATAR),
+	onToggleAutonomous: (cb) => ipcRenderer.on('toggle-autonomous', cb),
 	saveConversationTurn: (role, text) => ipcRenderer.send(ch.SAVE_CONVERSATION_TURN, role, text),
 	saveToolExecution: (name, args, result, success, durationMs) => ipcRenderer.send(ch.SAVE_TOOL_EXECUTION, name, args, result, success, durationMs),
 	semanticSearch: (query, limit, roleFilter) => ipcRenderer.invoke(ch.SEMANTIC_SEARCH, query, limit, roleFilter),

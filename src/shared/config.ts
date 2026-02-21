@@ -1,9 +1,69 @@
 // Centralized configuration — all hardcoded values in one place
 
-const path = require('path');
-const os = require('os');
+import path from 'path';
+import os from 'os';
 
-module.exports = {
+export interface Config {
+	gemini: {
+		endpoint: string;
+		model: string;
+		flashEndpoint: string;
+		voice: string;
+		maxRetries: number;
+		retryDelay: number;
+	};
+	audio: {
+		captureRate: number;
+		playbackRate: number;
+		bufferSize: number;
+	};
+	voice: {
+		volumeThreshold: number;
+		screenCaptureInterval: number;
+		newTurnThresholdMs: number;
+		replyCooldownMs: number;
+	};
+	vocab: {
+		hotPromoteCount: number;
+		hotExpireMs: number;
+		maxSystemTerms: number;
+		clipboardPollMs: number;
+		windowPollMs: number;
+		batchExtractMs: number;
+		promoteCleanMs: number;
+		refreshMs: number;
+		maxExtractTextLen: number;
+		maxExtractTerms: number;
+		correctionPromoteCount: number;
+	};
+	window: {
+		avatarWidth: number;
+		avatarHeight: number;
+	};
+	search: {
+		ollamaHost: string;
+		autoHideMs: number;
+	};
+	paths: {
+		irisDir: string;
+		helperSrc: string;
+		helperBin: string;
+		srcVocab: string;
+	};
+	messaging: {
+		apps: string[];
+	};
+	autonomous: {
+		pollIntervalMs: number;
+		cooldownAfterTurnMs: number;
+		maxConsecutiveAutoTurns: number;
+	};
+	avatar: {
+		current: 'original' | 'tripo3d';
+	};
+}
+
+const config: Config = {
 	gemini: {
 		endpoint: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
 		model: 'models/gemini-2.5-flash-native-audio-preview-12-2025',
@@ -53,8 +113,15 @@ module.exports = {
 	messaging: {
 		apps: ['whatsapp', 'telegram', 'signal', 'messages', 'imessage', 'discord', 'slack', 'messenger'],
 	},
+	autonomous: {
+		pollIntervalMs: 60000,
+		cooldownAfterTurnMs: 15000,
+		maxConsecutiveAutoTurns: 3,
+	},
 	avatar: {
 		// 'original' or 'tripo3d'
 		current: 'original',
 	},
 };
+
+export default config;

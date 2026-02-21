@@ -4,7 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { runHelper } = require('../native-helper');
-const config = require('../../shared/config');
+const config = require('../../shared/config').default;
 
 async function get_mouse_position() {
 	return runHelper({ action: 'get_mouse_position' });
@@ -57,11 +57,10 @@ async function self_fix(args) {
 	const description = args.description || '';
 	if (!description) return { ok: false, result: 'No description provided' };
 
+	const skills = require('../skills');
+	const tasksPath = path.join(process.cwd(), 'tasks.json');
+
 	try {
-		const fs = require('node:fs');
-		// Use process.cwd() to match where kanban expects tasks.json
-		const tasksPath = path.join(process.cwd(), 'tasks.json');
-		
 		// Load or create tasks.json
 		let data = { version: 1, updatedAt: new Date().toISOString(), tasks: [] };
 		if (fs.existsSync(tasksPath)) {
@@ -79,17 +78,18 @@ async function self_fix(args) {
 		const nextId = maxId + 1;
 		const taskId = `task-${nextId}`;
 
-		// Create task
+		// Create task immediately as IN_PROGRESS (direct execution mode)
 		const newTask = {
 			id: taskId,
 			title: description.split('\n')[0].substring(0, 80),
 			description: description,
-			status: 'PENDING',
+			status: 'IN_PROGRESS',
 			order: (data.tasks?.length || 0) + 1,
 			files: [],
 			action: '',
 			verify: '',
 			done: '',
+			logs: '',
 			dependsOn: [],
 			createdAt: new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
@@ -98,12 +98,79 @@ async function self_fix(args) {
 		data.tasks = data.tasks || [];
 		data.tasks.push(newTask);
 		data.updatedAt = new Date().toISOString();
-
 		fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
 
-		return { 
-			ok: true, 
-			result: `✓ Created ${taskId}: ${newTask.title}\n\nView in kanban: Ctrl+K` 
+		// Execute directly via claude-code-assistant skill (async, don't block)
+		let logBuffer = '';
+		let flushTimer = null;
+
+		const flushLogs = () => {
+			try {
+				const freshData = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
+				const task = (freshData.tasks || []).find(t => t.id === taskId);
+				if (task) {
+					// Keep last 50 lines to avoid huge files
+					const lines = logBuffer.split('\n');
+					if (lines.length > 50) logBuffer = lines.slice(-50).join('\n');
+					task.logs = logBuffer;
+					task.updatedAt = new Date().toISOString();
+					freshData.updatedAt = new Date().toISOString();
+					fs.writeFileSync(tasksPath, JSON.stringify(freshData, null, 2), 'utf8');
+				}
+			} catch {}
+		};
+
+		const onLog = (line) => {
+			logBuffer += (logBuffer ? '\n' : '') + line;
+			// Debounce writes to tasks.json (every 2 seconds)
+			if (!flushTimer) {
+				flushTimer = setTimeout(() => {
+					flushTimer = null;
+					flushLogs();
+				}, 2000);
+			}
+		};
+
+		// Fire and forget — run skill in background, update task on completion
+		skills.runSkillByName('claude-code-assistant', { description }, onLog).then((result) => {
+			// Flush remaining logs
+			clearTimeout(flushTimer);
+			if (result.ok) {
+				logBuffer += '\n✅ Completed successfully';
+			} else {
+				logBuffer += `\n❌ Failed: ${result.result || 'Unknown error'}`;
+			}
+			// Update task status to COMPLETED/FAILED
+			try {
+				const freshData = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
+				const task = (freshData.tasks || []).find(t => t.id === taskId);
+				if (task) {
+					task.status = result.ok ? 'COMPLETED' : 'FAILED';
+					task.logs = logBuffer;
+					task.updatedAt = new Date().toISOString();
+					freshData.updatedAt = new Date().toISOString();
+					fs.writeFileSync(tasksPath, JSON.stringify(freshData, null, 2), 'utf8');
+				}
+			} catch {}
+		}).catch((err) => {
+			clearTimeout(flushTimer);
+			logBuffer += `\n❌ Error: ${err.message}`;
+			try {
+				const freshData = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
+				const task = (freshData.tasks || []).find(t => t.id === taskId);
+				if (task) {
+					task.status = 'FAILED';
+					task.logs = logBuffer;
+					task.updatedAt = new Date().toISOString();
+					freshData.updatedAt = new Date().toISOString();
+					fs.writeFileSync(tasksPath, JSON.stringify(freshData, null, 2), 'utf8');
+				}
+			} catch {}
+		});
+
+		return {
+			ok: true,
+			result: `✓ Executing ${taskId}: ${newTask.title}\n\nRunning directly via Claude Code. Track progress: Ctrl+K`
 		};
 	} catch (err) {
 		return { ok: false, result: `Self-fix error: ${err.message}` };

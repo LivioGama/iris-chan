@@ -1,7 +1,7 @@
 // Vocabulary CRUD: load, save, add, remove, promote, stats
 const fs = require('fs');
 const path = require('path');
-const config = require('../../shared/config');
+const config = require('../../shared/config').default;
 const log = require('../logger');
 
 const vocabPath = path.join(config.paths.irisDir, 'vocabulary.json');
@@ -9,7 +9,7 @@ const hotVocabPath = path.join(config.paths.irisDir, 'vocabulary-hot.json');
 const vocabStatsPath = path.join(config.paths.irisDir, 'vocabulary-stats.json');
 
 // Ensure ~/.iris/ exists
-try { fs.mkdirSync(config.paths.irisDir, { recursive: true }); } catch {}
+try { fs.mkdirSync(config.paths.irisDir, { recursive: true }); } catch { }
 
 // Sync corrections & core from source vocabulary into ~/.iris/vocabulary.json
 function syncFromSource() {
@@ -21,7 +21,7 @@ function syncFromSource() {
 		if (src.corrections && !dest.corrections) { dest.corrections = src.corrections; changed = true; }
 		if (src.core && !dest.core) { dest.core = src.core; changed = true; }
 		if (changed) fs.writeFileSync(vocabPath, JSON.stringify(dest, null, '\t') + '\n', 'utf-8');
-	} catch {}
+	} catch { }
 }
 
 function loadTerms() {
@@ -47,7 +47,7 @@ function loadHot() {
 }
 
 function saveHot(hot) {
-	try { fs.writeFileSync(hotVocabPath, JSON.stringify(hot, null, '\t') + '\n', 'utf-8'); } catch {}
+	try { fs.writeFileSync(hotVocabPath, JSON.stringify(hot, null, '\t') + '\n', 'utf-8'); } catch { }
 }
 
 function loadStats() {
@@ -62,7 +62,7 @@ function trackTerms(terms) {
 		stats[term].count++;
 		stats[term].lastUsed = now;
 	}
-	try { fs.writeFileSync(vocabStatsPath, JSON.stringify(stats, null, '\t') + '\n', 'utf-8'); } catch {}
+	try { fs.writeFileSync(vocabStatsPath, JSON.stringify(stats, null, '\t') + '\n', 'utf-8'); } catch { }
 }
 
 function addCorrection(wrong, right) {

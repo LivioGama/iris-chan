@@ -6,6 +6,9 @@ process.on('uncaughtException', (err) => {
 	try { require('./logger').error('Uncaught', err.stack || err.message); } catch {}
 });
 
+// Enable TypeScript imports via require()
+require('ts-node').register({ transpileOnly: true });
+
 // App lifecycle only: ready, quit, permissions
 const { app, session, systemPreferences, globalShortcut } = require('electron');
 const path = require('path');
@@ -93,6 +96,11 @@ app.whenReady().then(async () => {
 				kanbanWin.show();
 			}
 		}
+	});
+
+	// Ctrl+Shift+M toggles autonomous mode
+	globalShortcut.register('CommandOrControl+Shift+M', () => {
+		if (win) win.webContents.send('toggle-autonomous');
 	});
 
 	// Ctrl+Shift+A toggles between avatars

@@ -1,7 +1,7 @@
 // Avatar overlay window creation & display tracking
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
-const config = require('../../shared/config');
+const config = require('../../shared/config').default;
 const log = require('../logger');
 
 let win = null;

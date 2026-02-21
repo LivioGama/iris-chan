@@ -50,6 +50,10 @@ export class VoicePipeline {
 		this._echoSuppressionEnabled = true;
 		this._echoSuppressionGain = 0.8; // 80% suppression (balanced default)
 		this._muted = false;
+		this._autonomousMode = false;
+		this._autonomousInterval = null;
+		this._consecutiveAutoTurns = 0;
+		this._lastAutonomousPromptTime = 0;
 
 		// Wire playback reference signals to capture for echo cancellation
 		this.playback.setReferenceCallback((float32Samples) => {
@@ -143,6 +147,7 @@ export class VoicePipeline {
 		this._bindEvents();
 
 		window.electronAPI.onToggleVoice(() => this.toggle());
+		window.electronAPI.onToggleAutonomous(() => this.toggleAutonomous());
 		window.electronAPI.onMessagingAppFocused((app) => this._onMessagingAppFocused(app));
 		window.electronAPI.onMessagingAppLeft(() => { this._lastReplyPromptTime = 0; });
 		window.electronAPI.onReloadSession(() => {
@@ -193,7 +198,7 @@ export class VoicePipeline {
 			if (this._muted) return;
 			// Suppress unprompted responses — if user hasn't spoken since last
 			// turn completed, Gemini is talking to itself (loop). Drop the audio.
-			if (this._unpromptedTurnCount >= 1) return;
+			if (this._unpromptedTurnCount >= 1 && !this._autonomousMode) return;
 			if (this.state !== STATES.RESPONDING) {
 				if (this._accum.user) {
 					logInfo('Conversation', `[USER] ${this._accum.user}`);
@@ -213,7 +218,7 @@ export class VoicePipeline {
 
 		this.gemini.on('outputTranscription', (text) => {
 			if (this._muted) return;
-			if (this._unpromptedTurnCount >= 1) return;
+			if (this._unpromptedTurnCount >= 1 && !this._autonomousMode) return;
 			this._appendTranscript('model', text);
 		});
 
@@ -238,16 +243,25 @@ export class VoicePipeline {
 			// Idle loop prevention: if the user hasn't spoken recently and
 			// the model keeps producing turns, pause passive screen captures
 			// to stop feeding it visual input that triggers more responses.
-			const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
-			if (timeSinceUserSpoke > 3000) {
-				this._unpromptedTurnCount++;
-				logInfo('Voice', `Unprompted turn #${this._unpromptedTurnCount} (${Math.round(timeSinceUserSpoke / 1000)}s since user spoke)`);
-				if (this._unpromptedTurnCount >= 1) {
-					logInfo('Voice', 'Idle loop detected \u2014 pausing passive screen captures');
-					this._stopScreenCapture();
+			if (!this._autonomousMode) {
+				const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
+				if (timeSinceUserSpoke > 3000) {
+					this._unpromptedTurnCount++;
+					logInfo('Voice', `Unprompted turn #${this._unpromptedTurnCount} (${Math.round(timeSinceUserSpoke / 1000)}s since user spoke)`);
+					if (this._unpromptedTurnCount >= 1) {
+						logInfo('Voice', 'Idle loop detected \u2014 pausing passive screen captures');
+						this._stopScreenCapture();
+					}
+				} else {
+					this._unpromptedTurnCount = 0;
 				}
 			} else {
-				this._unpromptedTurnCount = 0;
+				// In autonomous mode: track turn completion for cooldown
+				this._lastAutonomousPromptTime = Date.now();
+				const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
+				if (timeSinceUserSpoke < 5000) {
+					this._consecutiveAutoTurns = 0;
+				}
 			}
 		});
 
@@ -330,11 +344,16 @@ export class VoicePipeline {
 		this.needsReconnect = false;
 		this._lastUserSpeechTime = Date.now();
 		this._unpromptedTurnCount = 0;
+		const wasAutonomous = this._autonomousMode;
 		this.capture.stop();
 		this.playback.stop();
 		this.gemini.disconnect();
 		updateStatus('Reconnecting...');
 		await this.gemini.connect(this._apiKey);
+		// Re-inject autonomous mode after reconnection
+		if (wasAutonomous && this._autonomousMode) {
+			this.gemini.sendText('[SYSTEM: MODE CHANGE — AUTONOMOUS MODE ACTIVATED]\nYour idle silence rules are SUSPENDED. You are now in autonomous mode. Proactively suggest tasks, ask what to work on, and take initiative. Do not wait for the user to speak first.');
+		}
 	}
 
 	async _activate() {
@@ -381,9 +400,91 @@ export class VoicePipeline {
 		return this._muted;
 	}
 
+	toggleAutonomous() {
+		this._autonomousMode = !this._autonomousMode;
+		const badge = document.getElementById('auto-badge');
+		if (badge) badge.classList.toggle('visible', this._autonomousMode);
+		updateIndicator('auto', this._autonomousMode);
+
+		if (this._autonomousMode) {
+			logInfo('Voice', 'Autonomous mode ACTIVATED');
+			// Inject mode change into Gemini conversation
+			this.gemini.sendText(
+				'[SYSTEM: MODE CHANGE — AUTONOMOUS MODE ACTIVATED]\n' +
+				'Your idle silence rules are SUSPENDED. You are now in autonomous mode. ' +
+				'Proactively ask what to work on, suggest improvements, and take initiative. ' +
+				'Do not wait for the user to speak first. When you have nothing specific to do, ' +
+				'ask the user what they would like you to work on.'
+			);
+			// Ensure screen captures are running (Iris needs visual context)
+			if (!this._screenInterval && this._active) {
+				this._startScreenCapture();
+			}
+			this._consecutiveAutoTurns = 0;
+			this._startAutonomousLoop();
+		} else {
+			logInfo('Voice', 'Autonomous mode DEACTIVATED');
+			this._stopAutonomousLoop();
+			this._consecutiveAutoTurns = 0;
+			// Re-inject silence rules
+			this.gemini.sendText(
+				'[SYSTEM: MODE CHANGE — AUTONOMOUS MODE DEACTIVATED]\n' +
+				'Idle silence rules are RESTORED. Return to normal behavior: only respond when the user speaks to you. ' +
+				'Do NOT proactively speak or ask questions.'
+			);
+		}
+	}
+
+	_startAutonomousLoop() {
+		this._stopAutonomousLoop();
+		this._autonomousInterval = setInterval(() => {
+			if (!this._autonomousMode || !this._active || this._muted) return;
+			if (this.state !== STATES.LISTENING) return;
+			if (this._toolExecuting) return;
+
+			// Cooldown: wait at least 15s after last Gemini turn
+			const timeSinceTurn = Date.now() - this._lastAutonomousPromptTime;
+			if (timeSinceTurn < 15000) return;
+
+			// Auto-disable after max consecutive auto turns without user speech
+			if (this._consecutiveAutoTurns >= 3) {
+				logInfo('Voice', 'Autonomous mode auto-disabled (3 consecutive turns without user speech)');
+				this.toggleAutonomous(); // will flip it off
+				return;
+			}
+
+			this._consecutiveAutoTurns++;
+			logInfo('Voice', `Autonomous prompt #${this._consecutiveAutoTurns}`);
+
+			// Send fresh screenshot + autonomous prompt
+			this._sendScreenFrame().then(() => {
+				if (this._autonomousMode) {
+					this.gemini.sendText(
+						'[AUTONOMOUS PROMPT] You are in autonomous mode. Look at the current screen, consider the context, ' +
+						'and either continue working on the current task, suggest an improvement, or ask the user what to do next. ' +
+						'Be concise and actionable.'
+					);
+				}
+			});
+		}, 60000);
+	}
+
+	_stopAutonomousLoop() {
+		if (this._autonomousInterval) {
+			clearInterval(this._autonomousInterval);
+			this._autonomousInterval = null;
+		}
+	}
+
 	_deactivate() {
 		this._active = false;
 		this._toolExecuting = false;
+		this._stopAutonomousLoop();
+		this._autonomousMode = false;
+		this._consecutiveAutoTurns = 0;
+		const autoBadge = document.getElementById('auto-badge');
+		if (autoBadge) autoBadge.classList.remove('visible');
+		updateIndicator('auto', false);
 		if (this._vocabRefreshInterval) {
 			clearInterval(this._vocabRefreshInterval);
 			this._vocabRefreshInterval = null;
@@ -419,6 +520,7 @@ export class VoicePipeline {
 		if (state === STATES.USER_SPEAKING) {
 			this._lastUserSpeechTime = Date.now();
 			this._unpromptedTurnCount = 0;
+			this._consecutiveAutoTurns = 0;
 			// Resume passive screen captures if they were paused
 			if (!this._screenInterval && this._active) {
 				logInfo('Voice', 'User speaking — resuming passive screen captures');

@@ -1,7 +1,7 @@
 // Swift helper compilation + execution wrapper
 const { execFile, exec } = require('child_process');
 const fs = require('fs');
-const config = require('../shared/config');
+const config = require('../shared/config').default;
 const log = require('./logger');
 
 let compiled = false;
