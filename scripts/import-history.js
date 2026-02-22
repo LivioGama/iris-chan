@@ -278,8 +278,29 @@ async function main() {
 
   console.log(`\nDone! Inserted ${inserted} conversation turns.`);
 
-  // Delete log files after successful import
+  // Verify data actually landed in Convex before deleting source files
   if (inserted > 0) {
+    console.log('\nVerifying import in Convex...');
+    try {
+      const verifyUrl = `${CONVEX_URL}/api/run/conversations/getRecent`;
+      const verifyBody = { args: { limit: 1 } };
+      if (ADMIN_KEY) verifyBody.adminKey = ADMIN_KEY;
+      const verifyRes = await fetch(verifyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(verifyBody),
+      });
+      const verifyData = await verifyRes.json();
+      if (!Array.isArray(verifyData) || verifyData.length === 0) {
+        console.error('VERIFICATION FAILED: Convex returned no data. Keeping source files.');
+        return;
+      }
+      console.log(`Verified: ${verifyData.length} record(s) found in Convex.`);
+    } catch (err) {
+      console.error(`VERIFICATION FAILED: ${err.message}. Keeping source files.`);
+      return;
+    }
+
     const filesToDelete = [curatedPath, verbosePath, path.join(DESKTOP, 'consolidated_messages.log')];
     for (const file of filesToDelete) {
       if (fs.existsSync(file)) {
