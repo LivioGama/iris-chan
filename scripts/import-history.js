@@ -31,28 +31,72 @@ function parseTimestamp(line) {
 
 function cleanText(text) {
   if (!text) return '';
+  // Remove **Bold Section Headers** (Gemini thinking headers)
   let cleaned = text.replace(/\*\*[^*]+\*\*/g, '');
-  cleaned = cleaned.replace(/^I'm currently.+$/gm, '');
-  cleaned = cleaned.replace(/^I've determined.+$/gm, '');
-  cleaned = cleaned.replace(/^I am now.+$/gm, '');
-  cleaned = cleaned.replace(/^My gaze is.+$/gm, '');
-  cleaned = cleaned.replace(/^It seems that.+$/gm, '');
-  cleaned = cleaned.replace(/^The.+$/gm, '');
-  cleaned = cleaned.replace(/^Therefore,.+$/gm, '');
-  cleaned = cleaned.replace(/^Thus,.+$/gm, '');
-  cleaned = cleaned.replace(/^I've examined.+$/gm, '');
-  cleaned = cleaned.replace(/^I've registered.+$/gm, '');
-  cleaned = cleaned.replace(/^I will.+$/gm, '');
-  cleaned = cleaned.replace(/^I can.+$/gm, '');
-  cleaned = cleaned.replace(/^I must.+$/gm, '');
-  cleaned = cleaned.replace(/^I have determined.+$/gm, '');
-  cleaned = cleaned.replace(/^I have formulated.+$/gm, '');
-  cleaned = cleaned.replace(/^I must propose.+$/gm, '');
-  cleaned = cleaned.replace(/^I am.+$/gm, '');
-  cleaned = cleaned.replace(/^This should.+$/gm, '');
-  cleaned = cleaned.replace(/^This appears.+$/gm, '');
-  cleaned = cleaned.replace(/^Based on.+$/gm, '');
+  // Remove Gemini internal monologue patterns (thinking/reasoning, not actual responses)
+  const thinkingPatterns = [
+    // "I'm/I've/I am/I have/I will/I believe" + thinking verbs
+    /^I'm (currently|now |focusing|assessing|zeroing|hearing|emphasizing|confirming|evaluating|shifting|reiterating|ensuring|actively|going to|selecting|suggesting|acknowledging).+$/gm,
+    /^I've (determined|examined|registered|revised|analyzed|refined|detailed|noted|assessed|evaluated|shifted|carefully|suggested|formulated|registered|considered).+$/gm,
+    /^I am (now|currently|prepared|assessing|actively|ready to|confident).+$/gm,
+    /^I have (determined|formulated|noted|considered|added).+$/gm,
+    /^I will (now|next|focus|not call).+$/gm,
+    /^I believe the user.+$/gm,
+    // Internal state descriptions
+    /^My (gaze|attention|focus|analysis|initial assessment|next step|goal) .+$/gm,
+    /^It seems (that )?.+$/gm,
+    /^It's a Slack-like.+$/gm,
+    /^Therefore,.+$/gm,
+    /^Thus,.+$/gm,
+    /^This (should|appears|setup|fixation|anticipates|is key|setup is) .+$/gm,
+    /^Based on .+$/gm,
+    /^After (examining|analyzing|considering).+$/gm,
+    /^No (further action|progress has been made).+$/gm,
+    /^Contextual cues .+$/gm,
+    /^Sadly, there are no .+$/gm,
+    /^There's no (clear|indication) .+$/gm,
+    /^While .+ isn't explicitly .+$/gm,
+    /^Given this, .+$/gm,
+    /^Considering .+$/gm,
+    /^I'm ready to state .+$/gm,
+    /^I am ready to .+$/gm,
+    /^The (user's|screen|current|recent|directory|left|focus|name|incoming|tab|window|Slack|data|visual) .+$/gm,
+    /^Furthermore,.+$/gm,
+    /^I must (inform|propose).+$/gm,
+    /^I can (also )?see .+$/gm,
+    /^(Confirming|Assessing|Analyzing|Identifying|Evaluating|Clarifying|Awaiting|Re-evaluating|Now I'm) .+$/gm,
+    // More residual thinking
+    /^I proactively .+$/gm,
+    /^I've? (also |carefully |shifted |revised ).+$/gm,
+    /^(His|Her|Their) message .+$/gm,
+    /^I'm? prepared to .+$/gm,
+    /^I'm? now (proposing|formulating|analyzing|selecting|shifting|emphasizing).+$/gm,
+    /^(Looking forward|Standing by|Ready for).+$/gm,
+    /^On pourrait .+ if .+$/gm,
+  ];
+  for (const pattern of thinkingPatterns) {
+    cleaned = cleaned.replace(pattern, '');
+  }
   cleaned = cleaned.replace(/<noise>/gi, '');
+  cleaned = cleaned.replace(/<ctrl\d+>/gi, '');
+  // Remove standalone punctuation or single-char lines
+  cleaned = cleaned.replace(/^\s*[.!?]\s*$/gm, '');
+  // Remove "didn't catch that" / "could you repeat" filler
+  cleaned = cleaned.replace(/^.*(?:didn't (?:quite )?catch|couldn't (?:quite )?(?:make out|hear|understand)|could you (?:please )?repeat|can you (?:please )?repeat|say that again|could you clarify what you meant).*$/gim, '');
+  // Remove "I'm still listening/not catching" filler
+  cleaned = cleaned.replace(/^.*(?:I'm still (?:listening|not catching)).*$/gim, '');
+  // Remove "sorry.*(?:audio|garbled|choppy)" filler
+  cleaned = cleaned.replace(/^.*(?:sorry.*(?:audio was|garbled|choppy)).*$/gim, '');
+  // Remove empty greetings and casual filler
+  cleaned = cleaned.replace(/^Hey[.,!? ]*$/gim, '');
+  cleaned = cleaned.replace(/^Hey, how are you\??$/gim, '');
+  cleaned = cleaned.replace(/^(Done|Ok|Okay|Alright|Got it|Sure|Understood|Correct|Indeed|Yep|Yeah|Yes|Nope|Right|Absolutely|Certainly)[.,!? ]*$/gim, '');
+  cleaned = cleaned.replace(/^(I'm here|I'm listening|I'm ready|I'm good|I'm fine|I'm doing well)[.,!? ]*$/gim, '');
+  cleaned = cleaned.replace(/^(What's up|How can I help|Go ahead|Sure thing|No problem|No worries|You're welcome|Of course)[.,!? ]*$/gim, '');
+  cleaned = cleaned.replace(/^(Hi|Hi there|Hello|Bonjour|Salut)[.,!? ]*$/gim, '');
+  cleaned = cleaned.replace(/^(Is there anything else|Anything else|Let me know if|Just let me know|What can I do for you).*$/gim, '');
+  cleaned = cleaned.replace(/^I'm here\. What('s up| can I).*$/gim, '');
+  cleaned = cleaned.replace(/^Go ahead, I'm ready.*$/gim, '');
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
   cleaned = cleaned.trim();
   return cleaned;
@@ -76,7 +120,7 @@ function parseFile(filepath, source) {
         if (currentRole && currentText.length > 0) {
           const fullText = currentText.join('\n').trim();
           const cleaned = cleanText(fullText);
-          if (cleaned && cleaned.length > 5) {
+          if (cleaned && cleaned.length > 10) {
             turns.push({
               role: currentRole,
               text: fullText,
@@ -96,7 +140,7 @@ function parseFile(filepath, source) {
         if (currentRole && currentText.length > 0) {
           const fullText = currentText.join('\n').trim();
           const cleaned = cleanText(fullText);
-          if (cleaned && cleaned.length > 5) {
+          if (cleaned && cleaned.length > 10) {
             turns.push({
               role: currentRole,
               text: fullText,
@@ -112,7 +156,7 @@ function parseFile(filepath, source) {
         if (currentRole && currentText.length > 0) {
           const fullText = currentText.join('\n').trim();
           const cleaned = cleanText(fullText);
-          if (cleaned && cleaned.length > 5) {
+          if (cleaned && cleaned.length > 10) {
             turns.push({
               role: currentRole,
               text: fullText,
@@ -133,7 +177,7 @@ function parseFile(filepath, source) {
   if (currentRole && currentText.length > 0) {
     const fullText = currentText.join('\n').trim();
     const cleaned = cleanText(fullText);
-    if (cleaned && cleaned.length > 5) {
+    if (cleaned && cleaned.length > 10) {
       turns.push({
         role: currentRole,
         text: fullText,
@@ -290,7 +334,8 @@ async function main() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(verifyBody),
       });
-      const verifyData = await verifyRes.json();
+      const verifyJson = await verifyRes.json();
+      const verifyData = verifyJson.value || verifyJson;
       if (!Array.isArray(verifyData) || verifyData.length === 0) {
         console.error('VERIFICATION FAILED: Convex returned no data. Keeping source files.');
         return;
