@@ -6,3 +6,4 @@ helpers/iris-helper
 .idea/
 .ruff_cache/
 .DS_Store
+.env.convex-mcp

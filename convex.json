@@ -1,3 +1,4 @@
 {
-  "functions": "convex/"
+  "functions": "convex/",
+  "selfHostedUrl": "https://backend-iris.devliv.io"
 }

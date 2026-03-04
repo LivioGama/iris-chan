@@ -13,6 +13,9 @@ const { createGhostDraft } = require('./autonomy/ghost-draft-publisher');
 const kanbanWindow = require('./windows/kanban-window');
 const { registerIpc } = require('./ipc-runtime');
 const { BehaviorModeState } = require('./runtime/behavior-mode');
+const taskQueueWatcher = require('./task-queue/watcher');
+const { setConvexClient: setTqControllerClient } = require('./controllers/taskQueueController');
+const { setConvexClient: setTqToolClient } = require('./tools/task-queue');
 
 function startRuntime({ apiKey }) {
 	const eventBus = new RuntimeEventBus();
@@ -70,6 +73,8 @@ function startRuntime({ apiKey }) {
 	legacyConvexStore.init();
 	legacyIpc.register(apiKey);
 	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, convexClient, dailyLoop, kanbanWindow });
+	setTqControllerClient(convexClient);
+	setTqToolClient(convexClient);
 
 	app.whenReady().then(async () => {
 		if (process.platform === 'darwin') {
@@ -84,6 +89,7 @@ function startRuntime({ apiKey }) {
 		kanbanWindow.create();
 		healthService.start();
 		dailyLoop.start();
+		taskQueueWatcher.start(convexClient);
 
 		globalShortcut.register('CommandOrControl+I', () => {
 			const w = avatarWindow.get();
@@ -104,6 +110,7 @@ function startRuntime({ apiKey }) {
 		globalShortcut.unregisterAll();
 		healthService.stop();
 		dailyLoop.stop();
+		taskQueueWatcher.stop();
 	});
 
 	app.on('window-all-closed', () => {

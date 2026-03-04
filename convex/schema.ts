@@ -83,4 +83,21 @@ export default defineSchema({
   })
     .index("by_date", ["date", "timestamp"])
     .index("by_idempotency", ["idempotencyKey"]),
+
+  task_queue: defineTable({
+    projectPath: v.string(),
+    rawPrompt: v.string(),
+    enrichedPrompt: v.optional(v.string()),
+    impactedFiles: v.optional(v.array(v.string())),
+    complexity: v.optional(v.string()),
+    status: v.string(),
+    result: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    idempotencyKey: v.optional(v.string()),
+  })
+    .index("by_status", ["status", "createdAt"])
+    .index("by_project", ["projectPath", "status", "createdAt"])
+    .index("by_idempotency", ["idempotencyKey"]),
 });
