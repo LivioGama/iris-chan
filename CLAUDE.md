@@ -8,9 +8,8 @@ Never assume a feature works. Before telling the user it's done:
 4. For IPC chains: verify data flows through every hop with logged evidence
 5. If you can't fully verify from CLI, state exactly what's unverified and why
 
-## After code changes
-Tool modules in `src/main/tools/` hot-reload automatically via a file watcher — no restart needed.
-For changes to other files (main process, renderer, preload), restart the Electron app:
+## Development
+
 ```bash
-pkill -f "Electron" 2>/dev/null; sleep 1; npx electron . &
+bun run dev
 ```

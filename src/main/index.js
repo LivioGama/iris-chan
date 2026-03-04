@@ -9,11 +9,7 @@ process.on('uncaughtException', (err) => {
 // Enable TypeScript imports via require()
 require('ts-node').register({ transpileOnly: true });
 
-// App lifecycle only: ready, quit, permissions
-const { app, session, systemPreferences, globalShortcut } = require('electron');
-const path = require('path');
-const fs = require('fs');
-const { exec } = require('child_process');
+const { app } = require('electron');
 
 // Force ANGLE Metal backend before any window is created
 app.commandLine.appendSwitch('use-angle', 'metal');
@@ -21,114 +17,10 @@ app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-features', 'Metal');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
-// Load API keys from .env or process.env
-let apiKey = process.env.GEMINI_API_KEY || '';
-let ollamaApiKey = process.env.OLLAMA_API_KEY || '';
-let openrouterApiKey = process.env.OPENROUTER_API_KEY || '';
-try {
-	const envPath = path.join(__dirname, '..', '..', '.env');
-	const envContent = fs.readFileSync(envPath, 'utf-8');
-	for (const line of envContent.split('\n')) {
-		const geminiMatch = line.match(/^GEMINI_API_KEY=(.+)$/);
-		if (geminiMatch) apiKey = geminiMatch[1].trim();
-		const ollamaMatch = line.match(/^OLLAMA_API_KEY=(.+)$/);
-		if (ollamaMatch) ollamaApiKey = ollamaMatch[1].trim();
-		const openrouterMatch = line.match(/^OPENROUTER_API_KEY=(.+)$/);
-		if (openrouterMatch) openrouterApiKey = openrouterMatch[1].trim();
-	}
-} catch {}
+const { loadEnv } = require('../shared/env-loader');
+loadEnv();
 
-// Make API keys available to skill scripts (child processes)
-process.env.GEMINI_API_KEY = apiKey;
-process.env.OLLAMA_API_KEY = ollamaApiKey;
-process.env.OPENROUTER_API_KEY = openrouterApiKey;
+const apiKey = process.env.GEMINI_API_KEY || '';
 
-const ipc = require('./ipc');
-const avatarWindow = require('./windows/avatar-window');
-const kanbanWindow = require('./windows/kanban-window');
-const vocabStore = require('./vocab/store');
-const vocabMonitor = require('./vocab/monitor');
-const skills = require('./skills');
-const convexStore = require('./convex-store');
-skills.scan();
-convexStore.init();
-
-// Register all IPC handlers
-ipc.register(apiKey);
-
-// Sync vocabulary from source
-vocabStore.syncFromSource();
-
-app.whenReady().then(async () => {
-	// Request mic permission on macOS
-	if (process.platform === 'darwin') {
-		await systemPreferences.askForMediaAccess('microphone');
-	}
-
-	// Grant media permissions automatically
-	session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-		if (permission === 'media') {
-			callback(true);
-		} else {
-			callback(false);
-		}
-	});
-
-	// Set mic input volume to max
-	exec('osascript -e "set volume input volume 100"', () => {});
-
-	const win = avatarWindow.create();
-	const kanbanWin = kanbanWindow.create();
-	vocabMonitor.start(apiKey, () => avatarWindow.get());
-
-	// Ctrl+I toggles voice on/off
-	globalShortcut.register('CommandOrControl+I', () => {
-		if (win) win.webContents.send('toggle-voice');
-	});
-
-	// Ctrl+K toggles kanban board
-	globalShortcut.register('CommandOrControl+K', () => {
-		const kanbanWin = kanbanWindow.get();
-		if (kanbanWin) {
-			if (kanbanWin.isVisible()) {
-				kanbanWin.hide();
-			} else {
-				kanbanWin.show();
-			}
-		}
-	});
-
-	// Ctrl+Shift+M toggles autonomous mode
-	globalShortcut.register('CommandOrControl+Shift+M', () => {
-		if (win) win.webContents.send('toggle-autonomous');
-	});
-
-	// Ctrl+Shift+A toggles between avatars
-	globalShortcut.register('CommandOrControl+Shift+A', () => {
-		if (win) {
-			win.webContents.invoke('toggle-avatar').then(newAvatarType => {
-				console.log(`Avatar toggled to: ${newAvatarType}`);
-			});
-		}
-	});
-});
-
-// Watch tool modules for changes and auto-reload
-const toolsDir = path.join(__dirname, 'tools');
-let reloadDebounce = null;
-fs.watch(toolsDir, { recursive: true }, (eventType, filename) => {
-	if (!filename || !filename.endsWith('.js')) return;
-	clearTimeout(reloadDebounce);
-	reloadDebounce = setTimeout(() => {
-		const toolExecutor = require('./tools');
-		toolExecutor.reload();
-		skills.scan();
-		const win = avatarWindow.get();
-		if (win) win.webContents.send('reload-session');
-	}, 500);
-});
-
-app.on('window-all-closed', () => {
-	convexStore.shutdown();
-	app.quit();
-});
+const { startRuntime } = require('./bootstrap');
+startRuntime({ apiKey });

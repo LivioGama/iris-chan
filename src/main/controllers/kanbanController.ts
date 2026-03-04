@@ -3,7 +3,6 @@ import * as ch from '../../shared/channels';
 import * as kanbanWindow from '../windows/kanban-window';
 import * as log from '../logger';
 import * as convexStore from '../convex-store';
-import * as skills from '../skills';
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
@@ -67,15 +66,16 @@ export function register() {
         }
     });
 
-    // Run individual task via claude-code-assistant skill with streaming logs
+    // Run individual task via Claude Code Agent SDK with live streaming logs
     ipcMain.handle(ch.RUN_TASK, async (_, taskId: string) => {
+        const fixProject = require('../tools/fix-project');
+        const tasksPath = path.join(process.cwd(), 'tasks.json');
+
+        if (!fs.existsSync(tasksPath)) {
+            return { ok: false, result: 'No tasks file found' };
+        }
+
         try {
-            const tasksPath = path.join(process.cwd(), 'tasks.json');
-
-            if (!fs.existsSync(tasksPath)) {
-                return { ok: false, result: 'No tasks file found' };
-            }
-
             const content = fs.readFileSync(tasksPath, 'utf8');
             const data = JSON.parse(content);
             const tasks = (data.tasks || data) as Task[];
@@ -85,60 +85,12 @@ export function register() {
                 return { ok: false, result: `Task "${taskId}" not found` };
             }
 
-            // Set task to IN_PROGRESS immediately
-            task.status = 'IN_PROGRESS';
-            task.logs = '';
-            task.updatedAt = new Date().toISOString();
-            data.updatedAt = new Date().toISOString();
-            fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
-
-            // Stream logs to task
-            let logBuffer = '';
-            let flushTimer: ReturnType<typeof setTimeout> | null = null;
-
-            const flushLogs = () => {
-                try {
-                    const freshData = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
-                    const t = (freshData.tasks || []).find((t: Task) => t.id === taskId);
-                    if (t) {
-                        const lines = logBuffer.split('\n');
-                        if (lines.length > 50) logBuffer = lines.slice(-50).join('\n');
-                        t.logs = logBuffer;
-                        t.updatedAt = new Date().toISOString();
-                        freshData.updatedAt = new Date().toISOString();
-                        fs.writeFileSync(tasksPath, JSON.stringify(freshData, null, 2), 'utf8');
-                    }
-                } catch {}
-            };
-
-            const onLog = (line: string) => {
-                logBuffer += (logBuffer ? '\n' : '') + line;
-                if (!flushTimer) {
-                    flushTimer = setTimeout(() => {
-                        flushTimer = null;
-                        flushLogs();
-                    }, 2000);
-                }
-            };
-
-            // Run skill with streaming logs
-            const result = await skills.runSkillByName('claude-code-assistant', { description: task.description }, onLog);
-
-            // Final update: set status and flush logs
-            if (flushTimer) clearTimeout(flushTimer);
-            logBuffer += result.ok ? '\n✅ Completed successfully' : `\n❌ Failed: ${result.result || 'Unknown error'}`;
-
-            try {
-                const freshData = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
-                const t = (freshData.tasks || []).find((t: Task) => t.id === taskId);
-                if (t) {
-                    t.status = result.ok ? 'COMPLETED' : 'FAILED';
-                    t.logs = logBuffer;
-                    t.updatedAt = new Date().toISOString();
-                    freshData.updatedAt = new Date().toISOString();
-                    fs.writeFileSync(tasksPath, JSON.stringify(freshData, null, 2), 'utf8');
-                }
-            } catch {}
+            // Use fix_project with existing task ID — handles SDK execution, log streaming, status updates
+            const result = await fixProject.fix_project({
+                description: task.description,
+                target: 'workspace',
+                _taskId: taskId,  // Reuse existing kanban task instead of creating a new one
+            });
 
             return result;
         } catch (err: any) {

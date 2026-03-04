@@ -1,0 +1,570 @@
+import { Emitter } from '../../shared/emitter.js';
+import { EVENT_TYPES } from '../../shared/event-types.web.js';
+import { cleanTranscript, shouldDropTranscript } from './transcription-policy.js';
+import { createToolCallHandler } from './tool-call-handler.js';
+import { createScreenCaptureController } from './screen-capture-controller.js';
+import { createClaudeCodeBatcher } from './claude-code-batcher.js';
+import { VocabMatcher } from '../vocab/matcher.js';
+import { findBestNgram } from '../vocab/learner.js';
+import { showBubble, clearBubbles } from '../ui/bubbles.js';
+import { updateIndicator } from '../ui/status-indicators.js';
+import { showPanel as showToolsPanel, hidePanel as hideToolsPanel } from '../ui/tools-skills-panel.js';
+import { refreshWorkspace } from '../ui/workspace-bar.js';
+import { info as logInfo, error as logError } from '../logger.js';
+
+const STATES = {
+	IDLE: 'IDLE',
+	LISTENING: 'LISTENING',
+	USER_SPEAKING: 'USER_SPEAKING',
+	PROCESSING: 'PROCESSING',
+	RESPONDING: 'RESPONDING',
+	TOOL_EXECUTING: 'TOOL_EXECUTING',
+};
+
+export class VoiceEngine extends Emitter {
+	constructor({ gemini, capture, playback, behavior, eventBus, vocab, screen, claudeCodeBatcher }) {
+		super();
+		this.gemini = gemini;
+		this.capture = capture;
+		this.playback = playback;
+		this.behavior = behavior;
+		this.eventBus = eventBus;
+		this.state = STATES.IDLE;
+		this._active = false;
+		this._apiKey = null;
+		this._muted = false;
+		this._toolExecuting = false;
+		this.needsReconnect = false;
+
+		this._lastUserSpeechTime = Date.now();
+		this._unpromptedTurnCount = 0;
+		this._idleMessageSent = false;
+
+		this._accum = { user: '', model: '' };
+		this._lastTranscriptTime = { user: 0, model: 0 };
+		this._newTurnThresholdMs = 3000;
+		this._lastUserTurn = '';
+		this.volumeThreshold = 0.015;
+
+		this._autonomousMode = false;
+		this._autonomousInterval = null;
+		this._consecutiveAutoTurns = 0;
+		this._lastAutonomousPromptTime = 0;
+		this._autonomousResponseExpected = false;
+
+		this._matcher = vocab || new VocabMatcher();
+		this._correctionCandidates = new Map();
+		this._vocabRefreshInterval = null;
+
+		this._screen = screen || createScreenCaptureController({
+			gemini,
+			onEvent: (type, payload) => this.eventBus?.emitEvent?.(type, payload, 'voice-engine'),
+		});
+
+		this._batcher = claudeCodeBatcher || createClaudeCodeBatcher({ gemini });
+
+		this._toolHandler = createToolCallHandler({
+			gemini,
+			onStateChange: (state, active) => {
+				if (state === 'TOOL_EXECUTING') {
+					this._toolExecuting = active;
+					updateIndicator('tool', active);
+					if (active) {
+						this._setState(STATES.TOOL_EXECUTING);
+					} else {
+						this._setState(STATES.LISTENING);
+					}
+				}
+			},
+			onEvent: (type, payload) => {
+				if (type === 'VOCAB_CHANGED') {
+					this.loadVocabulary().then(() => this.gemini.sendVocabUpdate());
+				}
+				this.eventBus?.emitEvent?.(type, payload, 'voice-engine');
+			},
+			screen: this._screen,
+		});
+
+		this.playback.setReferenceCallback((float32Samples) => {
+			this.capture.sendReferenceSignal(float32Samples);
+		});
+
+		this._bind();
+	}
+
+	_bind() {
+		this.gemini.on('connected', () => {
+			updateIndicator('ws', true);
+			this._newConvexSession();
+		});
+
+		this.gemini.on('ready', async () => {
+			this.capture.stop();
+			this.playback.stop();
+			try {
+				await this.capture.start();
+			} catch (err) {
+				logError('Voice', 'Mic error:', err);
+			}
+			this._screen.start();
+			showToolsPanel();
+		});
+
+		this.gemini.on('disconnected', () => {
+			updateIndicator('ws', false);
+			updateIndicator('send', false);
+			this._setState(STATES.IDLE);
+		});
+
+		this.gemini.on('maxRetriesReached', () => {
+			this.needsReconnect = true;
+		});
+
+		this.gemini.on('audio', (data) => {
+			if (this._muted) return;
+			if (!this._shouldAcceptModelOutput()) return;
+			if (this.state !== STATES.RESPONDING) {
+				if (this._accum.user) {
+					logInfo('Conversation', `[USER] ${this._accum.user}`);
+					this._lastUserTurn = this._accum.user;
+				}
+				this._accum.user = '';
+			}
+			this._setState(STATES.RESPONDING);
+			this.playback.enqueue(data);
+		});
+
+		this.gemini.on('inputTranscription', (text) => {
+			if (this._muted) return;
+			this._appendTranscript('user', text);
+			updateIndicator('voice', true);
+		});
+
+		this.gemini.on('outputTranscription', (text) => {
+			if (this._muted) return;
+			if (!this._shouldAcceptModelOutput()) return;
+			this._appendTranscript('model', text);
+		});
+
+		this.gemini.on('turnComplete', () => {
+			this._setState(STATES.LISTENING);
+			updateIndicator('think', false);
+			if (this._accum.model) {
+				logInfo('Conversation', `[IRIS] ${this._accum.model}`);
+				this._scanVocabulary(this._accum.model);
+			}
+			if (this._lastUserTurn) {
+				this._saveConversationTurn('user', this._lastUserTurn);
+			}
+			if (this._accum.model) {
+				this._saveConversationTurn('iris', this._accum.model);
+			}
+			if (this._lastUserTurn && this._accum.model) {
+				this._learnCorrections(this._lastUserTurn, this._accum.model);
+			}
+			this._accum.model = '';
+
+			if (!this._autonomousMode) {
+				const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
+				if (timeSinceUserSpoke > 3000) {
+					this._unpromptedTurnCount++;
+					logInfo('Voice', `Unprompted turn #${this._unpromptedTurnCount}`);
+					if (this._unpromptedTurnCount >= 1) {
+						this._idleMessageSent = true;
+						this.behavior.noteIdleResponseSent();
+						logInfo('Voice', 'Idle gate closed — blocking further idle output');
+						this._screen.stop();
+						this._screen.setIdleGateClosed(true);
+					}
+				} else {
+					this._unpromptedTurnCount = 0;
+				}
+			} else {
+				this._autonomousResponseExpected = false;
+				this._lastAutonomousPromptTime = Date.now();
+				const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
+				if (timeSinceUserSpoke < 5000) {
+					this._consecutiveAutoTurns = 0;
+				}
+			}
+		});
+
+		this.gemini.on('interrupted', () => {
+			this.playback.stop();
+			this._setState(STATES.LISTENING);
+			logInfo('Voice', 'User interrupted — playback stopped');
+		});
+
+		this.gemini.on('toolCall', (calls) => this._toolHandler.handleToolCalls(calls));
+
+		this.capture.on('started', () => {
+			updateIndicator('mic', true);
+			updateIndicator('send', true);
+			this._setState(STATES.LISTENING);
+			this.capture.setEchoSuppression(true);
+			this.capture.setSuppressionGain(0.8);
+			logInfo('Echo', 'Echo cancellation active (browser AEC + software suppression at 80%)');
+		});
+
+		this.capture.on('data', (base64) => {
+			if (this._muted) return;
+			const send = this.state === STATES.USER_SPEAKING || this.state === STATES.PROCESSING;
+			if (send && !this._toolExecuting) {
+				this.gemini.sendAudio(base64);
+			}
+		});
+
+		this.capture.on('volume', (vol) => {
+			if (vol > this.volumeThreshold && this.state === STATES.LISTENING) {
+				this._setState(STATES.USER_SPEAKING);
+			} else if (vol > this.volumeThreshold && this.state === STATES.RESPONDING) {
+				logInfo('Voice', 'User speaking during response — interrupting');
+				this.playback.stop();
+				this._setState(STATES.USER_SPEAKING);
+			} else if (vol < this.volumeThreshold * 0.5 && this.state === STATES.USER_SPEAKING) {
+				this._setState(STATES.PROCESSING);
+			}
+		});
+
+		this.capture.on('stopped', () => {
+			updateIndicator('mic', false);
+			updateIndicator('send', false);
+		});
+
+		this.playback.on('started', () => updateIndicator('speak', true));
+
+		this.playback.on('ended', () => {
+			updateIndicator('speak', false);
+			this.capture.notifyPlaybackStop();
+			if (this.state === STATES.RESPONDING) {
+				this._setState(STATES.LISTENING);
+			}
+		});
+
+		this.playback.on('stopped', () => updateIndicator('speak', false));
+	}
+
+	_shouldAcceptModelOutput() {
+		if (!this._autonomousMode) {
+			if (this._idleMessageSent) return false;
+			if (this._unpromptedTurnCount >= 1) return false;
+			const timeSinceUser = Date.now() - this._lastUserSpeechTime;
+			if (timeSinceUser > 10000 && this.state !== STATES.RESPONDING) return false;
+		} else {
+			if (!this._autonomousResponseExpected && this.state !== STATES.RESPONDING) return false;
+		}
+		return true;
+	}
+
+	_setState(state) {
+		const prev = this.state;
+		this.state = state;
+
+		if (prev === STATES.LISTENING && state === STATES.USER_SPEAKING) {
+			this._screen.capture();
+		}
+
+		if (state === STATES.USER_SPEAKING) {
+			this._lastUserSpeechTime = Date.now();
+			this._screen.setLastUserSpeechTime(this._lastUserSpeechTime);
+			this._unpromptedTurnCount = 0;
+			this._consecutiveAutoTurns = 0;
+			this._autonomousResponseExpected = true;
+			this.behavior.noteUserActivity();
+			if (this._idleMessageSent) {
+				logInfo('Voice', 'User speaking — resetting idle gate');
+				this._idleMessageSent = false;
+				this.behavior.resetIdleGate();
+				this._screen.setIdleGateClosed(false);
+			}
+			if (!this._screen.isRunning && this._active) {
+				logInfo('Voice', 'User speaking — resuming passive screen captures');
+				this._screen.start();
+			}
+		}
+
+		updateIndicator('voice', state === STATES.USER_SPEAKING);
+		updateIndicator('think', state === STATES.PROCESSING);
+		updateIndicator('speak', state === STATES.RESPONDING);
+	}
+
+	_appendTranscript(who, chunk) {
+		if (!chunk) return;
+		const now = Date.now();
+		const gap = now - this._lastTranscriptTime[who];
+
+		if (gap > this._newTurnThresholdMs || !this._accum[who]) {
+			if (this._accum[who]) this._scanVocabulary(this._accum[who]);
+			this._accum[who] = chunk;
+		} else {
+			this._accum[who] += chunk;
+		}
+		this._lastTranscriptTime[who] = now;
+
+		showBubble('chat', this._correctTranscript(this._accum[who]));
+	}
+
+	async loadVocabulary() {
+		try {
+			const allTerms = await window.electronAPI.getVocabulary() || [];
+			const hotTerms = await window.electronAPI.getHotVocabulary() || [];
+			for (const t of hotTerms) {
+				if (!allTerms.includes(t)) allTerms.push(t);
+			}
+			const corrections = await window.electronAPI.getVocabularyCorrections() || {};
+			this._matcher.build(corrections, allTerms);
+			logInfo('Vocab', `Matcher built: ${allTerms.length} terms, ${Object.keys(corrections).length} corrections`);
+		} catch (err) {
+			logError('Vocab', 'Failed to load vocabulary:', err);
+		}
+	}
+
+	_scanVocabulary(text) {
+		const hits = this._matcher.scan(text);
+		if (hits.length > 0) {
+			window.electronAPI.trackVocabulary(hits);
+		}
+	}
+
+	_correctTranscript(text) {
+		const result = this._matcher.correct(text);
+		if (result !== text) {
+			logInfo('Vocab', `FIXED: ${JSON.stringify(text)} → ${JSON.stringify(result)}`);
+		}
+		return result;
+	}
+
+	_learnCorrections(userText, modelText) {
+		const modelHits = this._matcher.scan(modelText);
+		if (!modelHits.length) return;
+
+		const userLower = userText.toLowerCase();
+
+		for (const term of modelHits) {
+			const termLower = term.toLowerCase();
+			if (userLower.includes(termLower)) continue;
+			if (term.length < 4) continue;
+
+			const termWords = term.split(/\s+/);
+			const match = findBestNgram(userText, term, termWords.length);
+			if (!match) continue;
+
+			const threshold = Math.ceil(term.length * 0.4);
+			if (match.distance === 0 || match.distance > threshold) continue;
+
+			const key = match.ngram.toLowerCase();
+			if (this._matcher.hasCorrection(key)) continue;
+
+			if (!this._correctionCandidates.has(key)) {
+				this._correctionCandidates.set(key, { target: term, count: 0 });
+			}
+			const candidate = this._correctionCandidates.get(key);
+			if (candidate.target !== term) continue;
+			candidate.count++;
+			logInfo('Vocab', `Correction candidate: "${match.ngram}" → "${term}" (x${candidate.count})`);
+
+			if (candidate.count >= 2) {
+				this._correctionCandidates.delete(key);
+				this._matcher.addCorrection(key, term);
+				window.electronAPI.addCorrection(key, term);
+				logInfo('Vocab', `AUTO-LEARNED: "${key}" → "${term}"`);
+			}
+		}
+	}
+
+	toggleAutonomous() {
+		this._autonomousMode = !this._autonomousMode;
+		const badge = document.getElementById('auto-badge');
+		if (badge) badge.classList.toggle('visible', this._autonomousMode);
+		updateIndicator('auto', this._autonomousMode);
+		this._screen.setAutonomousMode(this._autonomousMode);
+
+		if (this._autonomousMode) {
+			logInfo('Voice', 'Autonomous mode ACTIVATED');
+			this._autonomousResponseExpected = true;
+			this.behavior.setMode('autonomous');
+			this.gemini.sendText(
+				'[SYSTEM: MODE CHANGE — AUTONOMOUS MODE ACTIVATED]\n' +
+				'You are now in autonomous coding mode. Confirm with ONE short sentence (e.g. "Autonomous mode on — what should I work on?") then STOP. ' +
+				'Do NOT describe the mode, list capabilities, mention schedules, or say you are idle/waiting/standing by. ' +
+				'IDLE RULES STILL APPLY: after your initial confirmation, remain COMPLETELY SILENT until the user speaks or you receive an [AUTONOMOUS CODING PROMPT] system message. ' +
+				'When you receive [AUTONOMOUS CODING PROMPT], ask briefly what to work on, then STOP. ' +
+				'When the user describes a task, call fix_project immediately with a detailed description. ' +
+				'Share Claude Code progress ONLY when the user asks. When a task finishes, report the result in one sentence, then go silent.'
+			);
+			if (!this._screen.isRunning && this._active) {
+				this._screen.start();
+			}
+			this._consecutiveAutoTurns = 0;
+			this._startAutonomousLoop();
+		} else {
+			logInfo('Voice', 'Autonomous mode DEACTIVATED');
+			this._stopAutonomousLoop();
+			this._consecutiveAutoTurns = 0;
+			this._autonomousResponseExpected = false;
+			this.behavior.setMode('silent');
+			this.gemini.sendText(
+				'[SYSTEM: MODE CHANGE — AUTONOMOUS MODE DEACTIVATED]\n' +
+				'Idle silence rules are RESTORED. Return to normal behavior: only respond when the user speaks to you. ' +
+				'Do NOT proactively speak or ask questions.'
+			);
+		}
+	}
+
+	_startAutonomousLoop() {
+		this._stopAutonomousLoop();
+		this._autonomousInterval = setTimeout(() => {
+			this._autonomousInterval = null;
+			if (!this._autonomousMode || !this._active || this._muted) return;
+			if (this.state !== STATES.LISTENING) return;
+			if (this._toolExecuting) return;
+
+			const timeSinceTurn = Date.now() - this._lastAutonomousPromptTime;
+			if (timeSinceTurn < 15000) return;
+
+			if (this._consecutiveAutoTurns >= 1) {
+				logInfo('Voice', 'Autonomous mode: already prompted without response, staying quiet');
+				return;
+			}
+
+			this._consecutiveAutoTurns++;
+			this._autonomousResponseExpected = true;
+			logInfo('Voice', `Autonomous follow-up prompt #${this._consecutiveAutoTurns}`);
+
+			this._screen.capture().then(() => {
+				if (this._autonomousMode) {
+					this.gemini.sendText(
+						'[AUTONOMOUS CODING PROMPT] If a Claude Code task is running, give a one-sentence progress update. ' +
+						'Otherwise, ask ONE short question about what to work on. ' +
+						'No filler, no status commentary. One sentence max, then STOP.'
+					);
+				}
+			});
+		}, 600000);
+	}
+
+	_stopAutonomousLoop() {
+		if (this._autonomousInterval) {
+			clearTimeout(this._autonomousInterval);
+			this._autonomousInterval = null;
+		}
+	}
+
+	async start() {
+		this._apiKey = await window.electronAPI.getApiKey();
+		if (!this._apiKey || this._apiKey === 'YOUR_API_KEY_HERE') {
+			logError('Voice', 'No API key — set GEMINI_API_KEY in .env');
+			return;
+		}
+
+		await this.loadVocabulary();
+		this._vocabRefreshInterval = setInterval(() => this.loadVocabulary(), 60000);
+		refreshWorkspace();
+
+		window.electronAPI.onToggleVoice(() => this.toggle());
+		window.electronAPI.onToggleAutonomous(() => this.toggleAutonomous());
+		window.electronAPI.onReloadSession(() => {
+			if (this._active) this.reconnect();
+		});
+
+		window.electronAPI.onClaudeCodeStream((data) => {
+			if (data.type === 'log') {
+				this._batcher.addLine(data.taskId, data.line);
+			} else if (data.type === 'done') {
+				this._batcher.handleDone(data.taskId, data.status, data.summary);
+			}
+		});
+
+		this._batcher.start();
+		this._active = true;
+		this._lastUserSpeechTime = Date.now();
+		this._unpromptedTurnCount = 0;
+		this._idleMessageSent = false;
+		await this.gemini.connect(this._apiKey);
+	}
+
+	deactivate() {
+		this._active = false;
+		this._toolExecuting = false;
+		this._stopAutonomousLoop();
+		this._autonomousMode = false;
+		this._consecutiveAutoTurns = 0;
+		const autoBadge = document.getElementById('auto-badge');
+		if (autoBadge) autoBadge.classList.remove('visible');
+		updateIndicator('auto', false);
+		if (this._vocabRefreshInterval) {
+			clearInterval(this._vocabRefreshInterval);
+			this._vocabRefreshInterval = null;
+		}
+		this._batcher.stop();
+		this._screen.stop();
+		this.playback.stop();
+		this.capture.stop();
+		this.gemini.disconnect();
+		this._setState(STATES.IDLE);
+		for (const id of ['ws', 'mic', 'voice', 'send', 'think', 'speak', 'tool', 'srch']) {
+			updateIndicator(id, false);
+		}
+		clearBubbles();
+		hideToolsPanel();
+		window.electronAPI.searchHide();
+		window.electronAPI.endSession?.();
+	}
+
+	async reconnect() {
+		this.needsReconnect = false;
+		this._lastUserSpeechTime = Date.now();
+		this._unpromptedTurnCount = 0;
+		this._idleMessageSent = false;
+		const wasAutonomous = this._autonomousMode;
+		this.capture.stop();
+		this.playback.stop();
+		this.gemini.disconnect();
+		await this.gemini.connect(this._apiKey);
+		if (wasAutonomous && this._autonomousMode) {
+			this.gemini.sendText(
+				'[SYSTEM: MODE CHANGE — AUTONOMOUS MODE ACTIVATED (reconnect)]\n' +
+				'Autonomous coding mode is still active after reconnection. Do NOT announce or confirm this — remain SILENT. ' +
+				'Wait for the user to speak or for an [AUTONOMOUS CODING PROMPT] system message. Normal idle rules apply.'
+			);
+		}
+	}
+
+	async toggle() {
+		if (this._active) {
+			this.deactivate();
+		} else {
+			await this.start();
+		}
+	}
+
+	toggleMute() {
+		this._muted = !this._muted;
+		if (this._muted) {
+			this.playback.stop();
+			clearBubbles();
+		}
+		logInfo('Voice', `Mute ${this._muted ? 'ON' : 'OFF'}`);
+		return this._muted;
+	}
+
+	get muted() {
+		return this._muted;
+	}
+
+	getSpeakingVolume() {
+		return this.playback.getVolume();
+	}
+
+	_newConvexSession() {
+		window.electronAPI.newConvexSession();
+	}
+
+	_saveConversationTurn(role, content) {
+		window.electronAPI.saveConversationTurn(role, content);
+	}
+
+	_saveToolExecution(toolName, args, result) {
+		window.electronAPI.saveToolExecution(toolName, args, result);
+	}
+}

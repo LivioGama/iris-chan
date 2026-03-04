@@ -23,6 +23,13 @@ function loadEnv() {
 
 loadEnv();
 
+function parseArgs(argv = []) {
+	return {
+		force: argv.includes('--force'),
+		cleanupSources: argv.includes('--cleanup-sources'),
+	};
+}
+
 function parseTimestamp(line) {
   const m = line.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]$/);
   if (!m) return null;
@@ -245,11 +252,13 @@ async function callConvexMutation(turns) {
 }
 
 async function main() {
+  const options = parseArgs(process.argv.slice(2));
   console.log('Parsing log files...');
 
   const curatedPath = path.join(DESKTOP, 'Iris_Message_Log.txt');
   const verbosePath = path.join(DESKTOP, 'iris_conversation.log');
-  // consolidated_messages.log is debug output (playback/echo), not conversation data — skip it
+  const consolidatedPath = path.join(DESKTOP, 'consolidated_messages.log');
+  // consolidated_messages.log is debug output (playback/echo), not conversation data
 
   const curatedTurns = fs.existsSync(curatedPath) ? parseFile(curatedPath, 'curated') : [];
   const verboseTurns = fs.existsSync(verbosePath) ? parseFile(verbosePath, 'historical') : [];
@@ -277,6 +286,39 @@ async function main() {
   if (finalTurns.length === 0) {
     console.log('No turns to import.');
     return;
+  }
+
+  if (!options.force) {
+    try {
+      const verifyUrl = `${CONVEX_URL}/api/run/conversations/getRecent`;
+      const verifyBody = { args: { limit: 500 } };
+      if (ADMIN_KEY) verifyBody.adminKey = ADMIN_KEY;
+      const verifyRes = await fetch(verifyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(verifyBody),
+      });
+      const verifyJson = await verifyRes.json();
+      const recent = Array.isArray(verifyJson.value) ? verifyJson.value : [];
+      const existingImported = recent.filter(
+        row => row?.source === 'historical' || row?.source === 'curated'
+      );
+      if (existingImported.length > 0) {
+        console.log(`Historical import already present (${existingImported.length} recent imported records). Skipping re-import.`);
+        if (options.cleanupSources) {
+          const filesToDelete = [curatedPath, verbosePath, consolidatedPath];
+          for (const file of filesToDelete) {
+            if (fs.existsSync(file)) {
+              fs.unlinkSync(file);
+              console.log(`Deleted: ${file}`);
+            }
+          }
+        }
+        return;
+      }
+    } catch (err) {
+      console.warn(`Pre-import verification skipped due to error: ${err.message}`);
+    }
   }
 
   console.log('\nGenerating embeddings (batches of 20)...');
@@ -346,7 +388,7 @@ async function main() {
       return;
     }
 
-    const filesToDelete = [curatedPath, verbosePath, path.join(DESKTOP, 'consolidated_messages.log')];
+    const filesToDelete = [curatedPath, verbosePath, consolidatedPath];
     for (const file of filesToDelete) {
       if (fs.existsSync(file)) {
         fs.unlinkSync(file);

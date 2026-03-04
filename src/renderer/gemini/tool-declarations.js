@@ -158,26 +158,20 @@ export const toolDeclarations = [
 		}, required: ['skill_name'] },
 	},
 	{
+		name: 'fix_project',
+		description: 'Fix, improve, or build features in ANY project (current workspace or Iris herself). Uses Claude Code directly via JS SDK with full autonomy. Use for workspace projects when user asks to "fix this", "add this feature", "improve this code". For Iris self-modifications, prefer self_fix.',
+		parameters: { type: 'OBJECT', properties: {
+			description: { type: 'STRING', description: 'Detailed description of what to fix/build. Include current behavior, desired behavior, files involved.' },
+			target: { type: 'STRING', description: '"workspace" (default, uses current workspace dir) or "iris" (Iris-chan source code)' },
+		}, required: ['description'] },
+	},
+	{
 		name: 'self_fix',
 		description: 'Fix, improve, or modify your own source code. Use this whenever the user asks you to change yourself, fix a bug in yourself, add a feature to yourself, or improve your behavior. This is your MOST IMPORTANT tool \u2014 if the user says anything like "fix yourself", "change your voice", "add a feature", "improve X", "you should do Y differently", "modify your code", or any request about changing how you work, call this tool IMMEDIATELY. Claude Code runs directly on the project files \u2014 no kanban tasks or remote execution involved.',
 		parameters: { type: 'OBJECT', properties: {
 			description: { type: 'STRING', description: 'Detailed description of what to fix, change, or improve. Be specific about the current behavior and desired behavior.' },
-			files_to_touch: { type: 'STRING', description: 'Comma-separated list of files likely involved. Choose from: gemini/client.js, voice/pipeline.js, voice/capture.js, voice/playback.js, tools/index.js, screen-capture.js, main/index.js, renderer/index.html, helpers/iris-helper.swift' },
+			files_to_touch: { type: 'STRING', description: 'Comma-separated list of files likely involved. Choose from: gemini/client.js, voice/voice-engine.js, voice/capture.js, voice/playback.js, tools/index.js, screen-capture.js, main/index.js, renderer/index.html, helpers/iris-helper.swift' },
 		}, required: ['description'] },
-	},
-	{
-		name: 'generate_3d_model',
-		description: 'Generate a high-quality 3D GLB model from an image using DreamGaussian AI. Perfect for converting product photos, scenes, or artwork into interactive 3D models. Results are saved to ~/Desktop/iris-3d-models/',
-		parameters: { type: 'OBJECT', properties: {
-			image_path: { type: 'STRING', description: 'Path to input image file (JPG, PNG, WEBP)' },
-			prompt: { type: 'STRING', description: 'Optional guidance prompt (e.g., "high quality, detailed, professional textures")' },
-			output_dir: { type: 'STRING', description: 'Optional output directory (default: ~/Desktop/iris-3d-models/)' },
-		}, required: ['image_path'] },
-	},
-	{
-		name: 'check_3d_setup',
-		description: 'Check if DreamGaussian 3D generation is properly installed and configured. Shows Python version, CUDA status, and installation requirements.',
-		parameters: { type: 'OBJECT', properties: {} },
 	},
 	{
 		name: 'auto_2fa',
