@@ -229,18 +229,19 @@
 		}
 
 		.start-btn {
-			background: rgba(52, 211, 153, 0.12);
-			color: rgba(110, 231, 183, 0.9);
-			border: 0.5px solid rgba(52, 211, 153, 0.15);
+			background: rgba(129, 140, 248, 0.1);
+			color: rgba(165, 170, 255, 0.8);
+			border: 0.5px solid rgba(129, 140, 248, 0.12);
 		}
-		.start-btn:hover { background: rgba(52, 211, 153, 0.2); }
+		.start-btn:hover { background: rgba(129, 140, 248, 0.18); }
 
 		.finish-btn {
-			background: rgba(129, 140, 248, 0.12);
-			color: rgba(165, 170, 255, 0.9);
-			border: 0.5px solid rgba(129, 140, 248, 0.15);
+			background: rgba(52, 211, 153, 0.15);
+			color: rgba(110, 231, 183, 0.95);
+			border: 0.5px solid rgba(52, 211, 153, 0.2);
+			font-weight: 600;
 		}
-		.finish-btn:hover { background: rgba(129, 140, 248, 0.2); }
+		.finish-btn:hover { background: rgba(52, 211, 153, 0.25); }
 
 		.run-btn {
 			background: rgba(251, 191, 36, 0.1);
@@ -415,6 +416,13 @@
 		let taskIdCounter = 1;
 		let draggedTask = null;
 		let reloadTimeout = null;
+		let renderTimeout = null;
+		let cleanDoneBtnAttached = false;
+
+		// Track tasks actively receiving SDK stream events — prevents file-watcher reloads from clobbering live logs
+		const activelyStreamingTasks = new Set();
+		// Track tasks that were started via SDK (vs manually moved to IN_PROGRESS)
+		const sdkRunningTasks = new Set();
 
 		// Debounced reload to prevent rapid successive reloads
 		function scheduleReload() {
@@ -423,6 +431,15 @@
 				loadTasksFromFile();
 				reloadTimeout = null;
 			}, 500);
+		}
+
+		// Debounced render to prevent excessive DOM updates
+		function scheduleRender() {
+			if (renderTimeout) clearTimeout(renderTimeout);
+			renderTimeout = setTimeout(() => {
+				renderTasks();
+				renderTimeout = null;
+			}, 50);
 		}
 
 		// Calculate and apply window size based on visible columns and task count
@@ -434,10 +451,10 @@
 
 				// Hide window when no tasks
 				if (totalTasks === 0) {
-					window.electron?.ipcRenderer?.invoke('set-kanban-visible', false).catch(() => {});
+					window.electronAPI?.kanbanSetVisible(false).catch(() => {});
 					return;
 				}
-				window.electron?.ipcRenderer?.invoke('set-kanban-visible', true).catch(() => {});
+				window.electronAPI?.kanbanSetVisible(true).catch(() => {});
 
 				const progressCol = document.querySelector('.col-progress');
 				const doneCol = document.querySelector('.col-done');
@@ -457,7 +474,8 @@
 
 				// Height: header(38) + column-header(30) + tasks(35 each, 140 with logs) + input(30) + padding(24)
 				const wipCount = countByStatus('IN_PROGRESS');
-				const wipWithLogs = tasks.filter(t => t.status === 'IN_PROGRESS' && t.logs).length;
+				// All IN_PROGRESS tasks now show a log element (even if empty, placeholder is shown)
+				const wipWithLogs = wipCount;
 				const maxPerColumn = Math.max(
 					countByStatus('TODO'),
 					hasWip ? wipCount : 0,
@@ -466,7 +484,7 @@
 				const logsExtra = wipWithLogs * 110; // extra height for logs sections
 				const height = Math.min(38 + 30 + maxPerColumn * 35 + logsExtra + 30 + 24, 700);
 
-				window.electron?.ipcRenderer?.invoke('resize-kanban', width, height).catch(err => {
+				window.electronAPI?.kanbanResize(width, height).catch(err => {
 					console.warn('[Kanban] Resize failed:', err.message);
 				});
 			}, 300);
@@ -500,23 +518,42 @@
 		// Load tasks from tasks.json via IPC
 		async function loadTasksFromFile() {
 			try {
-				const loaded = await window.electron?.ipcRenderer?.invoke('load-kanban-tasks') || [];
-				
+				const loaded = await window.electronAPI?.loadKanbanTasks() || [];
+
 				if (Array.isArray(loaded) && loaded.length > 0) {
-					tasks = loaded.map((task, idx) => ({
-						id: task.id || `task-${idx + 1}`,
-						title: task.title || 'Untitled',
-						description: task.description || '',
-						status: mapTaskStatus(task.status),
-						originalStatus: task.status,
-						order: task.order || idx,
-						files: task.files || [],
-						action: task.action || '',
-						verify: task.verify || '',
-						done: task.done || '',
-						logs: task.logs || ''
-					}));
-					
+					// Preserve in-memory logs for tasks that are actively streaming
+					// (file-watcher reloads can clobber live-streamed logs that haven't been flushed to disk yet)
+					const prevLogsByTaskId = {};
+					for (const t of tasks) {
+						if (activelyStreamingTasks.has(t.id) && t.logs) {
+							prevLogsByTaskId[t.id] = t.logs;
+						}
+					}
+
+					tasks = loaded.map((task, idx) => {
+						const id = task.id || `task-${idx + 1}`;
+						const diskLogs = task.logs || '';
+						// For actively streaming tasks, keep whichever logs are longer
+						// (in-memory always has the latest streamed content; disk may lag by up to 2s)
+						const preservedLogs = prevLogsByTaskId[id];
+						const finalLogs = preservedLogs && preservedLogs.length > diskLogs.length
+							? preservedLogs
+							: diskLogs;
+						return {
+							id,
+							title: task.title || 'Untitled',
+							description: task.description || '',
+							status: mapTaskStatus(task.status),
+							originalStatus: task.status,
+							order: task.order || idx,
+							files: task.files || [],
+							action: task.action || '',
+							verify: task.verify || '',
+							done: task.done || '',
+							logs: finalLogs,
+						};
+					});
+
 					const maxId = Math.max(...tasks.map(t => {
 						const match = t.id.match(/task-(\d+)/);
 						return match ? Number.parseInt(match[1]) : 0;
@@ -546,7 +583,7 @@
 					logs: t.logs || ''
 				}));
 				
-				const result = await window.electron?.ipcRenderer?.invoke('save-kanban-tasks', toSave);
+				const result = await window.electronAPI?.saveKanbanTasks(toSave);
 				if (result?.ok) {
 					console.log('[Kanban] Tasks saved to tasks.json');
 				} else {
@@ -657,58 +694,83 @@
 					const actionsEl = document.createElement('div');
 					actionsEl.className = 'task-actions';
 
-				if (task.status !== 'DONE') {
-					const statusBtn = document.createElement('button');
-					statusBtn.textContent = task.status === 'TODO' ? 'Start' : 'Finish';
-					statusBtn.className = task.status === 'TODO' ? 'start-btn' : 'finish-btn';
-					statusBtn.onclick = () => {
-						task.status = task.status === 'TODO' ? 'IN_PROGRESS' : 'DONE';
-						renderTasks();
-						saveTasksToFile();
-						syncTasksToConvex();
-					};
-					actionsEl.appendChild(statusBtn);
-				}
+					if (task.status === 'TODO') {
+						// "▶ Run" — executes task autonomously via Claude Code SDK
+						const runBtn = document.createElement('button');
+						runBtn.textContent = '▶ Run';
+						runBtn.className = 'run-btn';
+						runBtn.title = 'Execute autonomously via Claude Code';
+						runBtn.onclick = async () => {
+							runBtn.disabled = true;
+							runBtn.textContent = '⏳';
+							task.status = 'IN_PROGRESS';
+							task.logs = '';
+							sdkRunningTasks.add(task.id);
+							activelyStreamingTasks.add(task.id);
+							renderTasks();
+							saveTasksToFile();
+							try {
+								await window.electronAPI?.kanbanRunTask(task.id);
+								// Don't reload immediately — stream handler will update state live
+								syncTasksToConvex();
+							} catch (err) {
+								sdkRunningTasks.delete(task.id);
+								activelyStreamingTasks.delete(task.id);
+								alert(`Failed to run task: ${err.message}`);
+								await loadTasksFromFile();
+							}
+						};
+						actionsEl.appendChild(runBtn);
 
-			const runBtn = document.createElement('button');
-			
-			// Only show Run button for TODO tasks, show loading for IN_PROGRESS
-			if (task.status === 'IN_PROGRESS') {
-				// Show loading indicator for IN_PROGRESS tasks
-				runBtn.innerHTML = '⏳ Running...';
-				runBtn.className = 'run-btn loading-indicator';
-				runBtn.disabled = true;
-				runBtn.style.cursor = 'default';
-			} else if (task.status === 'TODO') {
-				// Show Run button for TODO tasks — always enabled (direct Claude Code execution)
-				runBtn.textContent = 'Run';
-				runBtn.className = 'run-btn';
-				runBtn.title = 'Run this task via Claude Code';
-				runBtn.onclick = async () => {
-					runBtn.disabled = true;
-					runBtn.textContent = '⏳';
-					task.status = 'IN_PROGRESS';
-					task.logs = '';
-					renderTasks();
-					saveTasksToFile();
-					try {
-						const result = await window.electron?.ipcRenderer?.invoke('run-task', task.id);
-						// Task status is updated by the backend — just reload
-						await loadTasksFromFile();
-						syncTasksToConvex();
-					} catch (err) {
-						alert(`Failed to run task: ${err.message}`);
-						await loadTasksFromFile();
+						// "▷ Start" — manually move to IN_PROGRESS (user works on it themselves)
+						const startBtn = document.createElement('button');
+						startBtn.textContent = '▷ Start';
+						startBtn.className = 'start-btn';
+						startBtn.title = 'Mark as in-progress (manual work)';
+						startBtn.onclick = () => {
+							task.status = 'IN_PROGRESS';
+							task.logs = '';
+							renderTasks();
+							saveTasksToFile();
+							syncTasksToConvex();
+						};
+						actionsEl.appendChild(startBtn);
+					} else if (task.status === 'IN_PROGRESS') {
+						const isRunningSDK = sdkRunningTasks.has(task.id);
+						if (isRunningSDK) {
+							// SDK is actively running — show pulsing indicator
+							const indicator = document.createElement('button');
+							indicator.innerHTML = '<span class="spinning">⚙</span> Running';
+							indicator.className = 'run-btn loading-indicator';
+							indicator.disabled = true;
+							indicator.style.cursor = 'default';
+							actionsEl.appendChild(indicator);
+						}
+
+						// "✓ Done" — mark task as complete (always visible for IN_PROGRESS)
+						const finishBtn = document.createElement('button');
+						finishBtn.textContent = '✓ Done';
+						finishBtn.className = 'finish-btn';
+						finishBtn.title = 'Mark task as completed';
+						finishBtn.onclick = () => {
+							task.status = 'DONE';
+							sdkRunningTasks.delete(task.id);
+							activelyStreamingTasks.delete(task.id);
+							renderTasks();
+							saveTasksToFile();
+							syncTasksToConvex();
+						};
+						actionsEl.appendChild(finishBtn);
 					}
-				};
-			}
-			if (task.status !== 'DONE') actionsEl.appendChild(runBtn);
 
+					// Delete button — for all tasks
 					const delBtn = document.createElement('button');
 					delBtn.innerHTML = '&times;';
 					delBtn.className = 'delete-btn';
 					delBtn.title = 'Delete task';
 					delBtn.onclick = () => {
+						sdkRunningTasks.delete(task.id);
+						activelyStreamingTasks.delete(task.id);
 						tasks = tasks.filter(t => t.id !== task.id);
 						renderTasks();
 						saveTasksToFile();
@@ -719,11 +781,19 @@
 					taskEl.appendChild(titleEl);
 					taskEl.appendChild(actionsEl);
 
-					// Add logs display for tasks that have logs
-					if (task.logs) {
+					// Logs display — always show for IN_PROGRESS tasks (with placeholder if empty)
+					if (task.status === 'IN_PROGRESS' || task.logs) {
 						const logsEl = document.createElement('div');
 						logsEl.className = 'task-logs';
-						logsEl.textContent = task.logs;
+						if (task.logs) {
+							logsEl.textContent = task.logs;
+						} else if (task.status === 'IN_PROGRESS' && sdkRunningTasks.has(task.id)) {
+							logsEl.textContent = 'Waiting for output...';
+							logsEl.style.opacity = '0.4';
+						} else if (task.status === 'IN_PROGRESS') {
+							logsEl.textContent = 'No logs yet';
+							logsEl.style.opacity = '0.3';
+						}
 						taskEl.appendChild(logsEl);
 						// Auto-scroll to bottom for in-progress tasks
 						if (task.status === 'IN_PROGRESS') {
@@ -801,7 +871,7 @@
 		// Check if spec.md already exists
 		let specExists = false;
 		try {
-			const specCheckResult = await window.electron?.ipcRenderer?.invoke('spec-md-exists');
+			const specCheckResult = await window.electronAPI?.kanbanSpecMdExists();
 			specExists = specCheckResult?.exists || false;
 			console.log('[RunAll] spec.md exists:', specExists);
 		} catch (err) {
@@ -846,7 +916,7 @@
 			
 			// Check if tasks.json exists
 			try {
-				const tasksCheckResult = await window.electron?.ipcRenderer?.invoke('tasks-file-exists');
+				const tasksCheckResult = await window.electronAPI?.kanbanTasksFileExists();
 				tasksFileExists = tasksCheckResult?.exists || false;
 				console.log('[RunAll] tasks.json exists:', tasksFileExists);
 			} catch (err) {
@@ -862,7 +932,7 @@
 			// Step 1: Write spec.md only if it doesn't exist
 			if (!specExists) {
 				console.log('[RunAll] Step 1: Writing spec.md...');
-				const specResult = await window.electron?.ipcRenderer?.invoke('write-spec-md', spec);
+				const specResult = await window.electronAPI?.kanbanWriteSpecMd(spec);
 				console.log('[RunAll] write-spec-md result:', specResult);
 				if (!specResult?.ok) {
 					const err = `Failed to write spec.md: ${specResult?.error || 'Unknown error'}`;
@@ -877,7 +947,7 @@
 
 				// Step 2: Remove tasks.json only if spec.md was just created
 				console.log('[RunAll] Step 2: Deleting tasks.json...');
-				const deleteResult = await window.electron?.ipcRenderer?.invoke('delete-tasks-file');
+				const deleteResult = await window.electronAPI?.kanbanDeleteTasksFile();
 				console.log('[RunAll] delete-tasks-file result:', deleteResult);
 				if (!deleteResult?.ok) {
 					const err = `Failed to delete tasks.json: ${deleteResult?.error || 'Unknown error'}`;
@@ -897,8 +967,8 @@
 			if (shouldRunSkill) {
 				console.log('[RunAll] Step 3: Running claude-code-assistant skill...');
 				console.log('[RunAll] Calling run-skill with description length:', spec ? spec.length : 'N/A (using existing spec.md)');
-				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'claude-code-assistant', {
-					description: spec || ''  // Pass aggregated spec if we created it, otherwise empty (skill will use existing spec.md)
+				const result = await window.electronAPI?.kanbanRunSkill('claude-code-assistant', {
+					description: spec || ''
 				});
 				console.log('[RunAll] run-skill result:', result);
 				console.log('[RunAll] result?.ok:', result?.ok, 'typeof:', typeof result?.ok);
@@ -910,7 +980,7 @@
 			// Parse spec.md and recreate tasks.json (regardless of skill success/failure)
 			// This ensures we have tasks even if the skill failed
 			console.log('[RunAll] Step 4: Parsing spec.md...');
-			const parseResult = await window.electron?.ipcRenderer?.invoke('parse-spec-md');
+			const parseResult = await window.electronAPI?.kanbanParseSpecMd();
 			console.log('[RunAll] parse-spec-md result:', parseResult);
 			console.log('[RunAll] parseResult?.ok:', parseResult?.ok, 'type:', typeof parseResult?.ok);
 			
@@ -957,7 +1027,7 @@
 		// Clean up completed tasks
 		document.getElementById('clean-tasks').onclick = async () => {
 			try {
-				const result = await window.electron?.ipcRenderer?.invoke('remove-completed-tasks');
+				const result = await window.electronAPI?.kanbanRemoveCompleted();
 				if (result?.ok) {
 					if (result.removed > 0) {
 						console.log(`[Kanban] Cleaned ${result.removed} completed tasks`);
@@ -977,7 +1047,7 @@
 		// Sync tasks to Convex (one-way sync)
 		async function syncTasksToConvex() {
 			try {
-				await window.electron?.ipcRenderer?.invoke('sync-tasks-to-convex', tasks);
+				await window.electronAPI?.kanbanSyncToConvex(tasks);
 				console.log('[Kanban] Tasks synced to Convex');
 			} catch (err) {
 				console.warn('[Kanban] Convex sync failed:', err);
@@ -995,7 +1065,7 @@
 
 			try {
 				// Commit first
-				const commitResult = await window.electron?.ipcRenderer?.invoke('git-commit', msg);
+				const commitResult = await window.electronAPI?.kanbanGitCommit(msg);
 				if (!commitResult?.ok) {
 					alert(`Commit failed: ${commitResult?.error || 'Unknown error'}`);
 					btn.textContent = '📝 Commit & Push';
@@ -1004,7 +1074,7 @@
 				}
 
 				// Then push
-				const pushResult = await window.electron?.ipcRenderer?.invoke('git-push');
+				const pushResult = await window.electronAPI?.kanbanGitPush();
 				if (pushResult?.ok) {
 					alert('✓ Committed and pushed to git');
 					btn.textContent = '✓ Done';
@@ -1038,7 +1108,7 @@
 				// Create a reorganization spec
 				const spec = `Reorganize the following tasks into a better structure with subtasks, dependencies, and clear ordering:\n\n${todoTasks.map((t, i) => `${i + 1}. ${t.title}\n   ${t.description}`).join('\n\n')}\n\nReturn the reorganized tasks as a structured list with clear hierarchy.`;
 
-				const result = await window.electron?.ipcRenderer?.invoke('run-skill', 'claude-code-assistant', {
+				const result = await window.electronAPI?.kanbanRunSkill('claude-code-assistant', {
 					description: spec
 				});
 
@@ -1066,10 +1136,59 @@
 		loadTasksFromFile();
 
 		// Listen for tasks.json updates from file watcher
-		if (window.electron?.ipcRenderer) {
-			window.electron.ipcRenderer.on('tasks-file-updated', () => {
+		if (window.electronAPI) {
+			window.electronAPI.onKanbanTasksUpdated(() => {
 				console.log('[Kanban] Detected tasks.json change, scheduling reload...');
 				scheduleReload();
+			});
+
+			// Live log streaming from Claude Code SDK
+			window.electronAPI.onKanbanCodeStream((data) => {
+				if (data.type === 'log' && data.taskId) {
+					// Mark task as actively streaming (prevents file-reload clobbering)
+					activelyStreamingTasks.add(data.taskId);
+
+					const task = tasks.find(t => t.id === data.taskId);
+					if (task) {
+						task.logs = (task.logs || '') + (task.logs ? '\n' : '') + data.line;
+						// Keep last 50 lines in memory
+						const lines = task.logs.split('\n');
+						if (lines.length > 50) task.logs = lines.slice(-50).join('\n');
+						// Update the DOM directly (no full re-render for performance)
+						const logsEl = document.querySelector(`[data-task-id="${data.taskId}"] .task-logs`);
+						if (logsEl) {
+							logsEl.textContent = task.logs;
+							logsEl.style.opacity = ''; // clear placeholder opacity
+							logsEl.scrollTop = logsEl.scrollHeight;
+						} else {
+							// Log element doesn't exist yet — need a render to create it
+							scheduleRender();
+						}
+					}
+				} else if (data.type === 'done' && data.taskId) {
+					// Task finished — update state immediately in memory, then sync from disk
+					const task = tasks.find(t => t.id === data.taskId);
+					if (task) {
+						const newStatus = data.status === 'COMPLETED' ? 'DONE' : 'TODO';
+						task.status = newStatus;
+						if (data.summary) {
+							task.logs = (task.logs || '') + '\n' + (newStatus === 'DONE' ? '✅' : '❌') + ' ' + data.summary;
+							// Keep last 50 lines
+							const lines = task.logs.split('\n');
+							if (lines.length > 50) task.logs = lines.slice(-50).join('\n');
+						}
+					}
+					// Clean up streaming state
+					sdkRunningTasks.delete(data.taskId);
+					activelyStreamingTasks.delete(data.taskId);
+					// Re-render immediately to reflect completion
+					renderTasks();
+					// Then reload from disk to pick up any final state updates
+					setTimeout(() => {
+						loadTasksFromFile();
+						syncTasksToConvex();
+					}, 1000);
+				}
 			});
 		}
 	</script>

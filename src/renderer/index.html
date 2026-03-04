@@ -2,21 +2,14 @@
 <html>
 	<head>
 		<meta charset="utf-8" />
-		<title>VRM Avatar Viewer</title>
+		<title>Iris-chan</title>
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<link rel="stylesheet" href="styles/overlay.css" />
+		<link rel="stylesheet" href="./styles/overlay.css" />
 	</head>
-
 	<body>
-		<!-- Mute badge -->
 		<div id="mute-badge">MUTED</div>
-		<!-- Autonomous mode badge -->
 		<div id="auto-badge">AUTO</div>
-
-		<!-- Workspace indicator -->
 		<div id="workspace-bar"></div>
-
-		<!-- Debug overlay -->
 		<div id="debug-panel">
 			<div id="debug-indicators">
 				<span id="dbg-ws" class="dbg-dot">WS</span>
@@ -31,37 +24,13 @@
 			</div>
 			<div id="dbg-status">Initializing...</div>
 		</div>
-
-		<!-- Speech bubbles -->
-		<div id="bubble-container">
-			<div id="bubble-user" class="bubble bubble-user">
-				<div class="bubble-label">You</div>
-				<div id="dbg-user-text"></div>
-			</div>
-			<div id="bubble-iris" class="bubble bubble-iris">
-				<div class="bubble-label">Iris</div>
-				<div id="dbg-model-text"></div>
-			</div>
-		</div>
-
-		<!-- Thinking/Activity display -->
-		<div id="activity-panel">
-			<div id="activity-content"></div>
-		</div>
-
-		<!-- Tools & Skills panel -->
+		<div id="bubbles"></div>
 		<div id="tools-skills-panel">
-			<div class="ts-column">
-				<div class="ts-header">Tools</div>
-				<div id="ts-tools-list" class="ts-list"></div>
-			</div>
-			<div class="ts-column">
-				<div class="ts-header">Skills</div>
-				<div id="ts-skills-list" class="ts-list"></div>
-			</div>
+			<div class="panel-col"><div class="panel-title">Tools</div><div class="panel-tools"></div></div>
+			<div class="panel-col"><div class="panel-title">Skills</div><div class="panel-skills"></div></div>
 		</div>
+		<div id="activity-timeline"></div>
 
-		<!-- Import map: resolve bare specifiers to CDN URLs -->
 		<script type="importmap">
 			{
 				"imports": {
@@ -72,7 +41,6 @@
 				}
 			}
 		</script>
-
 		<script type="module" src="app.js"></script>
 	</body>
 </html>

@@ -5,35 +5,36 @@ const WORKLET_CODE = `
 class CaptureProcessor extends AudioWorkletProcessor {
 	constructor() {
 		super();
-		this.buffer = [];
+		this.bufferSize = 4096;
+		this.buffer = new Float32Array(this.bufferSize);
+		this.writePos = 0;
 		this.threshold = 2048; // ~128ms at 16kHz
-		this.referenceBuffer = [];
+		this.referenceBuffer = null;
+		this.refLength = 0;
 		this.echoSuppression = true;
 		this.suppressionGain = 1.0;
 		this.isPlaybackActive = false;
-		// LMS Adaptive Filter for echo cancellation (same algorithm as WebRTC)
-		this.filterOrder = 512; // Length of adaptive filter
-		this.filterCoeffs = new Float32Array(this.filterOrder); // Weights
-		this.referenceHistory = new Float32Array(this.filterOrder); // Recent ref samples
+		this.filterOrder = 512;
+		this.filterCoeffs = new Float32Array(this.filterOrder);
+		this.referenceHistory = new Float32Array(this.filterOrder);
 		this.historyIndex = 0;
-		this.stepSize = 0.01; // Learning rate for adaptation
-		this.refPower = 0; // Running estimate of reference signal power
-		this.epsilon = 1e-5; // Small value to avoid division by zero
+		this.stepSize = 0.01;
+		this.refPower = 0;
+		this.epsilon = 1e-5;
+		this._scratchOutput = new Float32Array(128);
+		this._scratchSuppressed = new Float32Array(128);
 
-		// Set up message handler for IPC from main thread
-		this._setupMessageHandler();
-	}
-
-	_setupMessageHandler() {
 		this.port.onmessage = (ev) => {
-			if (ev.data.type === 'reference') {
+			const { type } = ev.data;
+			if (type === 'reference') {
 				this.referenceBuffer = ev.data.samples;
+				this.refLength = this.referenceBuffer ? this.referenceBuffer.length : 0;
 				this.isPlaybackActive = true;
-			} else if (ev.data.type === 'playbackStop') {
+			} else if (type === 'playbackStop') {
 				this.isPlaybackActive = false;
-			} else if (ev.data.type === 'setEchoSuppression') {
+			} else if (type === 'setEchoSuppression') {
 				this.echoSuppression = ev.data.enabled;
-			} else if (ev.data.type === 'setSuppressionGain') {
+			} else if (type === 'setSuppressionGain') {
 				this.suppressionGain = Math.max(0, Math.min(1, ev.data.gain));
 			}
 		};
@@ -42,89 +43,88 @@ class CaptureProcessor extends AudioWorkletProcessor {
 	process(inputs, outputs) {
 		const input = inputs[0]?.[0];
 		if (!input) return true;
+		const len = input.length;
 
 		let processedInput;
 
-		if (this.referenceBuffer.length > 0 && this.echoSuppression) {
-			// Use LMS adaptive filter with reference signal (most effective)
-			processedInput = this._applyLMSFilter(input);
+		if (this.refLength > 0 && this.echoSuppression) {
+			processedInput = this._applyLMSFilter(input, len);
 		} else if (this.isPlaybackActive && this.echoSuppression) {
-			// Fallback: heavy suppression when playback is active but no reference
-			processedInput = new Float32Array(input.length);
-			for (let i = 0; i < input.length; i++) {
-				processedInput[i] = input[i] * 0.01; // 99% suppression
+			if (this._scratchSuppressed.length < len) {
+				this._scratchSuppressed = new Float32Array(len);
 			}
+			for (let i = 0; i < len; i++) {
+				this._scratchSuppressed[i] = input[i] * 0.01;
+			}
+			processedInput = this._scratchSuppressed;
 		} else {
-			// No echo cancellation needed
 			processedInput = input;
 		}
 
-		// Convert float32 to int16
-		for (let i = 0; i < processedInput.length; i++) {
-			const s = Math.max(-1, Math.min(1, processedInput[i]));
-			this.buffer.push(s < 0 ? s * 0x8000 : s * 0x7FFF);
+		for (let i = 0; i < len; i++) {
+			const s = processedInput[i];
+			const clamped = s > 1 ? 1 : s < -1 ? -1 : s;
+			this.buffer[this.writePos++] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+
+			if (this.writePos >= this.threshold) {
+				const int16 = new Int16Array(this.threshold);
+				for (let j = 0; j < this.threshold; j++) {
+					int16[j] = this.buffer[j];
+				}
+				this.port.postMessage({ type: 'audio', samples: int16.buffer }, [int16.buffer]);
+				const remaining = this.writePos - this.threshold;
+				if (remaining > 0) {
+					this.buffer.copyWithin(0, this.threshold, this.writePos);
+				}
+				this.writePos = remaining;
+			}
 		}
 
-		// Compute RMS for volume
 		let sum = 0;
-		for (let i = 0; i < processedInput.length; i++) {
-			sum += processedInput[i] * processedInput[i];
+		for (let i = 0; i < len; i++) {
+			const v = processedInput[i];
+			sum += v * v;
 		}
-		const rms = Math.sqrt(sum / processedInput.length);
-		this.port.postMessage({ type: 'volume', value: rms });
-
-		// Flush when buffer is large enough
-		if (this.buffer.length >= this.threshold) {
-			const samples = this.buffer.splice(0, this.threshold);
-			const int16 = new Int16Array(samples);
-			this.port.postMessage({ type: 'audio', samples: int16.buffer }, [int16.buffer]);
-		}
+		this.port.postMessage({ type: 'volume', value: Math.sqrt(sum / len) });
 
 		return true;
 	}
 
-	_applyLMSFilter(micSignal) {
-		// LMS (Least Mean Squares) Adaptive Filter
-		// This is the core algorithm used by WebRTC for echo cancellation
-		const output = new Float32Array(micSignal.length);
-		const refLen = Math.min(this.referenceBuffer.length, micSignal.length);
+	_applyLMSFilter(micSignal, len) {
+		if (this._scratchOutput.length < len) {
+			this._scratchOutput = new Float32Array(len);
+		}
+		const output = this._scratchOutput;
+		const refLen = Math.min(this.refLength, len);
+		const filterOrder = this.filterOrder;
+		const coeffs = this.filterCoeffs;
+		const refHist = this.referenceHistory;
 
-		for (let i = 0; i < micSignal.length; i++) {
-			// Current reference sample
+		for (let i = 0; i < len; i++) {
 			const refSample = i < refLen ? this.referenceBuffer[i] : 0;
 
-			// Update reference history buffer (circular)
-			this.referenceHistory[this.historyIndex] = refSample;
-			this.historyIndex = (this.historyIndex + 1) % this.filterOrder;
+			refHist[this.historyIndex] = refSample;
+			this.historyIndex = (this.historyIndex + 1) % filterOrder;
 
-			// Compute filter output: estimate of echo from reference signal
-			let echo_estimate = 0;
-			for (let j = 0; j < this.filterOrder; j++) {
-				const idx = (this.historyIndex + j) % this.filterOrder;
-				echo_estimate += this.filterCoeffs[j] * this.referenceHistory[idx];
+			let echoEstimate = 0;
+			for (let j = 0; j < filterOrder; j++) {
+				echoEstimate += coeffs[j] * refHist[(this.historyIndex + j) % filterOrder];
 			}
 
-			// Error signal: microphone - estimated echo
-			const error = micSignal[i] - echo_estimate;
+			const error = micSignal[i] - echoEstimate;
 
-			// Update reference power estimate (for normalization)
 			this.refPower = 0.99 * this.refPower + 0.01 * (refSample * refSample);
+			const step = this.stepSize / (this.refPower + this.epsilon);
 
-			// LMS weight update rule: adaptive step-size NLMS (Normalized LMS)
-			const normalization = this.refPower + this.epsilon;
-			const step = this.stepSize / normalization;
-
-			for (let j = 0; j < this.filterOrder; j++) {
-				const idx = (this.historyIndex + j) % this.filterOrder;
-				this.filterCoeffs[j] += step * error * this.referenceHistory[idx];
+			for (let j = 0; j < filterOrder; j++) {
+				coeffs[j] += step * error * refHist[(this.historyIndex + j) % filterOrder];
 			}
 
-			// Output is the error signal (echo cancelled)
 			output[i] = error;
 		}
 
-		// Clear reference buffer after processing
-		this.referenceBuffer = [];
+		this.referenceBuffer = null;
+		this.refLength = 0;
 		this.isPlaybackActive = true;
 
 		return output;
@@ -167,8 +167,7 @@ export class AudioCapture extends Emitter {
 				if (type === 'volume') {
 					this.emit('volume', value);
 				} else if (type === 'audio') {
-					const base64 = this._arrayBufferToBase64(samples);
-					this.emit('data', base64);
+					this.emit('data', this._arrayBufferToBase64(samples));
 				}
 			};
 
@@ -192,7 +191,7 @@ export class AudioCapture extends Emitter {
 	stop() {
 		this.active = false;
 		if (this.workletNode) {
-			this.workletNode.disconnect();
+			try { this.workletNode.disconnect(); } catch {}
 			this.workletNode = null;
 		}
 		if (this.stream) {
@@ -200,7 +199,7 @@ export class AudioCapture extends Emitter {
 			this.stream = null;
 		}
 		if (this.ctx) {
-			this.ctx.close();
+			this.ctx.close().catch(() => {});
 			this.ctx = null;
 		}
 		this.emit('stopped');
@@ -208,14 +207,16 @@ export class AudioCapture extends Emitter {
 
 	_arrayBufferToBase64(buffer) {
 		const bytes = new Uint8Array(buffer);
+		const len = bytes.length;
+		const CHUNK = 8192;
 		let binary = '';
-		for (let i = 0; i < bytes.length; i++) {
-			binary += String.fromCharCode(bytes[i]);
+		for (let i = 0; i < len; i += CHUNK) {
+			const end = Math.min(i + CHUNK, len);
+			binary += String.fromCharCode.apply(null, bytes.subarray(i, end));
 		}
 		return btoa(binary);
 	}
 
-	// Send reference signal (playback audio) to the worklet for echo suppression
 	sendReferenceSignal(float32Samples) {
 		if (!this.workletNode) return;
 		this.workletNode.port.postMessage({
@@ -224,7 +225,6 @@ export class AudioCapture extends Emitter {
 		});
 	}
 
-	// Enable/disable software echo suppression in worklet
 	setEchoSuppression(enabled) {
 		if (!this.workletNode) return;
 		this.workletNode.port.postMessage({
@@ -233,7 +233,6 @@ export class AudioCapture extends Emitter {
 		});
 	}
 
-	// Set how aggressively to suppress detected echoes (0-1)
 	setSuppressionGain(gain) {
 		if (!this.workletNode) return;
 		this.workletNode.port.postMessage({
@@ -242,7 +241,6 @@ export class AudioCapture extends Emitter {
 		});
 	}
 
-	// Notify worklet that playback has stopped (for gating)
 	notifyPlaybackStop() {
 		if (!this.workletNode) return;
 		this.workletNode.port.postMessage({ type: 'playbackStop' });

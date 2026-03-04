@@ -39,4 +39,48 @@ export default defineSchema({
   })
     .index("by_sessionId", ["sessionId"])
     .index("by_startedAt", ["startedAt"]),
+
+  runtime_events: defineTable({
+    type: v.string(),
+    timestamp: v.number(),
+    payload: v.string(),
+    source: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string()),
+  })
+    .index("by_timestamp", ["timestamp"])
+    .index("by_idempotency", ["idempotencyKey"]),
+
+  task_milestones: defineTable({
+    taskId: v.string(),
+    message: v.string(),
+    importance: v.string(),
+    status: v.optional(v.string()),
+    timestamp: v.number(),
+    idempotencyKey: v.optional(v.string()),
+  })
+    .index("by_task", ["taskId", "timestamp"])
+    .index("by_idempotency", ["idempotencyKey"]),
+
+  proactive_suggestions: defineTable({
+    text: v.string(),
+    confidence: v.number(),
+    context: v.optional(v.string()),
+    accepted: v.optional(v.boolean()),
+    timestamp: v.number(),
+    idempotencyKey: v.optional(v.string()),
+  })
+    .index("by_timestamp", ["timestamp"])
+    .index("by_idempotency", ["idempotencyKey"]),
+
+  daily_drafts: defineTable({
+    title: v.string(),
+    date: v.string(),
+    ghostId: v.optional(v.string()),
+    status: v.string(),
+    summary: v.optional(v.string()),
+    timestamp: v.number(),
+    idempotencyKey: v.optional(v.string()),
+  })
+    .index("by_date", ["date", "timestamp"])
+    .index("by_idempotency", ["idempotencyKey"]),
 });

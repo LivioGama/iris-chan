@@ -26,7 +26,6 @@ function create() {
 	const primaryDisplay = screen.getPrimaryDisplay();
 	const pos = getBottomLeftPosition(primaryDisplay);
 	currentDisplayId = primaryDisplay.id;
-
 	win = new BrowserWindow({
 		width: config.window.avatarWidth,
 		height: config.window.avatarHeight,
@@ -42,12 +41,14 @@ function create() {
 		webPreferences: {
 			webgl: true,
 			webSecurity: true,
+			sandbox: false,
 			preload: path.join(__dirname, '..', '..', 'preload.js'),
 		},
 	});
 
 	win.setIgnoreMouseEvents(true, { forward: true });
-	win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
+	const rendererPath = path.join(__dirname, '..', '..', 'renderer', 'index.html');
+	win.loadFile(rendererPath);
 
 	// Forward renderer console output to unified log (skip messages already sent via IPC logToFile)
 	win.webContents.on('console-message', (ev) => {

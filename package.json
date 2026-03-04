@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "main": "src/main/index.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dev": "NODE_ENV=development electron .",
+    "test": "node test/v2/behavior-rules.test.js && node test/v2/action-verification.test.js && node test/v2/task-lifecycle.test.js && node test/v2/ui-behavior.test.js"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",
@@ -13,6 +15,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.50",
     "@gltf-transform/core": "^4.3.0",
     "@gltf-transform/extensions": "^4.3.0",
     "convex": "^1.31.7",

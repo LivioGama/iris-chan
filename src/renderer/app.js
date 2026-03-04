@@ -1,88 +1,112 @@
-// Entry point: init avatar + voice pipeline
 import * as THREE from 'three';
 import { createScene } from './avatar/scene.js';
 import { loadAvatar } from './avatar/loader.js';
 import { applyOverlays } from './avatar/overlays.js';
-import { VoicePipeline } from './voice/pipeline.js';
-import { error as logError } from './logger.js';
+import { GeminiClient } from './gemini/client.js';
+import { AudioCapture } from './voice/capture.js';
+import { AudioPlayback } from './voice/playback.js';
+import { BehaviorEngine } from './voice/behavior-engine.js';
+import { VoiceEngine } from './voice/voice-engine.js';
+import { createScreenCaptureController } from './voice/screen-capture-controller.js';
+import { createClaudeCodeBatcher } from './voice/claude-code-batcher.js';
+import { renderToolsSkillsPanel, anchorPanelToAvatar } from './ui/tools-skills-panel.js';
+import { onRuntimeEvent } from './app-init.js';
 
-// Get avatar type from main process (async via preload)
 const avatarConfig = window.getAvatarConfig ? await window.getAvatarConfig() : null;
 const avatarType = avatarConfig?.current || 'tripo3d';
 
 const { renderer, camera, scene } = createScene();
 const { vrm, mixer, glowMaterials = [] } = await loadAvatar(scene, avatarType);
 
-// Voice pipeline
-const voice = new VoicePipeline();
-window._voicePipeline = voice;
-voice.start().catch(err => logError('Voice', 'Start error:', err));
+const gemini = new GeminiClient();
+const capture = new AudioCapture();
+const playback = new AudioPlayback();
+const behavior = new BehaviorEngine();
+const screen = createScreenCaptureController({ gemini });
+const claudeCodeBatcher = createClaudeCodeBatcher({ gemini });
 
-// Click-to-reconnect: when disconnected, hovering over avatar makes window clickable
-let mouseOverAvatar = false;
-let hoverTimeout = null;
+const voice = new VoiceEngine({
+	gemini, capture, playback, behavior,
+	screen, claudeCodeBatcher,
+});
+window._voicePipeline = voice;
+voice.start();
 
 const muteBadge = document.getElementById('mute-badge');
+const raycaster = new THREE.Raycaster();
+const mouseVec = new THREE.Vector2();
 
-window.addEventListener('mousemove', () => {
-	// Always make clickable on hover (for mute toggle + reconnect)
-	if (!mouseOverAvatar) {
-		mouseOverAvatar = true;
-		document.body.style.cursor = 'pointer';
-		window.electronAPI.setIgnoreMouseEvents(false);
+let mouseOverAvatar = false;
+window.addEventListener('mousemove', (e) => {
+	mouseVec.x = (e.clientX / window.innerWidth) * 2 - 1;
+	mouseVec.y = -(e.clientY / window.innerHeight) * 2 + 1;
+	raycaster.setFromCamera(mouseVec, camera);
+	const isOverAvatar = raycaster.intersectObject(vrm.scene, true).length > 0;
+	if (isOverAvatar !== mouseOverAvatar) {
+		mouseOverAvatar = isOverAvatar;
+		document.body.style.cursor = mouseOverAvatar ? 'pointer' : '';
+		window.electronAPI.setIgnoreMouseEvents(!mouseOverAvatar);
 	}
-	clearTimeout(hoverTimeout);
-	hoverTimeout = setTimeout(() => {
-		mouseOverAvatar = false;
-		document.body.style.cursor = '';
-		window.electronAPI.setIgnoreMouseEvents(true);
-	}, 200);
 });
 
 window.addEventListener('click', () => {
 	if (voice.needsReconnect) {
-		mouseOverAvatar = false;
-		document.body.style.cursor = '';
-		window.electronAPI.setIgnoreMouseEvents(true);
 		voice.reconnect();
 		return;
 	}
-	// Toggle mute
 	const muted = voice.toggleMute();
 	muteBadge.classList.toggle('visible', muted);
 });
 
-// Render loop
+const tools = (await window.electronAPI.getSkillDeclarations()?.then((decl) => (decl || []).map((d) => d.name)).catch(() => [])) || [];
+const skills = (await window.electronAPI.getSkillCatalog()?.then((items) => (items || []).map((s) => s.name)).catch(() => [])) || [];
+renderToolsSkillsPanel({ tools, skills });
+
+function updateSidePanelsAnchor() {
+	const canvasRect = renderer.domElement.getBoundingClientRect();
+	anchorPanelToAvatar({
+		right: Math.round(canvasRect.left + Math.min(260, canvasRect.width - 40)),
+		top: Math.round(canvasRect.top + 10),
+	});
+}
+
+updateSidePanelsAnchor();
+window.addEventListener('resize', updateSidePanelsAnchor);
+
+window.electronAPI.subscribeEvents?.();
+window.electronAPI.onEvent?.((evt) => onRuntimeEvent(evt, { askedProgress: false }));
+window.electronAPI.onTaskStream?.((data) => {
+	const mappedType = data?.type === 'done' ? 'TASK_DONE' : 'TASK_MILESTONE';
+	onRuntimeEvent({
+		type: mappedType,
+		timestamp: Date.now(),
+		payload: { message: data?.message || data?.summary || data?.status || '' },
+	}, { askedProgress: false });
+});
+window.addEventListener('beforeunload', () => {
+	window.electronAPI.unsubscribeEvents?.().catch(() => {});
+});
+
 const clock = new THREE.Clock();
 let elapsedTime = 0;
 
-// Set rotation based on avatar type
 if (avatarType === 'original') {
 	vrm.scene.rotation.y = Math.PI;
 } else {
-	const targetPosition = 12;
-	const totalPositions = 16;
-	const targetAngle = (targetPosition / totalPositions) * Math.PI * 2;
-	vrm.scene.rotation.y = targetAngle;
+	vrm.scene.rotation.y = (12 / 16) * Math.PI * 2;
 }
 
 function animate() {
 	requestAnimationFrame(animate);
 	const delta = clock.getDelta();
 	elapsedTime += delta;
-
 	mixer.update(delta);
 	applyOverlays(vrm, elapsedTime, () => voice.getSpeakingVolume());
 	vrm.update(delta);
-
 	for (const mat of glowMaterials) {
 		const shader = mat.userData?._glowShader;
-		if (shader?.uniforms?.uGlowTime) {
-			shader.uniforms.uGlowTime.value = elapsedTime;
-		}
+		if (shader?.uniforms?.uGlowTime) shader.uniforms.uGlowTime.value = elapsedTime;
 	}
-
 	renderer.render(scene, camera);
 }
-
 animate();

@@ -7,12 +7,12 @@ export class AudioPlayback extends Emitter {
 		super();
 		this.ctx = null;
 		this.gainNode = null;
-		this.queue = [];
 		this.nextStartTime = 0;
 		this.playing = false;
 		this.sources = [];
 		this.referenceCallback = null;
-		this.referenceProcessor = null;
+		this._float32Scratch = new Float32Array(8192);
+		this._resampleScratch = new Float32Array(8192);
 	}
 
 	setReferenceCallback(callback) {
@@ -32,9 +32,6 @@ export class AudioPlayback extends Emitter {
 		this.gainNode = this.ctx.createGain();
 		this.gainNode.connect(this.analyser);
 		this.analyser.connect(this.ctx.destination);
-
-		// Set up reference signal extraction (for echo cancellation)
-		this._setupReferenceExtraction();
 	}
 
 	async _setOutputDevice(preferredName) {
@@ -47,7 +44,6 @@ export class AudioPlayback extends Emitter {
 			const outputs = devices.filter(d => d.kind === 'audiooutput');
 			logInfo('Playback', `Available outputs: ${outputs.map(d => d.label).join(', ')}`);
 
-			// Use preferred name, or fall back to system default
 			const name = preferredName || this._preferredOutput;
 			if (name) {
 				const match = outputs.find(d => d.label.toLowerCase().includes(name.toLowerCase()));
@@ -68,19 +64,9 @@ export class AudioPlayback extends Emitter {
 		if (this.ctx) await this._setOutputDevice(name);
 	}
 
-	_setupReferenceExtraction() {
-		// Instead of using ScriptProcessor (deprecated, timing issues),
-		// we'll extract reference signal directly when enqueuing audio
-		// This is more reliable for echo cancellation
-		this._lastEnqueuedSamples = null;
-	}
-
-	// Called when audio is enqueued - extract and send reference signal
 	_sendReferenceSignal(float32Samples) {
-		if (this.referenceCallback && float32Samples && float32Samples.length > 0) {
-			// Resample from 24kHz to 16kHz before sending
-			const resampled = this._resample24kTo16k(float32Samples);
-			this.referenceCallback(resampled);
+		if (this.referenceCallback && float32Samples.length > 0) {
+			this.referenceCallback(this._resample24kTo16k(float32Samples));
 		}
 	}
 
@@ -100,7 +86,10 @@ export class AudioPlayback extends Emitter {
 		if (this.ctx.state === 'suspended') this.ctx.resume();
 
 		const pcm16 = this._base64ToInt16(base64Data);
-		const float32 = new Float32Array(pcm16.length);
+		if (pcm16.length > this._float32Scratch.length) {
+			this._float32Scratch = new Float32Array(pcm16.length * 2);
+		}
+		const float32 = this._float32Scratch.subarray(0, pcm16.length);
 		for (let i = 0; i < pcm16.length; i++) {
 			float32[i] = pcm16[i] / 32768;
 		}
@@ -137,41 +126,43 @@ export class AudioPlayback extends Emitter {
 	}
 
 	stop() {
-		if (this.gainNode) {
+		if (this.gainNode && this.ctx) {
 			const now = this.ctx.currentTime;
 			this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
 			this.gainNode.gain.linearRampToValueAtTime(0, now + 0.05);
 
+			const sourcesToStop = [...this.sources];
 			setTimeout(() => {
-				for (const src of this.sources) {
+				for (const src of sourcesToStop) {
 					try { src.stop(); } catch {}
 				}
-				this.sources = [];
-				this.gainNode.gain.setValueAtTime(1, this.ctx.currentTime);
+				if (this.gainNode && this.ctx) {
+					this.gainNode.gain.setValueAtTime(1, this.ctx.currentTime);
+				}
 			}, 60);
 		}
 
+		this.sources = [];
 		this.nextStartTime = 0;
 		this.playing = false;
-		this.queue = [];
 		this.emit('stopped');
 	}
 
-	// Resample from 24kHz to 16kHz
 	_resample24kTo16k(float32Data) {
 		const inputLength = float32Data.length;
-		const outputLength = Math.floor((inputLength * 16000) / 24000);
-		const output = new Float32Array(outputLength);
-
+		const outputLength = Math.floor((inputLength * 2) / 3); // 16000/24000 = 2/3
+		if (outputLength > this._resampleScratch.length) {
+			this._resampleScratch = new Float32Array(outputLength * 2);
+		}
+		const output = this._resampleScratch.subarray(0, outputLength);
 		const ratio = inputLength / outputLength;
+
 		for (let i = 0; i < outputLength; i++) {
 			const pos = i * ratio;
 			const index = Math.floor(pos);
-			const nextIndex = Math.min(index + 1, inputLength - 1);
 			const frac = pos - index;
-
-			// Linear interpolation
-			output[i] = float32Data[index] * (1 - frac) + float32Data[nextIndex] * frac;
+			const next = Math.min(index + 1, inputLength - 1);
+			output[i] = float32Data[index] * (1 - frac) + float32Data[next] * frac;
 		}
 
 		return output;
@@ -179,8 +170,9 @@ export class AudioPlayback extends Emitter {
 
 	_base64ToInt16(base64) {
 		const binary = atob(base64);
-		const bytes = new Uint8Array(binary.length);
-		for (let i = 0; i < binary.length; i++) {
+		const len = binary.length;
+		const bytes = new Uint8Array(len);
+		for (let i = 0; i < len; i++) {
 			bytes[i] = binary.charCodeAt(i);
 		}
 		return new Int16Array(bytes.buffer);

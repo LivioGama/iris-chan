@@ -1,63 +1,46 @@
-// Speech bubble show/hide/update
+const hideTimers = new Map();
 
-const hideTimers = {};
+export function getBubbleDurationMs(text, lane) {
+	const safeText = String(text || '').trim();
+	const chars = safeText.length;
+	const words = safeText ? safeText.split(/\s+/).length : 0;
+	const punctuationWeight = (safeText.match(/[.,;:!?]/g) || []).length;
 
-// Calculate display duration based on text length, complexity, and content type
-function calcDuration(text) {
-	if (!text) return 4000;
-	const words = text.split(/\s+/).length;
-	// Base reading time at ~180 WPM (slightly slower for comprehension)
-	const readTime = (words / 180) * 60 * 1000;
+	const laneBase = lane === 'thinking' ? 1800 : lane === 'context' ? 2100 : 2600;
+	const charWeight = chars * (lane === 'thinking' ? 28 : 34);
+	const wordWeight = words * 85;
+	const punctuationBoost = punctuationWeight * 90;
+	const raw = laneBase + charWeight + wordWeight + punctuationBoost;
 
-	// Complexity bonuses
-	let bonus = 0;
-	// Code/technical content needs more time
-	if (/[{}\[\]=>()]|function|const |import |export /.test(text)) bonus += 3000;
-	// Lists or multi-line content
-	if ((text.match(/\n/g) || []).length > 2) bonus += 2000;
-	// URLs or paths
-	if (/https?:\/\/|\/[a-z]+\//i.test(text)) bonus += 1500;
-	// Tool execution results (longer persistence)
-	if (/^[✓✗⚙️🔍]/.test(text) || /queued|executed|result/i.test(text)) bonus += 3000;
-	// Error messages need attention
-	if (/error|failed|exception/i.test(text)) bonus += 4000;
-
-	return Math.max(4000, Math.min(readTime + 2500 + bonus, 45000));
+	const max = lane === 'chat' ? 32000 : 24000;
+	return Math.min(max, Math.max(1500, raw));
 }
 
-export function showBubble(who, text) {
-	const bubbleId = who === 'user' ? 'bubble-user' : 'bubble-iris';
-	const textId = who === 'user' ? 'dbg-user-text' : 'dbg-model-text';
+export function showBubble(lane, text) {
+	const safeLane = ['chat', 'context', 'thinking'].includes(lane) ? lane : 'chat';
+	const safeText = String(text || '').trim();
+	if (!safeText) return;
+	const root = document.getElementById('bubbles');
+	if (!root) return;
+	const bubble = document.createElement('div');
+	bubble.className = `bubble lane-${safeLane}`;
+	bubble.textContent = safeText;
+	root.appendChild(bubble);
+	requestAnimationFrame(() => bubble.classList.add('visible'));
 
-	const textEl = document.getElementById(textId);
-	if (textEl) textEl.textContent = text;
-
-	const bubble = document.getElementById(bubbleId);
-	if (bubble) {
-		// Detect context/thinking messages and apply distinct styling
-		const isContext = who === 'model' && text && (
-			text.startsWith('[SCREEN CONTEXT]') ||
-			text.startsWith('[CONTEXT]') ||
-			text.startsWith('[SYSTEM]') ||
-			text.startsWith('[THINKING]')
-		);
-		bubble.classList.toggle('bubble-context', isContext);
-
-		// Truncate context messages to 2 visible lines
-		const textEl = document.getElementById(textId);
-		if (isContext && textEl) {
-			const maxLen = 120;
-			textEl.textContent = text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
-		}
-
-		bubble.classList.add('visible');
-		clearTimeout(hideTimers[who]);
-		const duration = isContext ? 3000 : calcDuration(text);
-		hideTimers[who] = setTimeout(() => bubble.classList.remove('visible'), duration);
-	}
+	const timeout = setTimeout(() => {
+		bubble.classList.remove('visible');
+		setTimeout(() => bubble.remove(), 180);
+	}, getBubbleDurationMs(safeText, safeLane));
+	hideTimers.set(bubble, timeout);
 }
 
-export function hideBubbles() {
-	document.getElementById('bubble-user')?.classList.remove('visible');
-	document.getElementById('bubble-iris')?.classList.remove('visible');
+export function clearBubbles() {
+	const root = document.getElementById('bubbles');
+	if (!root) return;
+	for (const timer of hideTimers.values()) clearTimeout(timer);
+	hideTimers.clear();
+	root.innerHTML = '';
 }
+
+export { clearBubbles as hideBubbles };

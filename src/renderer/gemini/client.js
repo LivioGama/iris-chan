@@ -200,11 +200,16 @@ export class GeminiClient extends Emitter {
 	}
 
 	sendToolResponse(callId, name, result) {
+		// Tool responses must always be sent (even if session dropped) to avoid
+		// hanging the conversation. Log a warning if the socket isn't ready.
+		if (!this.connected) {
+			logError('Gemini', `sendToolResponse for "${name}" but WS not connected — response will be dropped`);
+		}
 		this._send({
 			toolResponse: {
 				functionResponses: [{
 					id: callId,
-					name: name,
+					name,
 					response: { result: typeof result === 'string' ? result : JSON.stringify(result) },
 				}],
 			},
