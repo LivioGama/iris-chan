@@ -50,6 +50,14 @@ const CHANNELS = {
 	DELETE_TASKS_FILE: 'delete-tasks-file',
 	PARSE_SPEC_MD: 'parse-spec-md',
 	TASKS_FILE_UPDATED: 'tasks-file-updated',
+	TQ_CREATE_TASK: 'tq:create-task',
+	TQ_APPROVE_TASK: 'tq:approve-task',
+	TQ_CANCEL_TASK: 'tq:cancel-task',
+	TQ_DETECT_PATH: 'tq:detect-path',
+	TQ_GET_ALL: 'tq:get-all',
+	TQ_GET_BY_PROJECT: 'tq:get-by-project',
+	TQ_TASK_UPDATE: 'tq:task-update',
+	TQ_COUNTDOWN_STATE: 'tq:countdown-state',
 };
 
 const RUNTIME_CHANNELS = {

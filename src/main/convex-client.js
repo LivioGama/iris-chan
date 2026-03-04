@@ -104,6 +104,26 @@ class ConvexClient {
 			},
 		};
 	}
+
+	async createQueueTask(task, idempotencyKey) {
+		return this._run('taskQueue:createTask', { task, idempotencyKey });
+	}
+
+	async updateQueueTask(id, updates) {
+		return this._run('taskQueue:updateTask', { id, updates });
+	}
+
+	async getQueuedTasks() {
+		return this._run('taskQueue:getByStatus', { status: 'queued' });
+	}
+
+	async getAllQueueTasks() {
+		return this._run('taskQueue:getAll', {});
+	}
+
+	async getQueueTasksByProject(projectPath) {
+		return this._run('taskQueue:getByProject', { projectPath });
+	}
 }
 
 module.exports = { ConvexClient };

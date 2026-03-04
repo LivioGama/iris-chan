@@ -2,7 +2,7 @@ const skills = require('../skills');
 const log = require('../logger');
 const workspace = require('../workspace');
 
-const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './input-meta', './design', './3d-gen', './auth', './fix-project'];
+const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue'];
 
 function loadHandlers() {
 	const handlers = {};

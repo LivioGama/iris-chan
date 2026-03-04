@@ -14,7 +14,9 @@ import type {
   FunctionReference,
 } from "convex/server";
 import type * as conversations from "../conversations.js";
+import type * as runtime from "../runtime.js";
 import type * as search from "../search.js";
+import type * as taskQueue from "../taskQueue.js";
 
 /**
  * A utility for referencing Convex functions in your app's API.
@@ -26,7 +28,9 @@ import type * as search from "../search.js";
  */
 declare const fullApi: ApiFromModules<{
   conversations: typeof conversations;
+  runtime: typeof runtime;
   search: typeof search;
+  taskQueue: typeof taskQueue;
 }>;
 export declare const api: FilterApi<
   typeof fullApi,

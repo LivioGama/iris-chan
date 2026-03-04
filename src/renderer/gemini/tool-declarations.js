@@ -189,4 +189,12 @@ export const toolDeclarations = [
 			files: { type: 'STRING', description: 'Optional comma-separated list of file paths to import. Defaults to the 3 standard log files on Desktop.' },
 		} },
 	},
+	{
+		name: 'add_task',
+		description: 'Add a task to the autonomous queue for any project. Auto-detects the project from what the user is hovering in Finder/IDE. The task will be enriched with project context via Gemini Flash, reviewed with a 10-second countdown, then executed autonomously by Claude Code SDK. Use when user says "add task", "queue this", "do this later", etc.',
+		parameters: { type: 'OBJECT', properties: {
+			description: { type: 'STRING', description: 'What to do — can be vague, it will be enriched with project context automatically.' },
+			project_path: { type: 'STRING', description: 'Optional absolute path to the project. If omitted, auto-detected from what the user is hovering.' },
+		}, required: ['description'] },
+	},
 ];
