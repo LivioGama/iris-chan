@@ -74,6 +74,8 @@ const RUNTIME_CHANNELS = {
 	WINDOW_GET_GEOMETRY: 'rt:window:get-geometry',
 	WINDOW_SET_GEOMETRY: 'rt:window:set-geometry',
 	BLOG_CREATE_DAILY_DRAFT: 'rt:blog:create-daily-draft',
+	DIRECT_MODE_GET: 'rt:direct-mode:get',
+	DIRECT_MODE_SET: 'rt:direct-mode:set',
 };
 
 module.exports = { CHANNELS, RUNTIME_CHANNELS };

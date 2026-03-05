@@ -423,6 +423,8 @@
 		const activelyStreamingTasks = new Set();
 		// Track tasks that were started via SDK (vs manually moved to IN_PROGRESS)
 		const sdkRunningTasks = new Set();
+		// Track tasks recently completed via done event — prevents file-watcher reloads from regressing status
+		const recentlyCompletedTasks = new Map(); // taskId → {status, timestamp}
 
 		// Debounced reload to prevent rapid successive reloads
 		function scheduleReload() {
@@ -530,6 +532,12 @@
 						}
 					}
 
+					// Expire old entries from recentlyCompletedTasks (older than 10 seconds)
+					const now = Date.now();
+					for (const [tid, info] of recentlyCompletedTasks) {
+						if (now - info.timestamp > 10000) recentlyCompletedTasks.delete(tid);
+					}
+
 					tasks = loaded.map((task, idx) => {
 						const id = task.id || `task-${idx + 1}`;
 						const diskLogs = task.logs || '';
@@ -539,11 +547,20 @@
 						const finalLogs = preservedLogs && preservedLogs.length > diskLogs.length
 							? preservedLogs
 							: diskLogs;
+
+						// Determine status — prevent regression from DONE back to IN_PROGRESS
+						let finalStatus = mapTaskStatus(task.status);
+						const recentCompletion = recentlyCompletedTasks.get(id);
+						if (recentCompletion && finalStatus === 'IN_PROGRESS') {
+							finalStatus = recentCompletion.status;
+							console.log(`[Kanban] Preserving recently-completed status for ${id}: ${finalStatus} (disk says IN_PROGRESS)`);
+						}
+
 						return {
 							id,
 							title: task.title || 'Untitled',
 							description: task.description || '',
-							status: mapTaskStatus(task.status),
+							status: finalStatus,
 							originalStatus: task.status,
 							order: task.order || idx,
 							files: task.files || [],
@@ -1138,6 +1155,8 @@
 		// Listen for tasks.json updates from file watcher
 		if (window.electronAPI) {
 			window.electronAPI.onKanbanTasksUpdated(() => {
+				// Skip file-watcher reloads while SDK is actively streaming
+				if (activelyStreamingTasks.size > 0) return;
 				console.log('[Kanban] Detected tasks.json change, scheduling reload...');
 				scheduleReload();
 			});
@@ -1166,10 +1185,10 @@
 						}
 					}
 				} else if (data.type === 'done' && data.taskId) {
-					// Task finished — update state immediately in memory, then sync from disk
+					// Task finished — update state immediately in memory, persist to file
 					const task = tasks.find(t => t.id === data.taskId);
+					const newStatus = data.status === 'COMPLETED' ? 'DONE' : 'TODO';
 					if (task) {
-						const newStatus = data.status === 'COMPLETED' ? 'DONE' : 'TODO';
 						task.status = newStatus;
 						if (data.summary) {
 							task.logs = (task.logs || '') + '\n' + (newStatus === 'DONE' ? '✅' : '❌') + ' ' + data.summary;
@@ -1178,16 +1197,21 @@
 							if (lines.length > 50) task.logs = lines.slice(-50).join('\n');
 						}
 					}
+					// Track recently completed to prevent file-reload status regression
+					recentlyCompletedTasks.set(data.taskId, { status: newStatus, timestamp: Date.now() });
 					// Clean up streaming state
 					sdkRunningTasks.delete(data.taskId);
 					activelyStreamingTasks.delete(data.taskId);
 					// Re-render immediately to reflect completion
 					renderTasks();
-					// Then reload from disk to pick up any final state updates
+					// Persist the DONE/TODO status to the kanban's tasks.json
+					// (critical: backend SDK may write to a different file path via workspace.get())
+					saveTasksToFile();
+					syncTasksToConvex();
+					// Also reload from disk after a delay to pick up any final backend state
 					setTimeout(() => {
 						loadTasksFromFile();
-						syncTasksToConvex();
-					}, 1000);
+					}, 2000);
 				}
 			});
 		}

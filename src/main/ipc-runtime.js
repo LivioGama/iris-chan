@@ -2,6 +2,7 @@ const { ipcMain } = require('electron');
 const { RUNTIME_CHANNELS } = require('../shared/ipc-contracts.js');
 const geometryStore = require('./runtime/geometry-store');
 const avatarWindow = require('./windows/avatar-window');
+const taskQueueWatcher = require('./task-queue/watcher');
 
 function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, convexClient, dailyLoop, kanbanWindow }) {
 	const subscriptions = new Map();
@@ -60,6 +61,18 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, conv
 	ipcMain.handle(RUNTIME_CHANNELS.BLOG_CREATE_DAILY_DRAFT, async () => {
 		await dailyLoop.tick();
 		return { ok: true };
+	});
+
+	// Direct mode: get/set
+	ipcMain.handle(RUNTIME_CHANNELS.DIRECT_MODE_GET, () => behaviorEngine.getDirectMode());
+	ipcMain.handle(RUNTIME_CHANNELS.DIRECT_MODE_SET, (_, enabled) => {
+		const result = behaviorEngine.setDirectMode(enabled);
+		// Restart watcher with appropriate poll interval
+		taskQueueWatcher.restartWithNewInterval();
+		// Notify renderer
+		const win = avatarWindow.get();
+		if (win) win.webContents.send('direct-mode-changed', result.directMode);
+		return result;
 	});
 }
 

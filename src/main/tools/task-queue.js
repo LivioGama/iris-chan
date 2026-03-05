@@ -57,12 +57,21 @@ async function add_task(args) {
 			log.warn('TaskQueue', `Enrichment failed: ${err.message}`);
 		});
 
-		// Auto-approve after 10s
+		// Auto-approve after 10s (only if still in draft state — don't resurrect cancelled tasks)
 		setTimeout(async () => {
 			try {
-				await _convexClient.updateQueueTask(taskId, { status: 'queued', updatedAt: Date.now() });
-				log.info('TaskQueue', `Auto-approved task ${taskId}`);
-			} catch {}
+				// Check current status before approving — task may have been cancelled or already approved
+				const allTasks = await _convexClient.getAllQueueTasks();
+				const current = allTasks.ok && allTasks.value?.find(t => String(t._id) === String(taskId));
+				if (current && current.status === 'draft') {
+					await _convexClient.updateQueueTask(taskId, { status: 'queued', updatedAt: Date.now() });
+					log.info('TaskQueue', `Auto-approved task ${taskId}`);
+				} else {
+					log.info('TaskQueue', `Skipped auto-approve for ${taskId} (status: ${current?.status || 'not found'})`);
+				}
+			} catch (err) {
+				log.warn('TaskQueue', `Auto-approve check failed for ${taskId}: ${err.message}`);
+			}
 		}, 10000);
 
 		const projectName = resolvedPath.split('/').pop();

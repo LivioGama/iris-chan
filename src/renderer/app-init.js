@@ -21,10 +21,9 @@ export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 
 	if (evt.type === 'DB_HEALTH') {
 		const ok = evt.payload?.ok ? 'ok' : 'degraded';
-		const state = `${ok}:${evt.payload?.latencyMs ?? -1}`;
-		if (ok !== 'ok' || state !== lastDbBubbleState) {
+		if (ok !== lastDbBubbleState) {
 			showBubble('context', `DB ${ok} (${evt.payload?.latencyMs ?? -1} ms)`);
-			lastDbBubbleState = state;
+			lastDbBubbleState = ok;
 		}
 		return;
 	}
@@ -54,7 +53,7 @@ export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 	if (evt.type === 'TASK_MILESTONE' || evt.type === 'TASK_DONE') {
 		const summarized = summarizeMilestoneLine(evt.payload?.message || '');
 		if (summarized && shouldNarrateMilestone(summarized, { askedProgress })) {
-			showBubble('chat', summarized.summary);
+			showBubble('chat', summarized.summary, { role: 'iris' });
 		}
 	}
 }

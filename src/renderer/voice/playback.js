@@ -13,6 +13,7 @@ export class AudioPlayback extends Emitter {
 		this.referenceCallback = null;
 		this._float32Scratch = new Float32Array(8192);
 		this._resampleScratch = new Float32Array(8192);
+		this._generation = 0;
 	}
 
 	setReferenceCallback(callback) {
@@ -82,7 +83,7 @@ export class AudioPlayback extends Emitter {
 	}
 
 	async enqueue(base64Data) {
-		await this.init();
+		if (!this.ctx) await this.init();
 		if (this.ctx.state === 'suspended') this.ctx.resume();
 
 		const pcm16 = this._base64ToInt16(base64Data);
@@ -110,7 +111,9 @@ export class AudioPlayback extends Emitter {
 		this.nextStartTime = startTime + audioBuffer.duration;
 
 		this.sources.push(source);
+		const gen = this._generation;
 		source.onended = () => {
+			if (gen !== this._generation) return;
 			const idx = this.sources.indexOf(source);
 			if (idx >= 0) this.sources.splice(idx, 1);
 			if (this.sources.length === 0) {
@@ -126,6 +129,7 @@ export class AudioPlayback extends Emitter {
 	}
 
 	stop() {
+		this._generation++;
 		if (this.gainNode && this.ctx) {
 			const now = this.ctx.currentTime;
 			this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);

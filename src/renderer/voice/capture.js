@@ -5,16 +5,16 @@ const WORKLET_CODE = `
 class CaptureProcessor extends AudioWorkletProcessor {
 	constructor() {
 		super();
-		this.bufferSize = 4096;
+		this.bufferSize = 2048;
 		this.buffer = new Float32Array(this.bufferSize);
 		this.writePos = 0;
-		this.threshold = 2048; // ~128ms at 16kHz
+		this.threshold = 1024; // ~64ms at 16kHz (reduced from 2048/128ms for lower latency)
 		this.referenceBuffer = null;
 		this.refLength = 0;
 		this.echoSuppression = true;
 		this.suppressionGain = 1.0;
 		this.isPlaybackActive = false;
-		this.filterOrder = 512;
+		this.filterOrder = 128;
 		this.filterCoeffs = new Float32Array(this.filterOrder);
 		this.referenceHistory = new Float32Array(this.filterOrder);
 		this.historyIndex = 0;
@@ -23,6 +23,9 @@ class CaptureProcessor extends AudioWorkletProcessor {
 		this.epsilon = 1e-5;
 		this._scratchOutput = new Float32Array(128);
 		this._scratchSuppressed = new Float32Array(128);
+		this._volumeCounter = 0;
+		this._volumePeak = 0;
+		this._volumeSkip = 4;
 
 		this.port.onmessage = (ev) => {
 			const { type } = ev.data;
@@ -85,7 +88,14 @@ class CaptureProcessor extends AudioWorkletProcessor {
 			const v = processedInput[i];
 			sum += v * v;
 		}
-		this.port.postMessage({ type: 'volume', value: Math.sqrt(sum / len) });
+		const rms = Math.sqrt(sum / len);
+		if (rms > this._volumePeak) this._volumePeak = rms;
+		this._volumeCounter++;
+		if (this._volumeCounter >= this._volumeSkip) {
+			this.port.postMessage({ type: 'volume', value: this._volumePeak });
+			this._volumeCounter = 0;
+			this._volumePeak = 0;
+		}
 
 		return true;
 	}

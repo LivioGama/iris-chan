@@ -6,7 +6,7 @@ import { createScreenCaptureController } from './screen-capture-controller.js';
 import { createClaudeCodeBatcher } from './claude-code-batcher.js';
 import { VocabMatcher } from '../vocab/matcher.js';
 import { findBestNgram } from '../vocab/learner.js';
-import { showBubble, clearBubbles } from '../ui/bubbles.js';
+import { showBubble, clearBubbles, showStreamingBubble, finalizeStreamingBubble } from '../ui/bubbles.js';
 import { updateIndicator } from '../ui/status-indicators.js';
 import { showPanel as showToolsPanel, hidePanel as hideToolsPanel } from '../ui/tools-skills-panel.js';
 import { refreshWorkspace } from '../ui/workspace-bar.js';
@@ -61,7 +61,7 @@ export class VoiceEngine extends Emitter {
 			onEvent: (type, payload) => this.eventBus?.emitEvent?.(type, payload, 'voice-engine'),
 		});
 
-		this._batcher = claudeCodeBatcher || createClaudeCodeBatcher({ gemini });
+		this._batcher = claudeCodeBatcher || createClaudeCodeBatcher({ gemini, screen: this._screen });
 
 		this._toolHandler = createToolCallHandler({
 			gemini,
@@ -113,6 +113,9 @@ export class VoiceEngine extends Emitter {
 		this.gemini.on('disconnected', () => {
 			updateIndicator('ws', false);
 			updateIndicator('send', false);
+			// Finalize any in-flight streaming bubbles so they don't hang forever
+			finalizeStreamingBubble('stream-model');
+			finalizeStreamingBubble('stream-user');
 			this._setState(STATES.IDLE);
 		});
 
@@ -143,12 +146,16 @@ export class VoiceEngine extends Emitter {
 		this.gemini.on('outputTranscription', (text) => {
 			if (this._muted) return;
 			if (!this._shouldAcceptModelOutput()) return;
+			if (shouldDropTranscript(text)) return;
 			this._appendTranscript('model', text);
 		});
 
 		this.gemini.on('turnComplete', () => {
 			this._setState(STATES.LISTENING);
 			updateIndicator('think', false);
+			// Finalize streaming bubbles so they start their auto-hide timers
+			finalizeStreamingBubble('stream-model');
+			finalizeStreamingBubble('stream-user');
 			if (this._accum.model) {
 				logInfo('Conversation', `[IRIS] ${this._accum.model}`);
 				this._scanVocabulary(this._accum.model);
@@ -163,6 +170,7 @@ export class VoiceEngine extends Emitter {
 				this._learnCorrections(this._lastUserTurn, this._accum.model);
 			}
 			this._accum.model = '';
+			this._lastUserTurn = '';
 
 			if (!this._autonomousMode) {
 				const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
@@ -192,6 +200,8 @@ export class VoiceEngine extends Emitter {
 		this.gemini.on('interrupted', () => {
 			this.playback.stop();
 			this._setState(STATES.LISTENING);
+			// Finalize the model bubble on interruption so it doesn't hang
+			finalizeStreamingBubble('stream-model');
 			logInfo('Voice', 'User interrupted — playback stopped');
 		});
 
@@ -208,8 +218,12 @@ export class VoiceEngine extends Emitter {
 
 		this.capture.on('data', (base64) => {
 			if (this._muted) return;
-			const send = this.state === STATES.USER_SPEAKING || this.state === STATES.PROCESSING;
-			if (send && !this._toolExecuting) {
+			// Only block audio for synchronous tool execution (not background tasks
+			// like fix_project/self_fix which run async in main process)
+			if (this._toolExecuting) return;
+			// Send audio in LISTENING too — Gemini's server-side VAD handles speech
+			// detection with lower latency than local volume gating
+			if (this.state !== STATES.IDLE) {
 				this.gemini.sendAudio(base64);
 			}
 		});
@@ -257,6 +271,7 @@ export class VoiceEngine extends Emitter {
 	}
 
 	_setState(state) {
+		if (this.state === state) return;
 		const prev = this.state;
 		this.state = state;
 
@@ -294,14 +309,19 @@ export class VoiceEngine extends Emitter {
 		const gap = now - this._lastTranscriptTime[who];
 
 		if (gap > this._newTurnThresholdMs || !this._accum[who]) {
-			if (this._accum[who]) this._scanVocabulary(this._accum[who]);
+			// New turn — finalize the previous streaming bubble for this role
+			if (this._accum[who]) {
+				finalizeStreamingBubble(`stream-${who}`);
+				this._scanVocabulary(this._accum[who]);
+			}
 			this._accum[who] = chunk;
 		} else {
 			this._accum[who] += chunk;
 		}
 		this._lastTranscriptTime[who] = now;
 
-		showBubble('chat', this._correctTranscript(this._accum[who]));
+		const role = who === 'model' ? 'iris' : 'user';
+		showStreamingBubble('chat', this._correctTranscript(this._accum[who]), `stream-${who}`, { role });
 	}
 
 	async loadVocabulary() {
@@ -465,6 +485,15 @@ export class VoiceEngine extends Emitter {
 		window.electronAPI.onToggleAutonomous(() => this.toggleAutonomous());
 		window.electronAPI.onReloadSession(() => {
 			if (this._active) this.reconnect();
+		});
+
+		// Direct mode: sync initial state and listen for changes
+		window.electronAPI.getDirectMode().then((enabled) => {
+			this.gemini.setDirectMode(!!enabled);
+		}).catch(() => {});
+		window.electronAPI.onDirectModeChanged((enabled) => {
+			this.gemini.setDirectMode(!!enabled);
+			logInfo('Voice', `Direct mode ${enabled ? 'ENABLED' : 'DISABLED'}`);
 		});
 
 		window.electronAPI.onClaudeCodeStream((data) => {

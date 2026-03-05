@@ -11,6 +11,7 @@ import { createScreenCaptureController } from './voice/screen-capture-controller
 import { createClaudeCodeBatcher } from './voice/claude-code-batcher.js';
 import { renderToolsSkillsPanel, anchorPanelToAvatar } from './ui/tools-skills-panel.js';
 import { onRuntimeEvent } from './app-init.js';
+import { eventBusWeb } from '../shared/event-bus-web.js';
 
 const avatarConfig = window.getAvatarConfig ? await window.getAvatarConfig() : null;
 const avatarType = avatarConfig?.current || 'tripo3d';
@@ -25,9 +26,16 @@ const behavior = new BehaviorEngine();
 const screen = createScreenCaptureController({ gemini });
 const claudeCodeBatcher = createClaudeCodeBatcher({ gemini });
 
+// Adapter to match VoiceEngine's eventBus.emitEvent(type, payload, source) signature
+const eventBus = {
+	emitEvent(type, payload, source) {
+		eventBusWeb.emit(type, { ...payload, source });
+	},
+};
+
 const voice = new VoiceEngine({
 	gemini, capture, playback, behavior,
-	screen, claudeCodeBatcher,
+	eventBus, screen, claudeCodeBatcher,
 });
 window._voicePipeline = voice;
 voice.start();

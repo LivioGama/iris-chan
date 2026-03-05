@@ -58,6 +58,12 @@ export interface Config {
 		cooldownAfterTurnMs: number;
 		maxConsecutiveAutoTurns: number;
 	};
+	directMode: {
+		pollIntervalMs: number;
+		countdownSeconds: number;
+		cooldownAfterTurnMs: number;
+		maxConsecutiveAutoTurns: number;
+	};
 	avatar: {
 		current: 'original' | 'tripo3d';
 	};
@@ -117,6 +123,12 @@ const config: Config = {
 		pollIntervalMs: 60000,
 		cooldownAfterTurnMs: 15000,
 		maxConsecutiveAutoTurns: 3,
+	},
+	directMode: {
+		pollIntervalMs: 1000,       // Poll every 1s in direct mode (vs 3s normal)
+		countdownSeconds: 0,        // Skip countdown entirely — queue immediately
+		cooldownAfterTurnMs: 5000,  // Minimal cooldown between auto turns
+		maxConsecutiveAutoTurns: 10, // Higher ceiling for consecutive autonomous turns
 	},
 	avatar: {
 		// 'original' or 'tripo3d'

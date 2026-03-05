@@ -4,7 +4,8 @@ const log = require('./logger');
 
 // Latest image→screen mapping, updated every capture.
 // Tools use this to convert Gemini's image-pixel coords → CGEvent logical coords.
-let _lastMapping = { scaleX: 1, scaleY: 1 };
+// offsetX/offsetY = display origin in global screen space (non-zero on multi-monitor).
+let _lastMapping = { scaleX: 1, scaleY: 1, offsetX: 0, offsetY: 0 };
 
 function getMapping() { return _lastMapping; }
 
@@ -34,14 +35,19 @@ async function capture() {
 		const base64 = jpeg.toString('base64');
 
 		// Update mapping: image pixels → logical screen points (CGEvent coords)
+		// offsetX/offsetY = display origin for multi-monitor support.
+		// The screenshot only covers THIS display, so image (0,0) = display origin.
 		_lastMapping = {
 			scaleX: display.width / thumbSize.width,
 			scaleY: display.height / thumbSize.height,
+			offsetX: display.x,
+			offsetY: display.y,
 		};
 
-		// Cursor reported in SCREEN coordinates — convert to IMAGE coordinates for Gemini
-		const cursorImgX = Math.round(cursor.x / _lastMapping.scaleX);
-		const cursorImgY = Math.round(cursor.y / _lastMapping.scaleY);
+		// Cursor reported in GLOBAL SCREEN coordinates — convert to IMAGE coordinates for Gemini.
+		// Subtract display origin first: cursor relative to this display's top-left.
+		const cursorImgX = Math.round((cursor.x - display.x) / _lastMapping.scaleX);
+		const cursorImgY = Math.round((cursor.y - display.y) / _lastMapping.scaleY);
 
 		return {
 			ok: true,
