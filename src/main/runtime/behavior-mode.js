@@ -1,6 +1,7 @@
 class BehaviorModeState {
 	constructor() {
 		this.mode = 'silent';
+		this.directMode = false;
 	}
 
 	getMode() {
@@ -13,6 +14,15 @@ class BehaviorModeState {
 		}
 		this.mode = mode;
 		return { ok: true, mode };
+	}
+
+	getDirectMode() {
+		return this.directMode;
+	}
+
+	setDirectMode(enabled) {
+		this.directMode = !!enabled;
+		return { ok: true, directMode: this.directMode };
 	}
 }
 

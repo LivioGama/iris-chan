@@ -2,10 +2,23 @@
 const { runHelper } = require('../native-helper');
 const { getMapping } = require('../screen-capture');
 
-// Convert image-pixel coordinates (from Gemini) → logical screen coordinates (for CGEvent)
+// Convert image-pixel coordinates (from Gemini) → logical screen coordinates (for CGEvent).
+// Image (0,0) = top-left of the captured display, which lives at (offsetX, offsetY) in global screen space.
 function toScreen(imgX, imgY) {
 	const m = getMapping();
-	return { x: Math.round(imgX * m.scaleX), y: Math.round(imgY * m.scaleY) };
+	return {
+		x: Math.round(imgX * m.scaleX + (m.offsetX || 0)),
+		y: Math.round(imgY * m.scaleY + (m.offsetY || 0)),
+	};
+}
+
+// Inverse: convert logical screen coordinates (CGEvent) → image-pixel coordinates.
+function fromScreen(screenX, screenY) {
+	const m = getMapping();
+	return {
+		x: Math.round((screenX - (m.offsetX || 0)) / m.scaleX),
+		y: Math.round((screenY - (m.offsetY || 0)) / m.scaleY),
+	};
 }
 
 async function type_text(args) {
@@ -57,4 +70,4 @@ async function activate_app(args) {
 	});
 }
 
-module.exports = { type_text, press_key, click_at, double_click, mouse_move, drag, scroll, activate_app };
+module.exports = { type_text, press_key, click_at, double_click, mouse_move, drag, scroll, activate_app, fromScreen };

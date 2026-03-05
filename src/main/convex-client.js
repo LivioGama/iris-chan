@@ -27,6 +27,7 @@ class ConvexClient {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify(body),
+					signal: AbortSignal.timeout(5000),
 				});
 
 				const json = await res.json();

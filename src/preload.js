@@ -78,4 +78,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	getWindowGeometry: (windowId) => ipcRenderer.invoke(RUNTIME_CHANNELS.WINDOW_GET_GEOMETRY, windowId),
 	setWindowGeometry: (windowId, bounds) => ipcRenderer.invoke(RUNTIME_CHANNELS.WINDOW_SET_GEOMETRY, windowId, bounds),
 	createDailyDraft: () => ipcRenderer.invoke(RUNTIME_CHANNELS.BLOG_CREATE_DAILY_DRAFT),
+	getDirectMode: () => ipcRenderer.invoke(RUNTIME_CHANNELS.DIRECT_MODE_GET),
+	setDirectMode: (enabled) => ipcRenderer.invoke(RUNTIME_CHANNELS.DIRECT_MODE_SET, enabled),
+	onDirectModeChanged: (cb) => ipcRenderer.on('direct-mode-changed', (_, enabled) => cb(enabled)),
 });

@@ -384,6 +384,31 @@ canvas { display: block; }
 	color: #23203a;
 }
 
+/* Distinct role-based bubble colors for chat lane */
+.bubble.lane-chat.role-user {
+	background: linear-gradient(145deg, rgba(99, 91, 255, 0.90), rgba(120, 82, 243, 0.94));
+	color: rgba(255, 255, 255, 0.97);
+	align-self: flex-end;
+	border-bottom-right-radius: 6px;
+	box-shadow: 0 6px 28px rgba(99, 91, 255, 0.30),
+				0 2px 8px rgba(0, 0, 0, 0.10),
+				0 0 0 0.5px rgba(255, 255, 255, 0.08),
+				inset 0 1px 0 rgba(255, 255, 255, 0.15);
+	text-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.10);
+}
+
+.bubble.lane-chat.role-iris {
+	background: linear-gradient(145deg, rgba(88, 166, 255, 0.88), rgba(120, 130, 240, 0.92));
+	color: rgba(255, 255, 255, 0.97);
+	align-self: flex-start;
+	border-bottom-left-radius: 6px;
+	box-shadow: 0 6px 28px rgba(88, 166, 255, 0.25),
+				0 2px 8px rgba(0, 0, 0, 0.10),
+				0 0 0 0.5px rgba(255, 255, 255, 0.10),
+				inset 0 1px 0 rgba(255, 255, 255, 0.18);
+	text-shadow: 0 0.5px 1px rgba(0, 0, 0, 0.12);
+}
+
 .bubble.lane-context {
 	background: rgba(42, 36, 70, 0.55);
 	color: rgba(255, 255, 255, 0.78);

@@ -19,6 +19,19 @@ export class GeminiClient extends Emitter {
 		this.sessionReady = false;
 		this._reconnectTimer = null;
 		this._connectId = 0; // guards against stale WS callbacks
+		this._directMode = false;
+		this._audioMsg = {
+			realtimeInput: {
+				mediaChunks: [{
+					mimeType: 'audio/pcm;rate=16000',
+					data: '',
+				}],
+			},
+		};
+	}
+
+	setDirectMode(enabled) {
+		this._directMode = !!enabled;
 	}
 
 	async connect(apiKey) {
@@ -113,14 +126,14 @@ export class GeminiClient extends Emitter {
 						startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
 						endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
 						prefixPaddingMs: 150,
-						silenceDurationMs: 1000,
+						silenceDurationMs: 500,
 					},
 				},
 				outputAudioTranscription: {},
 				inputAudioTranscription: {},
 				tools: [{ functionDeclarations: [...toolDeclarations, ...(this._skillDeclarations || [])] }],
 				systemInstruction: {
-					parts: [{ text: buildSystemInstruction() + this._buildSkillSection() }],
+					parts: [{ text: buildSystemInstruction({ directMode: this._directMode }) + this._buildSkillSection() }],
 				},
 			},
 		};
@@ -149,39 +162,39 @@ export class GeminiClient extends Emitter {
 			return;
 		}
 
-		if (msg.serverContent?.inputTranscription?.text) {
-			this.emit('inputTranscription', msg.serverContent.inputTranscription.text);
-		}
-		if (msg.inputTranscription?.text) {
-			this.emit('inputTranscription', msg.inputTranscription.text);
+		const sc = msg.serverContent;
+		if (sc) {
+			if (sc.inputTranscription?.text) {
+				this.emit('inputTranscription', sc.inputTranscription.text);
+			}
+			if (sc.outputTranscription?.text) {
+				this.emit('outputTranscription', sc.outputTranscription.text);
+			}
+			if (sc.modelTurn?.parts) {
+				for (const part of sc.modelTurn.parts) {
+					if (part.inlineData?.data) {
+						this.emit('audio', part.inlineData.data);
+					}
+					if (part.text) {
+						this.emit('text', part.text);
+					}
+				}
+			}
+			if (sc.turnComplete) {
+				this.emit('turnComplete');
+			}
+			if (sc.interrupted) {
+				this.emit('interrupted');
+			}
 		}
 
-		if (msg.serverContent?.outputTranscription?.text) {
-			this.emit('outputTranscription', msg.serverContent.outputTranscription.text);
+		// Alternative message formats (API compatibility)
+		if (msg.inputTranscription?.text) {
+			this.emit('inputTranscription', msg.inputTranscription.text);
 		}
 		if (msg.outputTranscription?.text) {
 			this.emit('outputTranscription', msg.outputTranscription.text);
 		}
-
-		if (msg.serverContent?.modelTurn?.parts) {
-			for (const part of msg.serverContent.modelTurn.parts) {
-				if (part.inlineData?.data) {
-					this.emit('audio', part.inlineData.data);
-				}
-				if (part.text) {
-					this.emit('text', part.text);
-				}
-			}
-		}
-
-		if (msg.serverContent?.turnComplete) {
-			this.emit('turnComplete');
-		}
-
-		if (msg.serverContent?.interrupted) {
-			this.emit('interrupted');
-		}
-
 		if (msg.toolCall?.functionCalls) {
 			this.emit('toolCall', msg.toolCall.functionCalls);
 		}
@@ -189,14 +202,8 @@ export class GeminiClient extends Emitter {
 
 	sendAudio(base64Data) {
 		if (!this.sessionReady) return;
-		this._send({
-			realtimeInput: {
-				mediaChunks: [{
-					mimeType: 'audio/pcm;rate=16000',
-					data: base64Data,
-				}],
-			},
-		});
+		this._audioMsg.realtimeInput.mediaChunks[0].data = base64Data;
+		this._send(this._audioMsg);
 	}
 
 	sendToolResponse(callId, name, result) {

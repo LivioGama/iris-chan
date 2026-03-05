@@ -34,18 +34,50 @@ function getDefaultPosition(display) {
 	};
 }
 
+// On startup, reset orphaned IN_PROGRESS tasks to PENDING (they were interrupted by app restart)
+function resetOrphanedTasks() {
+	const tasksPath = path.join(process.cwd(), 'tasks.json');
+	try {
+		if (!fs.existsSync(tasksPath)) return;
+		const data = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
+		const tasks = data.tasks || [];
+		let resetCount = 0;
+		for (const task of tasks) {
+			if (task.status === 'IN_PROGRESS') {
+				task.status = 'PENDING';
+				task.logs = (task.logs || '') + '\n⚠️ Reset from IN_PROGRESS (app restarted during execution)';
+				task.updatedAt = new Date().toISOString();
+				resetCount++;
+			}
+		}
+		if (resetCount > 0) {
+			data.updatedAt = new Date().toISOString();
+			fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+			log.info('Kanban', `Reset ${resetCount} orphaned IN_PROGRESS tasks to PENDING`);
+		}
+	} catch (err) {
+		log.warn('Kanban', `Could not reset orphaned tasks: ${err.message}`);
+	}
+}
+
+let watchDebounce = null;
+
 function watchTasksFile() {
 	const tasksPath = path.join(process.cwd(), 'tasks.json');
 
 	try {
-		// Use fs.watchFile with polling for more reliable detection
-		fs.watchFile(tasksPath, { interval: 1000 }, (curr, prev) => {
+		// Use fs.watchFile with polling — 2s interval to reduce spam during SDK execution
+		fs.watchFile(tasksPath, { interval: 2000 }, (curr, prev) => {
 			// Only trigger if the file actually changed (size or mtime different)
 			if (curr.size !== prev.size || curr.mtime !== prev.mtime) {
-				if (win && !win.isDestroyed()) {
-					log.info('Kanban', 'Tasks file changed, notifying renderer');
-					win.webContents.send('tasks-file-updated');
-				}
+				// Debounce notifications to avoid rapid successive reloads
+				clearTimeout(watchDebounce);
+				watchDebounce = setTimeout(() => {
+					if (win && !win.isDestroyed()) {
+						log.info('Kanban', 'Tasks file changed, notifying renderer');
+						win.webContents.send('tasks-file-updated');
+					}
+				}, 800);
 			}
 		});
 		log.info('Kanban', 'Watching tasks.json for changes');
@@ -68,7 +100,7 @@ function create() {
 		transparent: true,
 		frame: false,
 		hasShadow: true,
-		alwaysOnTop: true,
+		alwaysOnTop: false,
 		skipTaskbar: false,
 		resizable: true,
 		focusable: true,
@@ -89,11 +121,12 @@ function create() {
 	win.webContents.on('console-message', (ev) => {
 		const m = ev.message;
 		if (!m) return;
-		const level = ev.level <= 0 ? 'info' : ev.level === 1 ? 'warn' : 'error';
+		const level = ev.level >= 3 ? 'error' : ev.level >= 2 ? 'warn' : 'info';
 		log[level]('Kanban', m);
 	});
 
-	// Watch tasks.json for changes
+	// Reset orphaned IN_PROGRESS tasks from previous session, then watch for changes
+	resetOrphanedTasks();
 	watchTasksFile();
 
 	// Save geometry on resize/move (debounced)

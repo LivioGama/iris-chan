@@ -27,9 +27,14 @@ function broadcastTaskUpdate(update: any) {
 }
 
 let convexClient: any = null;
+let behaviorEngineRef: any = null;
 
 export function setConvexClient(client: any) {
 	convexClient = client;
+}
+
+export function setBehaviorEngine(engine: any) {
+	behaviorEngineRef = engine;
 }
 
 export function register() {
@@ -67,6 +72,8 @@ export function register() {
 
 			const taskId = result.value;
 
+			const isDirectMode = behaviorEngineRef?.getDirectMode?.() ?? false;
+
 			// Start enrichment async
 			(async () => {
 				try {
@@ -84,8 +91,15 @@ export function register() {
 					log.warn('TaskQueue', `Enrichment failed for ${taskId}: ${err.message}`);
 				}
 
-				// Start countdown after enrichment (or enrichment failure)
-				startCountdown(taskId);
+				if (isDirectMode) {
+					// Direct mode: skip countdown, queue immediately
+					log.info('TaskQueue', `Direct mode: auto-queuing task ${taskId} (no countdown)`);
+					await convexClient.updateQueueTask(taskId, { status: 'queued', updatedAt: Date.now() });
+					broadcastTaskUpdate({ taskId, status: 'queued' });
+				} else {
+					// Normal mode: start countdown after enrichment (or enrichment failure)
+					startCountdown(taskId);
+				}
 			})();
 
 			return { ok: true, taskId, projectPath };
@@ -142,11 +156,21 @@ function startCountdown(taskId: string) {
 
 		if (remaining <= 0) {
 			clearCountdown(taskId);
-			// Auto-approve
+			// Auto-approve only if still in draft state (don't resurrect cancelled tasks)
 			if (convexClient) {
-				await convexClient.updateQueueTask(taskId, { status: 'queued', updatedAt: Date.now() });
-				broadcastTaskUpdate({ taskId, status: 'queued' });
-				log.info('TaskQueue', `Auto-approved task ${taskId}`);
+				try {
+					const allTasks = await convexClient.getAllQueueTasks();
+					const current = allTasks.ok && allTasks.value?.find((t: any) => String(t._id) === String(taskId));
+					if (current && current.status === 'draft') {
+						await convexClient.updateQueueTask(taskId, { status: 'queued', updatedAt: Date.now() });
+						broadcastTaskUpdate({ taskId, status: 'queued' });
+						log.info('TaskQueue', `Auto-approved task ${taskId}`);
+					} else {
+						log.info('TaskQueue', `Skipped auto-approve for ${taskId} (status: ${current?.status || 'not found'})`);
+					}
+				} catch (err: any) {
+					log.warn('TaskQueue', `Auto-approve check failed: ${err.message}`);
+				}
 			}
 		}
 	}, 1000);

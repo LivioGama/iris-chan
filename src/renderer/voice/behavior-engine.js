@@ -12,6 +12,11 @@ export class BehaviorEngine {
 		this.lastAssistantText = '';
 		this.lastAssistantTextAt = 0;
 		this.repeatCooldownMs = 20_000;
+
+		// Self-modification readiness: tracks when user announced intent to change Iris
+		this.awaitingSelfFixDetails = false;
+		this.selfFixIntentAt = 0;
+		this.selfFixIntentTimeoutMs = 120_000; // 2 min to provide details before resetting
 	}
 
 	setMode(mode) {
@@ -60,6 +65,28 @@ export class BehaviorEngine {
 
 	markSelfFixAckSent() {
 		this.idleAckSent = true;
+	}
+
+	// Called when user announces intent to modify Iris (e.g. "I'm going to change you")
+	noteSelfFixIntent() {
+		this.awaitingSelfFixDetails = true;
+		this.selfFixIntentAt = Date.now();
+	}
+
+	// Called when self_fix is actually triggered with full details
+	noteSelfFixTriggered() {
+		this.awaitingSelfFixDetails = false;
+		this.selfFixIntentAt = 0;
+	}
+
+	// Check if we're still waiting for self-fix details (with auto-timeout)
+	isAwaitingSelfFixDetails() {
+		if (!this.awaitingSelfFixDetails) return false;
+		if (Date.now() - this.selfFixIntentAt > this.selfFixIntentTimeoutMs) {
+			this.awaitingSelfFixDetails = false;
+			return false;
+		}
+		return true;
 	}
 
 	canSuggest({ confidence = 0, now = Date.now() } = {}) {

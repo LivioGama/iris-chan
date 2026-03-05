@@ -3,9 +3,11 @@ const { executeTask } = require('./executor');
 const path = require('node:path');
 const fs = require('node:fs');
 
-const POLL_INTERVAL_MS = 3000;
+const POLL_INTERVAL_NORMAL_MS = 3000;
+const POLL_INTERVAL_DIRECT_MS = 1000;
 let pollTimer = null;
 let convex = null;
+let behaviorEngineRef = null;
 const projectLocks = new Map(); // projectPath → boolean
 
 function buildPrompt(task) {
@@ -80,10 +82,24 @@ async function poll() {
 	}
 }
 
-function start(convexClient) {
+function getCurrentPollInterval() {
+	const isDirect = behaviorEngineRef?.getDirectMode?.() ?? false;
+	return isDirect ? POLL_INTERVAL_DIRECT_MS : POLL_INTERVAL_NORMAL_MS;
+}
+
+function start(convexClient, behaviorEngine) {
 	convex = convexClient;
-	log.info('TaskQueue', 'Watcher started');
-	pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+	behaviorEngineRef = behaviorEngine || null;
+	log.info('TaskQueue', `Watcher started (poll interval: ${getCurrentPollInterval()}ms)`);
+	pollTimer = setInterval(poll, getCurrentPollInterval());
+}
+
+function restartWithNewInterval() {
+	if (!convex) return;
+	if (pollTimer) clearInterval(pollTimer);
+	const interval = getCurrentPollInterval();
+	log.info('TaskQueue', `Watcher restarted with poll interval: ${interval}ms`);
+	pollTimer = setInterval(poll, interval);
 }
 
 function stop() {
@@ -94,4 +110,4 @@ function stop() {
 	log.info('TaskQueue', 'Watcher stopped');
 }
 
-module.exports = { start, stop };
+module.exports = { start, stop, restartWithNewInterval };

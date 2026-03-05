@@ -22,10 +22,11 @@ function emitStream(type, data) {
 async function fix_project(args) {
 	const description = args.description || '';
 	if (!description) return { ok: false, result: 'No description provided' };
-	if (description.length < 20) return { ok: false, result: 'Description too short. Provide detailed context: what to fix/build, expected behavior, files involved.' };
+	if (description.length < 30) return { ok: false, result: 'Description too short. Provide detailed context: what to fix/build, expected behavior, files involved. Minimum 30 characters.' };
 
 	const target = args.target || 'workspace';
-	const cwd = target === 'iris' ? IRIS_DIR : workspace.get();
+	// Allow explicit cwd override (e.g., from kanban RUN_TASK to match kanban's tasks.json path)
+	const cwd = args._cwd || (target === 'iris' ? IRIS_DIR : workspace.get());
 
 	const prompt = buildPrompt(description, cwd, target);
 	const tasksPath = path.join(cwd, 'tasks.json');
@@ -127,6 +128,8 @@ async function runSDK(prompt, cwd, tasksPath, taskId) {
 	log.info('FixProject', `Starting SDK for ${taskId} in ${cwd}`);
 	let logBuffer = '';
 	let flushTimer = null;
+	let heartbeatTimer = null;
+	let lastMessageTime = Date.now();
 
 	const flushLogs = () => {
 		try {
@@ -145,6 +148,7 @@ async function runSDK(prompt, cwd, tasksPath, taskId) {
 
 	const onLog = (line) => {
 		logBuffer += (logBuffer ? '\n' : '') + line;
+		lastMessageTime = Date.now();
 		// Stream to renderer for Iris to see
 		emitStream('log', { taskId, line });
 		if (!flushTimer) {
@@ -157,6 +161,7 @@ async function runSDK(prompt, cwd, tasksPath, taskId) {
 
 	const updateStatus = (status) => {
 		clearTimeout(flushTimer);
+		clearInterval(heartbeatTimer);
 		try {
 			const freshData = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
 			const task = (freshData.tasks || []).find(t => t.id === taskId);
@@ -170,11 +175,18 @@ async function runSDK(prompt, cwd, tasksPath, taskId) {
 		} catch {}
 	};
 
+	// Heartbeat: emit periodic status so the renderer knows we're still alive
+	heartbeatTimer = setInterval(() => {
+		const elapsed = Math.round((Date.now() - lastMessageTime) / 1000);
+		emitStream('log', { taskId, line: `[heartbeat] alive — ${elapsed}s since last SDK message` });
+	}, 30000);
+
 	try {
 		log.info('FixProject', 'Importing SDK...');
+		onLog('[status] Importing Claude Code SDK...');
 		const { query } = await import('@anthropic-ai/claude-agent-sdk');
 		log.info('FixProject', 'SDK imported, starting query...');
-		onLog('Task execution started.');
+		onLog('[status] SDK ready, starting execution...');
 
 		// Clean env to avoid conflicts with parent Claude Code session
 		const cleanEnv = { ...process.env };
@@ -198,6 +210,7 @@ async function runSDK(prompt, cwd, tasksPath, taskId) {
 				},
 			}
 		})) {
+			lastMessageTime = Date.now();
 			log.info('FixProject', `SDK msg: type=${msg.type} subtype=${msg.subtype || ''}`);
 			if (msg.type === 'assistant') {
 				for (const block of msg.message?.content || []) {
@@ -226,6 +239,9 @@ async function runSDK(prompt, cwd, tasksPath, taskId) {
 		onLog(`❌ Error: ${err.message}`);
 		updateStatus('FAILED');
 		emitStream('done', { taskId, status: 'FAILED', summary: `Error: ${err.message}` });
+	} finally {
+		clearInterval(heartbeatTimer);
+		clearTimeout(flushTimer);
 	}
 }
 

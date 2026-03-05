@@ -6,6 +6,17 @@ const FRENCH_ENGLISH_REMAP = {
 	'de': 'the',
 };
 
+// Common French phrases the user mixes into English conversation
+// These are kept as-is (not translated) so Gemini can interpret them in context
+const FRENCH_PHRASE_NORMALIZATIONS = {
+	'ah ton je vay tuh shahn zhay': 'attends je vais te changer',
+	'ah ton juh vay tuh shahn zhay': 'attends je vais te changer',
+	'a ton je ve te shon jay': 'attends je vais te changer',
+	'a ton juh veh tuh modify yay': 'attends je vais te modifier',
+	'juh veh tuh modify yay': 'je vais te modifier',
+	'juh vay tuh shahn zhay': 'je vais te changer',
+};
+
 const FILLER_PATTERNS = [
 	/^\s*(uh+|um+|hmm+|mm+)\s*$/i,
 	/^\s*(thanks|thank you|okay|ok)\s*$/i,
@@ -25,6 +36,11 @@ export function cleanTranscript(text, corrections = {}, hints = {}) {
 		const re = new RegExp(`\\b${escapeRegExp(wrong)}\\b`, 'gi');
 		out = out.replace(re, right);
 	}
+	// Normalize French phrase fragments before word-level remapping
+	for (const [wrong, right] of Object.entries(FRENCH_PHRASE_NORMALIZATIONS)) {
+		const re = new RegExp(escapeRegExp(wrong), 'gi');
+		out = out.replace(re, right);
+	}
 	for (const [wrong, right] of Object.entries(FRENCH_ENGLISH_REMAP)) {
 		const re = new RegExp(`\\b${wrong}\\b`, 'gi');
 		out = out.replace(re, right);
@@ -34,7 +50,7 @@ export function cleanTranscript(text, corrections = {}, hints = {}) {
 	return out;
 }
 
-export const IDLE_NOISE_PATTERN = /(i'?m here|silence is correct behavior|go ahead i'?m ready|standing by|waiting for your instructions)/i;
+export const IDLE_NOISE_PATTERN = /(i'?m here|i'?m listening|silence is correct behavior|go ahead i'?m ready|standing by|waiting for your instructions)/i;
 
 export function shouldDropTranscript(text) {
 	if (!text) return true;

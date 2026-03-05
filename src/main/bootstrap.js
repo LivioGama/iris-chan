@@ -14,7 +14,7 @@ const kanbanWindow = require('./windows/kanban-window');
 const { registerIpc } = require('./ipc-runtime');
 const { BehaviorModeState } = require('./runtime/behavior-mode');
 const taskQueueWatcher = require('./task-queue/watcher');
-const { setConvexClient: setTqControllerClient } = require('./controllers/taskQueueController');
+const { setConvexClient: setTqControllerClient, setBehaviorEngine: setTqBehaviorEngine } = require('./controllers/taskQueueController');
 const { setConvexClient: setTqToolClient } = require('./tools/task-queue');
 
 function startRuntime({ apiKey }) {
@@ -74,6 +74,7 @@ function startRuntime({ apiKey }) {
 	legacyIpc.register(apiKey);
 	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, convexClient, dailyLoop, kanbanWindow });
 	setTqControllerClient(convexClient);
+	setTqBehaviorEngine(behaviorEngine);
 	setTqToolClient(convexClient);
 
 	app.whenReady().then(async () => {
@@ -89,7 +90,7 @@ function startRuntime({ apiKey }) {
 		kanbanWindow.create();
 		healthService.start();
 		dailyLoop.start();
-		taskQueueWatcher.start(convexClient);
+		taskQueueWatcher.start(convexClient, behaviorEngine);
 
 		globalShortcut.register('CommandOrControl+I', () => {
 			const w = avatarWindow.get();
@@ -97,12 +98,25 @@ function startRuntime({ apiKey }) {
 		});
 		globalShortcut.register('CommandOrControl+K', () => {
 			const kWin = kanbanWindow.get();
-			if (kWin) (kWin.isVisible() ? kWin.hide() : kWin.show());
+			if (kWin) {
+				if (kWin.isVisible()) {
+					kWin.hide();
+				} else {
+					kWin.showInactive();
+					kWin.focus();
+				}
+			}
 		});
 		globalShortcut.register('CommandOrControl+Shift+M', () => {
 			const nextMode = behaviorEngine.getMode() === 'autonomous' ? 'silent' : 'autonomous';
 			behaviorEngine.setMode(nextMode);
 			if (win) win.webContents.send('mode-changed', nextMode);
+		});
+		globalShortcut.register('CommandOrControl+Shift+D', () => {
+			const next = !behaviorEngine.getDirectMode();
+			behaviorEngine.setDirectMode(next);
+			taskQueueWatcher.restartWithNewInterval();
+			if (win) win.webContents.send('direct-mode-changed', next);
 		});
 	});
 

@@ -228,25 +228,34 @@ case "drag":
     let from = CGPoint(x: x, y: y)
     var to = CGPoint(x: x2, y: y2)
 
-    // Find the screen containing the start position
+    // Convert AppKit frame (bottom-left origin) to CGEvent bounds (top-left origin).
+    // primaryH is the height of the primary display in points.
+    let primaryH = NSScreen.screens.first?.frame.height ?? 0
+
+    // Find the screen containing the start position using CGEvent coordinates
     guard let startScreen = NSScreen.screens.first(where: { screen in
         let frame = screen.frame
+        // Convert AppKit frame Y range to CGEvent Y range
+        let cgMinY = primaryH - frame.maxY  // top of this screen in CGEvent coords
+        let cgMaxY = primaryH - frame.minY  // bottom of this screen in CGEvent coords
         return from.x >= frame.minX && from.x <= frame.maxX &&
-               from.y >= frame.minY && from.y <= frame.maxY
+               from.y >= cgMinY && from.y <= cgMaxY
     }) else {
         respond(false, "Start position not on any screen: (\(Int(x)),\(Int(y)))")
     }
 
-    let screenBounds = startScreen.frame
+    let frame = startScreen.frame
+    let cgMinY = primaryH - frame.maxY
+    let cgMaxY = primaryH - frame.minY
 
     // CRITICAL: Clamp end position to stay on the same screen
     // This prevents jumping to other screens during chess moves
-    to.x = max(screenBounds.minX, min(screenBounds.maxX - 1, to.x))
-    to.y = max(screenBounds.minY, min(screenBounds.maxY - 1, to.y))
+    to.x = max(frame.minX, min(frame.maxX - 1, to.x))
+    to.y = max(cgMinY, min(cgMaxY - 1, to.y))
 
-    // Validate start position is on screen
-    guard from.x >= screenBounds.minX, from.x <= screenBounds.maxX,
-          from.y >= screenBounds.minY, from.y <= screenBounds.maxY else {
+    // Validate start position is on screen (already checked above but kept for safety)
+    guard from.x >= frame.minX, from.x <= frame.maxX,
+          from.y >= cgMinY, from.y <= cgMaxY else {
         respond(false, "Start coordinates not on detected screen")
     }
 
@@ -262,7 +271,7 @@ case "drag":
     dragDown.post(tap: .cghidEventTap)
     usleep(60_000) // 60ms - lock button state
 
-    // Smooth drag in 30 steps, staying within screen bounds
+    // Smooth drag in 30 steps, staying within screen bounds (CGEvent coords)
     let steps = 30
     for i in 1...steps {
         let t = Double(i) / Double(steps)
@@ -270,9 +279,9 @@ case "drag":
             x: from.x + (to.x - from.x) * t,
             y: from.y + (to.y - from.y) * t
         )
-        // Extra safety: clamp each intermediate position to screen bounds
-        progress.x = max(screenBounds.minX, min(screenBounds.maxX - 1, progress.x))
-        progress.y = max(screenBounds.minY, min(screenBounds.maxY - 1, progress.y))
+        // Extra safety: clamp each intermediate position to screen bounds (CGEvent coords)
+        progress.x = max(frame.minX, min(frame.maxX - 1, progress.x))
+        progress.y = max(cgMinY, min(cgMaxY - 1, progress.y))
 
         let dragMove = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseDragged, mouseCursorPosition: progress, mouseButton: .left)!
         dragMove.post(tap: .cghidEventTap)

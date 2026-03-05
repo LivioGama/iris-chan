@@ -27,27 +27,27 @@ export const toolDeclarations = [
 	},
 	{
 		name: 'click_at',
-		description: 'Click at screen coordinates. Use button "right" for right-click, default is left-click. Use the screenshot to estimate coordinates.',
+		description: 'Click at image pixel coordinates from the screenshot. Use button "right" for right-click, default is left-click. x and y are pixel positions in the screenshot image.',
 		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, button: { type: 'STRING' } }, required: ['x', 'y'] },
 	},
 	{
 		name: 'double_click',
-		description: 'Double-click at screen coordinates (e.g. to select a word or open a file).',
+		description: 'Double-click at image pixel coordinates from the screenshot (e.g. to select a word or open a file).',
 		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' } }, required: ['x', 'y'] },
 	},
 	{
 		name: 'mouse_move',
-		description: 'Move the mouse cursor to screen coordinates without clicking.',
+		description: 'Move the mouse cursor to image pixel coordinates from the screenshot, without clicking.',
 		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' } }, required: ['x', 'y'] },
 	},
 	{
 		name: 'drag',
-		description: 'Drag from one point to another (e.g. to move a window, select text, or drag files).',
+		description: 'Drag from one point to another using image pixel coordinates from the screenshot (e.g. to move a window, select text, or drag files).',
 		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, x2: { type: 'NUMBER' }, y2: { type: 'NUMBER' } }, required: ['x', 'y', 'x2', 'y2'] },
 	},
 	{
 		name: 'get_mouse_position',
-		description: 'Get the current mouse cursor position as x,y coordinates.',
+		description: 'Get the current mouse cursor position as x,y image pixel coordinates (same coordinate space as click_at, mouse_move, drag).',
 		parameters: { type: 'OBJECT', properties: {} },
 	},
 	{
@@ -167,9 +167,9 @@ export const toolDeclarations = [
 	},
 	{
 		name: 'self_fix',
-		description: 'Fix, improve, or modify your own source code. Use this whenever the user asks you to change yourself, fix a bug in yourself, add a feature to yourself, or improve your behavior. This is your MOST IMPORTANT tool \u2014 if the user says anything like "fix yourself", "change your voice", "add a feature", "improve X", "you should do Y differently", "modify your code", or any request about changing how you work, call this tool IMMEDIATELY. Claude Code runs directly on the project files \u2014 no kanban tasks or remote execution involved.',
+		description: 'Fix, improve, or modify your own source code. Use this whenever the user gives you a SPECIFIC change request about yourself \u2014 "fix yourself", "change your voice", "add a feature", "improve X", "you should do Y differently", "modify your code". This is your MOST IMPORTANT tool. CRITICAL: Only call this when you have a CONCRETE description of what to change. Do NOT call this for vague intent announcements like "I\'m going to change you" or "attends je vais te changer" \u2014 for those, acknowledge and wait for specifics first. Claude Code runs directly on the project files \u2014 no kanban tasks or remote execution involved.',
 		parameters: { type: 'OBJECT', properties: {
-			description: { type: 'STRING', description: 'Detailed description of what to fix, change, or improve. Be specific about the current behavior and desired behavior.' },
+			description: { type: 'STRING', description: 'Detailed description of what to fix, change, or improve. MUST be specific \u2014 include current behavior, desired behavior, and likely files. Minimum 50 characters. Do NOT pass vague intents like "the user wants to change me".' },
 			files_to_touch: { type: 'STRING', description: 'Comma-separated list of files likely involved. Choose from: gemini/client.js, voice/voice-engine.js, voice/capture.js, voice/playback.js, tools/index.js, screen-capture.js, main/index.js, renderer/index.html, helpers/iris-helper.swift' },
 		}, required: ['description'] },
 	},

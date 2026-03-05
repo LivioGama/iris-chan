@@ -86,10 +86,13 @@ export function register() {
             }
 
             // Use fix_project with existing task ID — handles SDK execution, log streaming, status updates
+            // Pass _cwd to ensure SDK reads/writes the same tasks.json the kanban uses (process.cwd()),
+            // not workspace.get() which may point to a different directory.
             const result = await fixProject.fix_project({
                 description: task.description,
                 target: 'workspace',
                 _taskId: taskId,  // Reuse existing kanban task instead of creating a new one
+                _cwd: process.cwd(),
             });
 
             return result;
@@ -147,7 +150,7 @@ export function register() {
     ipcMain.handle('set-kanban-visible', (_, visible: boolean) => {
         const win = kanbanWindow.get();
         if (win && !win.isDestroyed()) {
-            if (visible) win.show();
+            if (visible) win.showInactive();
             else win.hide();
             return { ok: true };
         }

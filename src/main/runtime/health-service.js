@@ -23,7 +23,7 @@ class HealthService {
 		};
 	}
 
-	start(intervalMs = 15000) {
+	start(intervalMs = 60000) {
 		if (this._timer) return;
 		const tick = () => this.getHealth().catch(() => {});
 		tick();

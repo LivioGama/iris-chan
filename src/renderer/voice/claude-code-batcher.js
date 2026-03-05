@@ -1,18 +1,66 @@
-import { info as logInfo } from '../logger.js';
+import { info as logInfo, error as logError } from '../logger.js';
 
-export function createClaudeCodeBatcher({ gemini }) {
+// Patterns that indicate task completion in terminal/log output
+const COMPLETION_PATTERNS = [
+	/✅\s*(COMPLETED|Completed|Done|SUCCESS)/i,
+	/❌\s*(FAILED|Error|Failed)/i,
+	/^Build succeeded/im,
+	/^Compiled successfully/im,
+	/^All \d+ tests? passed/im,
+	/^Tests?:\s+\d+ passed/im,
+	/^\$\s*$/m, // bare shell prompt reappearance
+	/^Done in \d+/im,
+	/^Successfully compiled/im,
+	/npm warn|npm ERR!/i, // npm completion (success or error)
+	/\[result\]\s*(success|error|fail)/i,
+];
+
+// Patterns that indicate an error/failure (must not match "0 failed" in test summaries)
+const FAILURE_PATTERNS = [
+	/❌/,
+	/(?<!\d\s)FAILED(?!\s*:?\s*0)/i, // "FAILED" but not "0 failed" or "failed: 0"
+	/^Error:/im,
+	/npm ERR!/,
+	/Build failed/i,
+	/Compilation failed/i,
+	/FATAL/i,
+	/Unhandled.*exception/i,
+];
+
+const HEARTBEAT_TIMEOUT_MS = 120_000; // 2 minutes with no log activity → stale
+const SCREENSHOT_POLL_MS = 15_000; // capture screenshot every 15s during active tasks
+const STALE_PURGE_MS = 300_000; // 5 minutes
+
+export function createClaudeCodeBatcher({ gemini, screen }) {
 	const entries = new Map();
 	let cleanupInterval = null;
+	let screenshotInterval = null;
 
+	/** Track a new log line for a task */
 	const addLine = (taskId, line) => {
 		const now = Date.now();
 		if (!entries.has(taskId)) {
-			entries.set(taskId, { lines: [], lastSent: 0, createdAt: now });
+			entries.set(taskId, {
+				lines: [],
+				lastSent: 0,
+				lastActivity: now,
+				createdAt: now,
+				completionDetected: false,
+				notifiedGemini: false,
+			});
+			logInfo('Batcher', `Tracking new task: ${taskId}`);
+			// Start screenshot monitoring if not already running
+			_ensureScreenshotPoll();
 		}
 		const entry = entries.get(taskId);
 		entry.lines.push(line);
-		if (entry.lines.length > 100) entry.lines = entry.lines.slice(-50);
+		entry.lastActivity = now;
+		if (entry.lines.length > 150) entry.lines = entry.lines.slice(-80);
 
+		// Check for completion patterns in the new line
+		_checkCompletionPattern(taskId, entry, line);
+
+		// Send batched update to Gemini every 30s
 		if (now - entry.lastSent > 30000 && gemini?.sessionReady) {
 			entry.lastSent = now;
 			const recent = entry.lines.slice(-10).join('\n');
@@ -25,8 +73,30 @@ export function createClaudeCodeBatcher({ gemini }) {
 		}
 	};
 
+	/** Check if a log line matches known completion patterns */
+	const _checkCompletionPattern = (taskId, entry, line) => {
+		if (entry.completionDetected) return;
+
+		for (const pattern of COMPLETION_PATTERNS) {
+			if (pattern.test(line)) {
+				entry.completionDetected = true;
+				const isFailure = FAILURE_PATTERNS.some(p => p.test(line));
+				logInfo('Batcher', `Completion pattern detected for ${taskId}: "${line.slice(0, 100)}" (${isFailure ? 'failure' : 'success'})`);
+				// Don't notify Gemini here — wait for the authoritative 'done' IPC event.
+				// But log it so the watchdog knows this task is wrapping up.
+				break;
+			}
+		}
+	};
+
+	/** Handle authoritative task completion from main process */
 	const handleDone = (taskId, status, summary) => {
+		const entry = entries.get(taskId);
 		entries.delete(taskId);
+		_maybeStopScreenshotPoll();
+
+		logInfo('Batcher', `Task done: ${taskId} → ${status}`);
+
 		if (gemini?.sessionReady) {
 			gemini.sendText(
 				`[CLAUDE CODE FINISHED — ${taskId}]\n` +
@@ -35,22 +105,91 @@ export function createClaudeCodeBatcher({ gemini }) {
 				'Tell the user briefly that the task finished and share the result. ' +
 				'If it failed, explain what went wrong.'
 			);
-		}
-	};
 
-	const purgeStale = () => {
-		const now = Date.now();
-		for (const [taskId, entry] of entries) {
-			if (now - (entry.createdAt || 0) > 300000 && entry.lines.length === 0) {
-				entries.delete(taskId);
-				logInfo('Batcher', `Purged stale log: ${taskId}`);
+			// Request a screenshot to visually verify the final state
+			if (screen) {
+				setTimeout(() => {
+					screen.capture(false).then(() => {
+						if (gemini?.sessionReady) {
+							gemini.sendText(
+								`[SCREENSHOT — post-task verification for ${taskId}]\n` +
+								'This screenshot shows the current state after task completion. ' +
+								'If the user asks, describe what you see to confirm the task result.'
+							);
+						}
+					}).catch(() => {});
+				}, 2000);
 			}
 		}
 	};
 
+	/** Watchdog: detect stale tasks that stopped producing output */
+	const _checkWatchdog = () => {
+		const now = Date.now();
+		for (const [taskId, entry] of entries) {
+			// Purge very old stale entries
+			if (now - (entry.createdAt || 0) > STALE_PURGE_MS && entry.lines.length === 0) {
+				entries.delete(taskId);
+				logInfo('Batcher', `Purged stale entry: ${taskId}`);
+				continue;
+			}
+
+			// Heartbeat watchdog: no activity for too long
+			if (!entry.completionDetected && now - entry.lastActivity > HEARTBEAT_TIMEOUT_MS) {
+				logInfo('Batcher', `Heartbeat timeout for ${taskId} — no activity for ${Math.round((now - entry.lastActivity) / 1000)}s`);
+				entry.completionDetected = true; // prevent re-notification
+
+				if (gemini?.sessionReady && !entry.notifiedGemini) {
+					entry.notifiedGemini = true;
+					const recentLines = entry.lines.slice(-5).join('\n');
+					gemini.sendText(
+						`[CLAUDE CODE STALE — ${taskId}]\n` +
+						`No activity for ${Math.round((now - entry.lastActivity) / 1000)} seconds.\n` +
+						`Last output:\n${recentLines || '(none)'}\n\n` +
+						'The task may be stuck or waiting for input. ' +
+						'If the user asks, let them know the task appears to have stalled.'
+					);
+				}
+
+				// Capture a screenshot for visual verification of stale state
+				if (screen) {
+					screen.capture(false).catch(() => {});
+				}
+			}
+		}
+		_maybeStopScreenshotPoll();
+	};
+
+	/** Periodic screenshot capture during active task execution */
+	const _screenshotPoll = () => {
+		if (entries.size === 0) return;
+		if (!screen) return;
+
+		screen.capture(true).catch(() => {});
+		logInfo('Batcher', `Screenshot poll — ${entries.size} active task(s)`);
+	};
+
+	const _ensureScreenshotPoll = () => {
+		if (screenshotInterval) return;
+		screenshotInterval = setInterval(_screenshotPoll, SCREENSHOT_POLL_MS);
+		logInfo('Batcher', 'Screenshot monitoring started');
+	};
+
+	const _maybeStopScreenshotPoll = () => {
+		if (entries.size === 0 && screenshotInterval) {
+			clearInterval(screenshotInterval);
+			screenshotInterval = null;
+			logInfo('Batcher', 'Screenshot monitoring stopped (no active tasks)');
+		}
+	};
+
+	const getActiveTaskIds = () => [...entries.keys()];
+
+	const hasActiveTasks = () => entries.size > 0;
+
 	const start = () => {
 		stop();
-		cleanupInterval = setInterval(purgeStale, 60000);
+		cleanupInterval = setInterval(_checkWatchdog, 30000);
 	};
 
 	const stop = () => {
@@ -58,8 +197,12 @@ export function createClaudeCodeBatcher({ gemini }) {
 			clearInterval(cleanupInterval);
 			cleanupInterval = null;
 		}
+		if (screenshotInterval) {
+			clearInterval(screenshotInterval);
+			screenshotInterval = null;
+		}
 		entries.clear();
 	};
 
-	return { addLine, handleDone, start, stop };
+	return { addLine, handleDone, start, stop, getActiveTaskIds, hasActiveTasks };
 }
