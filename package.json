@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node scripts/patch-electron-macos-plists.js && electron .",
     "dev": "node scripts/patch-electron-macos-plists.js && NODE_ENV=development electron .",
-    "test": "node test/continuity-camera-plist.test.js && node test/status-tray.test.js && node test/v2/behavior-rules.test.js && node test/v2/action-verification.test.js && node test/v2/task-lifecycle.test.js && node test/v2/ui-behavior.test.js"
+    "test": "node test/path-detector.test.js && node test/continuity-camera-plist.test.js && node test/status-tray.test.js && node test/v2/behavior-rules.test.js && node test/v2/action-verification.test.js && node test/v2/task-lifecycle.test.js && node test/v2/ui-behavior.test.js"
   },
   "devDependencies": {
     "@types/node": "^25.3.0",
