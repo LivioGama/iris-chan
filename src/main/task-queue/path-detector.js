@@ -21,25 +21,37 @@ function findProjectRoot(startPath) {
 	return null;
 }
 
+function parseHoverDetectorOutput(stdout, stderr = '') {
+	const lines = `${stdout || ''}\n${stderr || ''}`.split(/\r?\n/);
+	let detectedPath = null;
+	let app = 'Unknown';
+	let scriptError = null;
+
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (trimmed.startsWith('App:')) app = trimmed.slice(4).trim();
+		if (trimmed.startsWith('Path:')) detectedPath = trimmed.slice(5).trim();
+		if (trimmed.startsWith('Error:')) scriptError = trimmed.slice(6).trim();
+	}
+
+	return { app, detectedPath, scriptError };
+}
+
 function detectHoveredPath() {
 	return new Promise((resolve) => {
+		if (!fs.existsSync(SWIFT_SCRIPT)) {
+			return resolve({ ok: false, error: `Missing hover detector script at ${SWIFT_SCRIPT}` });
+		}
+
 		execFile('swift', [SWIFT_SCRIPT], { timeout: 5000 }, (err, stdout, stderr) => {
 			if (err) {
 				return resolve({ ok: false, error: err.message });
 			}
 
-			const lines = stdout.split('\n');
-			let detectedPath = null;
-			let app = 'Unknown';
-
-			for (const line of lines) {
-				const trimmed = line.trim();
-				if (trimmed.startsWith('App:')) app = trimmed.slice(4).trim();
-				if (trimmed.startsWith('Path:')) detectedPath = trimmed.slice(5).trim();
-			}
+			const { detectedPath, app, scriptError } = parseHoverDetectorOutput(stdout, stderr);
 
 			if (!detectedPath) {
-				return resolve({ ok: false, error: 'No path detected from hover', app });
+				return resolve({ ok: false, error: scriptError || 'No path detected from hover', app });
 			}
 
 			const projectPath = findProjectRoot(detectedPath);
@@ -52,4 +64,4 @@ function detectHoveredPath() {
 	});
 }
 
-module.exports = { detectHoveredPath, findProjectRoot };
+module.exports = { detectHoveredPath, findProjectRoot, parseHoverDetectorOutput };
