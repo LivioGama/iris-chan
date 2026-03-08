@@ -11,6 +11,7 @@ const { HealthService } = require('./runtime/health-service');
 const { DailyLoop } = require('./autonomy/daily-loop');
 const { createGhostDraft } = require('./autonomy/ghost-draft-publisher');
 const kanbanWindow = require('./windows/kanban-window');
+const { createTrayController } = require('./status-tray');
 const { registerIpc } = require('./ipc-runtime');
 const { BehaviorModeState } = require('./runtime/behavior-mode');
 const taskQueueWatcher = require('./task-queue/watcher');
@@ -34,6 +35,7 @@ function startRuntime({ apiKey }) {
 		convexClient,
 		eventBus,
 	});
+	const statusTray = createTrayController();
 	let runtimeEventSeq = 0;
 
 	eventBus.on('event', (evt) => {
@@ -88,6 +90,7 @@ function startRuntime({ apiKey }) {
 
 		const win = avatarWindow.create();
 		kanbanWindow.create();
+		statusTray.create();
 		healthService.start();
 		dailyLoop.start();
 		taskQueueWatcher.start(convexClient, behaviorEngine);
@@ -125,10 +128,12 @@ function startRuntime({ apiKey }) {
 		healthService.stop();
 		dailyLoop.stop();
 		taskQueueWatcher.stop();
+		statusTray.destroy();
+		legacyConvexStore.shutdown();
 	});
 
 	app.on('window-all-closed', () => {
-		legacyConvexStore.shutdown();
+		if (statusTray.shouldKeepAlive()) return;
 		app.quit();
 	});
 
