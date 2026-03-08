@@ -5,7 +5,7 @@ import * as log from '../logger';
 import * as convexStore from '../convex-store';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
 export interface Task {
     id: string;
@@ -27,6 +27,48 @@ export interface TasksData {
     version?: number;
     updatedAt?: string;
     tasks: Task[];
+}
+
+const KANBAN_GIT_PATHS = ['tasks.json', 'spec.md'];
+
+function runGit(args: string[], cwd: string): string {
+    return execFileSync('git', args, {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+}
+
+function isTrackedGitPath(filePath: string, cwd: string): boolean {
+    try {
+        execFileSync('git', ['ls-files', '--error-unmatch', '--', filePath], {
+            cwd,
+            stdio: 'ignore',
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function getKanbanPathsToStage(cwd: string): string[] {
+    return KANBAN_GIT_PATHS.filter((filePath) => {
+        return fs.existsSync(path.join(cwd, filePath)) || isTrackedGitPath(filePath, cwd);
+    });
+}
+
+function getGitErrorMessage(err: any): string {
+    const stderr = typeof err?.stderr === 'string'
+        ? err.stderr.trim()
+        : Buffer.isBuffer(err?.stderr)
+            ? err.stderr.toString('utf8').trim()
+            : '';
+    const stdout = typeof err?.stdout === 'string'
+        ? err.stdout.trim()
+        : Buffer.isBuffer(err?.stdout)
+            ? err.stdout.toString('utf8').trim()
+            : '';
+    return stderr || stdout || err?.message || 'Unknown git error';
 }
 
 export function register() {
@@ -159,25 +201,43 @@ export function register() {
 
     // Git operations
     ipcMain.handle('git-commit', async (_, message: string) => {
+        const cwd = process.cwd();
+        const commitMessage = message?.trim() || 'Update tasks';
         try {
-            execSync('git add .', { cwd: process.cwd() });
-            execSync(`git commit -m "${message || 'Update tasks'}"`, { cwd: process.cwd() });
+            const pathsToStage = getKanbanPathsToStage(cwd);
+            if (pathsToStage.length === 0) {
+                return { ok: false, error: 'No kanban files available to commit' };
+            }
+
+            runGit(['add', '-A', '--', ...pathsToStage], cwd);
+
+            const stagedFiles = runGit(['diff', '--cached', '--name-only', '--', ...pathsToStage], cwd)
+                .split('\n')
+                .map((line) => line.trim())
+                .filter(Boolean);
+            if (stagedFiles.length === 0) {
+                return { ok: false, error: 'No kanban changes to commit' };
+            }
+
+            runGit(['commit', '-m', commitMessage], cwd);
             log.info('Kanban', 'Git commit successful');
-            return { ok: true };
+            return { ok: true, files: stagedFiles };
         } catch (err: any) {
-            log.warn('Kanban', `Git commit failed: ${err.message}`);
-            return { ok: false, error: err.message };
+            const errorMessage = getGitErrorMessage(err);
+            log.warn('Kanban', `Git commit failed: ${errorMessage}`);
+            return { ok: false, error: errorMessage };
         }
     });
 
     ipcMain.handle('git-push', async () => {
         try {
-            execSync('git push', { cwd: process.cwd() });
+            runGit(['push'], process.cwd());
             log.info('Kanban', 'Git push successful');
             return { ok: true };
         } catch (err: any) {
-            log.warn('Kanban', `Git push failed: ${err.message}`);
-            return { ok: false, error: err.message };
+            const errorMessage = getGitErrorMessage(err);
+            log.warn('Kanban', `Git push failed: ${errorMessage}`);
+            return { ok: false, error: errorMessage };
         }
     });
 
