@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 /**
- * Verification test: Autonomous mode idle message suppression
+ * Verification test: autonomous mode idle message suppression
  *
- * Checks that the autonomous mode messages in pipeline.js and system-prompt.js
- * do NOT contain phrases that would encourage verbose idle status messages.
+ * Checks that the autonomous mode messages in voice-engine.js and
+ * system-prompt.js do NOT contain phrases that encourage verbose idle chatter.
  */
 
-import { readFileSync } from 'fs';
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
 
-const pipeline = readFileSync('src/renderer/voice/pipeline.js', 'utf-8');
-const systemPrompt = readFileSync('src/renderer/gemini/system-prompt.js', 'utf-8');
+const voiceEnginePath = path.join(__dirname, '..', 'src', 'renderer', 'voice', 'voice-engine.js');
+const systemPromptPath = path.join(__dirname, '..', 'src', 'renderer', 'gemini', 'system-prompt.js');
+const voiceEngine = readFileSync(voiceEnginePath, 'utf-8');
+const systemPrompt = readFileSync(systemPromptPath, 'utf-8');
 
 let passed = 0;
 let failed = 0;
@@ -24,12 +27,16 @@ function assert(condition, desc) {
 	}
 }
 
+function sliceFrom(source, marker, length = 1200) {
+	const start = source.indexOf(marker);
+	return start === -1 ? '' : source.slice(start, start + length);
+}
+
 console.log('\n=== Autonomous Mode Idle Message Suppression Tests ===\n');
 
 // 1. Activation message should NOT say "idle silence rules are SUSPENDED"
 console.log('1. Activation message (toggleAutonomous):');
-const activationMatch = pipeline.match(/MODE CHANGE — AUTONOMOUS MODE ACTIVATED\]\\n.*?(?=\);)/s);
-const activationMsg = activationMatch ? activationMatch[0] : '';
+const activationMsg = sliceFrom(voiceEngine, '[SYSTEM: MODE CHANGE — AUTONOMOUS MODE ACTIVATED]');
 
 assert(!activationMsg.includes('idle silence rules are SUSPENDED'),
 	'Does not say "idle silence rules are SUSPENDED"');
@@ -46,8 +53,7 @@ assert(activationMsg.includes('then STOP'),
 
 // 2. Reconnection message should NOT say "idle silence rules are SUSPENDED"
 console.log('\n2. Reconnection message:');
-const reconnectMatch = pipeline.match(/MODE CHANGE — AUTONOMOUS MODE ACTIVATED \(reconnect\)\].*?(?=\);)/s);
-const reconnectMsg = reconnectMatch ? reconnectMatch[0] : '';
+const reconnectMsg = sliceFrom(voiceEngine, '[SYSTEM: MODE CHANGE — AUTONOMOUS MODE ACTIVATED (reconnect)]', 500);
 
 assert(!reconnectMsg.includes('idle silence rules are SUSPENDED'),
 	'Does not say "idle silence rules are SUSPENDED"');
@@ -60,9 +66,7 @@ assert(reconnectMsg.includes('Do NOT announce'),
 
 // 3. Autonomous loop prompt should be brief (in _startAutonomousLoop)
 console.log('\n3. Autonomous loop follow-up prompt:');
-// Match the sendText inside _sendScreenFrame().then() — the second occurrence of [AUTONOMOUS CODING PROMPT]
-const loopSection = pipeline.match(/_startAutonomousLoop\(\)[\s\S]*?_stopAutonomousLoop/);
-const loopContent = loopSection ? loopSection[0] : '';
+const loopContent = sliceFrom(voiceEngine, '[AUTONOMOUS CODING PROMPT] If a Claude Code task is running', 300);
 
 assert(loopContent.includes('one-sentence') || loopContent.includes('One sentence'),
 	'Limits response to one sentence');
@@ -80,9 +84,9 @@ assert(systemPrompt.includes('Never repeat idle status messages'),
 
 // 5. Verify activation message does NOT contain problematic phrases
 console.log('\n5. Negative checks — problematic phrases absent:');
-const fullPipeline = pipeline;
+const fullVoiceEngine = voiceEngine;
 // Check all sendText calls related to autonomous mode
-assert(!fullPipeline.includes("'Your idle silence rules are SUSPENDED"),
+assert(!fullVoiceEngine.includes("'Your idle silence rules are SUSPENDED"),
 	'No sendText contains "Your idle silence rules are SUSPENDED"');
 
 console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
