@@ -7,7 +7,12 @@ const LOOP_STATE_PATH = path.join(os.homedir(), '.iris', 'daily-loop.json');
 const loopStore = createJsonStore(LOOP_STATE_PATH, { lastRunDate: null });
 
 function todayKey() {
-	return new Date().toISOString().slice(0, 10);
+	const now = new Date();
+	// Keep the key on the local calendar day; UTC ISO dates roll back near local midnight.
+	const year = String(now.getFullYear());
+	const month = String(now.getMonth() + 1).padStart(2, '0');
+	const day = String(now.getDate()).padStart(2, '0');
+	return `${year}-${month}-${day}`;
 }
 
 class DailyLoop {
