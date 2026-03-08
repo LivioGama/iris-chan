@@ -21,6 +21,8 @@ const STATES = {
 	TOOL_EXECUTING: 'TOOL_EXECUTING',
 };
 
+const AUTONOMOUS_LOOP_INTERVAL_MS = 600000;
+
 export class VoiceEngine extends Emitter {
 	constructor({ gemini, capture, playback, behavior, eventBus, vocab, screen, claudeCodeBatcher }) {
 		super();
@@ -435,32 +437,38 @@ export class VoiceEngine extends Emitter {
 		this._stopAutonomousLoop();
 		this._autonomousInterval = setTimeout(() => {
 			this._autonomousInterval = null;
-			if (!this._autonomousMode || !this._active || this._muted) return;
-			if (this.state !== STATES.LISTENING) return;
-			if (this._toolExecuting) return;
+			try {
+				if (!this._autonomousMode || !this._active || this._muted) return;
+				if (this.state !== STATES.LISTENING) return;
+				if (this._toolExecuting) return;
 
-			const timeSinceTurn = Date.now() - this._lastAutonomousPromptTime;
-			if (timeSinceTurn < 15000) return;
+				const timeSinceTurn = Date.now() - this._lastAutonomousPromptTime;
+				if (timeSinceTurn < 15000) return;
 
-			if (this._consecutiveAutoTurns >= 1) {
-				logInfo('Voice', 'Autonomous mode: already prompted without response, staying quiet');
-				return;
-			}
-
-			this._consecutiveAutoTurns++;
-			this._autonomousResponseExpected = true;
-			logInfo('Voice', `Autonomous follow-up prompt #${this._consecutiveAutoTurns}`);
-
-			this._screen.capture().then(() => {
-				if (this._autonomousMode) {
-					this.gemini.sendText(
-						'[AUTONOMOUS CODING PROMPT] If a Claude Code task is running, give a one-sentence progress update. ' +
-						'Otherwise, ask ONE short question about what to work on. ' +
-						'No filler, no status commentary. One sentence max, then STOP.'
-					);
+				if (this._consecutiveAutoTurns >= 1) {
+					logInfo('Voice', 'Autonomous mode: already prompted without response, staying quiet');
+					return;
 				}
-			});
-		}, 600000);
+
+				this._consecutiveAutoTurns++;
+				this._autonomousResponseExpected = true;
+				logInfo('Voice', `Autonomous follow-up prompt #${this._consecutiveAutoTurns}`);
+
+				this._screen.capture().then(() => {
+					if (this._autonomousMode) {
+						this.gemini.sendText(
+							'[AUTONOMOUS CODING PROMPT] If a Claude Code task is running, give a one-sentence progress update. ' +
+							'Otherwise, ask ONE short question about what to work on. ' +
+							'No filler, no status commentary. One sentence max, then STOP.'
+						);
+					}
+				});
+			} finally {
+				if (this._autonomousMode) {
+					this._startAutonomousLoop();
+				}
+			}
+		}, AUTONOMOUS_LOOP_INTERVAL_MS);
 	}
 
 	_stopAutonomousLoop() {
