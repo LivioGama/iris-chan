@@ -114,7 +114,7 @@ export const toolDeclarations = [
 		name: 'move_file',
 		description: 'Move or rename a file or folder. To determine the source path: look at the Finder window title bar for the current directory, or use list_directory to confirm the full path. If the user is looking at a folder in Finder, the window title shows the parent directory — combine it with the folder name to get the source path. Works across volumes.',
 		parameters: { type: 'OBJECT', properties: {
-			source: { type: 'STRING', description: 'Full path of the file or folder to move (e.g. /Users/livio/Desktop/my-folder)' },
+			source: { type: 'STRING', description: 'Full path of the file or folder to move (e.g. ~/Desktop/my-folder)' },
 			destination: { type: 'STRING', description: 'Full path of the destination. If a directory, the item is moved into it keeping its name. If a new path, the item is renamed/moved to that exact path.' },
 		}, required: ['source', 'destination'] },
 	},

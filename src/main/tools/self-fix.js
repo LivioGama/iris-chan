@@ -30,6 +30,7 @@ async function self_fix(args) {
 	return fixProject.fix_project({
 		description: args.description || '',
 		target: 'iris',
+		_runSDK: args._runSDK,
 	});
 }
 

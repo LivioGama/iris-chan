@@ -2,15 +2,18 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const workspace = require('../workspace');
-const avatarWindow = require('../windows/avatar-window');
 
-const IRIS_DIR = '/Users/livio/Documents/iris-chan';
+function getIrisDir() {
+	return path.resolve(__dirname, '..', '..', '..');
+}
 
 // Send streaming update to all windows (avatar + kanban) for live logs
 function emitStream(type, data) {
 	const payload = { type, ...data };
-	const win = avatarWindow.get();
-	if (win) win.webContents.send('claude-code-stream', payload);
+	try {
+		const win = require('../windows/avatar-window').get();
+		if (win) win.webContents.send('claude-code-stream', payload);
+	} catch {}
 	// Also send to kanban window for live log display
 	try {
 		const kanbanWindow = require('../windows/kanban-window');
@@ -26,7 +29,8 @@ async function fix_project(args) {
 
 	const target = args.target || 'workspace';
 	// Allow explicit cwd override (e.g., from kanban RUN_TASK to match kanban's tasks.json path)
-	const cwd = args._cwd || (target === 'iris' ? IRIS_DIR : workspace.get());
+	const cwd = args._cwd || (target === 'iris' ? getIrisDir() : workspace.get());
+	const runTask = args._runSDK || runSDK;
 
 	const prompt = buildPrompt(description, cwd, target);
 	const tasksPath = path.join(cwd, 'tasks.json');
@@ -82,7 +86,7 @@ async function fix_project(args) {
 		fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
 
 		// Fire-and-forget: run SDK in background
-		runSDK(prompt, cwd, tasksPath, taskId);
+		runTask(prompt, cwd, tasksPath, taskId);
 
 			const title = description.split('\n')[0].substring(0, 80);
 			return {
@@ -245,4 +249,4 @@ async function runSDK(prompt, cwd, tasksPath, taskId) {
 	}
 }
 
-module.exports = { fix_project };
+module.exports = { fix_project, getIrisDir };

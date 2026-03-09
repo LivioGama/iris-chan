@@ -4,7 +4,8 @@ Electron desktop assistant: always-on avatar overlay, voice pipeline (STT/TTS), 
 
 ```bash
 bun run dev
-bun run dev:v2
+# or
+pnpm run dev
 ```
 
 ---

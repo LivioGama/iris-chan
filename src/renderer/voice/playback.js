@@ -6,6 +6,8 @@ export class AudioPlayback extends Emitter {
 	constructor() {
 		super();
 		this.ctx = null;
+		this.analyser = null;
+		this.analyserData = null;
 		this.gainNode = null;
 		this.nextStartTime = 0;
 		this.playing = false;
@@ -14,6 +16,7 @@ export class AudioPlayback extends Emitter {
 		this._float32Scratch = new Float32Array(8192);
 		this._resampleScratch = new Float32Array(8192);
 		this._generation = 0;
+		this._initPromise = null;
 	}
 
 	setReferenceCallback(callback) {
@@ -21,18 +24,32 @@ export class AudioPlayback extends Emitter {
 	}
 
 	async init() {
-		if (this.ctx) return;
-		this.ctx = new AudioContext({ sampleRate: 24000 });
+		if (this._initPromise) return this._initPromise;
+		if (this.ctx && this.gainNode && this.analyser) return;
 
-		// Route to specific output device if available
-		await this._setOutputDevice();
+		this._initPromise = (async () => {
+			if (!this.ctx) {
+				this.ctx = new AudioContext({ sampleRate: 24000 });
+			}
 
-		this.analyser = this.ctx.createAnalyser();
-		this.analyser.fftSize = 256;
-		this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
-		this.gainNode = this.ctx.createGain();
-		this.gainNode.connect(this.analyser);
-		this.analyser.connect(this.ctx.destination);
+			if (!this.analyser || !this.gainNode) {
+				this.analyser = this.ctx.createAnalyser();
+				this.analyser.fftSize = 256;
+				this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
+				this.gainNode = this.ctx.createGain();
+				this.gainNode.connect(this.analyser);
+				this.analyser.connect(this.ctx.destination);
+			}
+
+			// Route to specific output device if available
+			await this._setOutputDevice();
+		})();
+
+		try {
+			await this._initPromise;
+		} finally {
+			this._initPromise = null;
+		}
 	}
 
 	async _setOutputDevice(preferredName) {
@@ -83,8 +100,8 @@ export class AudioPlayback extends Emitter {
 	}
 
 	async enqueue(base64Data) {
-		if (!this.ctx) await this.init();
-		if (this.ctx.state === 'suspended') this.ctx.resume();
+		await this.init();
+		if (this.ctx.state === 'suspended') await this.ctx.resume();
 
 		const pcm16 = this._base64ToInt16(base64Data);
 		if (pcm16.length > this._float32Scratch.length) {

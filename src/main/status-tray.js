@@ -56,6 +56,14 @@ function createTrayController({
 		return true;
 	}
 
+	function toggleWindow(win, opts) {
+		if (isWindowVisible(win)) {
+			hideWindow(win);
+			return 'hidden';
+		}
+		showWindow(win, opts);
+		return 'shown';
+	}
 	function getVisibilityState() {
 		return {
 			avatarVisible: isWindowVisible(getWindow(avatarWindow)),

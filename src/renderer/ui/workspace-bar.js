@@ -14,7 +14,7 @@ export async function refreshWorkspace() {
 		const dir = result?.result || '';
 		const bar = getEl();
 		if (!bar || !dir) return;
-		// Show shortened path: ~/Desktop/project instead of /Users/livio/Desktop/project
+		// Show shortened path: ~/Desktop/project instead of the full home directory path
 		const home = '/Users/' + dir.split('/')[2];
 		const display = dir.startsWith(home) ? '~' + dir.slice(home.length) : dir;
 		bar.textContent = '📂 ' + display;

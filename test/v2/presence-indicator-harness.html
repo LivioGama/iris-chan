@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Presence Indicator Harness</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<link rel="stylesheet" href="../../src/renderer/styles/overlay.css" />
+		<style>
+			body {
+				background:
+					radial-gradient(circle at top, rgba(125, 211, 252, 0.15), transparent 35%),
+					linear-gradient(180deg, #08111d, #101b2a);
+				min-height: 100vh;
+			}
+			#bubbles {
+				top: 120px;
+			}
+			.harness-controls {
+				position: fixed;
+				left: 12px;
+				top: 12px;
+				display: flex;
+				gap: 8px;
+				z-index: 10020;
+			}
+			button {
+				background: rgba(255, 255, 255, 0.08);
+				color: white;
+				border: 1px solid rgba(255, 255, 255, 0.14);
+				border-radius: 999px;
+				padding: 8px 12px;
+				cursor: pointer;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="presence-indicator" aria-live="polite" aria-atomic="true"></div>
+		<div id="bubbles"></div>
+		<div class="harness-controls">
+			<button id="thinking-btn">Thinking</button>
+			<button id="tool-btn">Tool</button>
+			<button id="replying-btn">Replying</button>
+			<button id="clear-btn">Clear</button>
+		</div>
+
+		<script type="module">
+			import { setPresence, clearAllPresence } from '../../src/renderer/ui/presence-indicator.js';
+
+			document.getElementById('thinking-btn').addEventListener('click', () => {
+				setPresence('voice', 'thinking', { detail: 'Working out the next response' });
+			});
+
+			document.getElementById('tool-btn').addEventListener('click', () => {
+				setPresence('tool', 'tool', { detail: 'In progress · Searching the web: "iris thinking state"' });
+			});
+
+			document.getElementById('replying-btn').addEventListener('click', () => {
+				setPresence('voice', 'responding', { detail: 'Turning the answer into speech' });
+			});
+
+			document.getElementById('clear-btn').addEventListener('click', () => {
+				clearAllPresence();
+			});
+
+			setPresence('voice', 'thinking', { detail: 'Working out the next response' });
+			setTimeout(() => {
+				setPresence('tool', 'tool', { detail: 'Step 1 of 1 · Searching the web: "iris thinking state"' });
+			}, 700);
+		</script>
+	</body>
+</html>

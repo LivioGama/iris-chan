@@ -18,13 +18,19 @@ class CaptureProcessor extends AudioWorkletProcessor {
 		this.filterCoeffs = new Float32Array(this.filterOrder);
 		this.referenceHistory = new Float32Array(this.filterOrder);
 		this.historyIndex = 0;
-		this.stepSize = 0.01;
+		this.stepSize = 0.004;
 		this.refPower = 0;
 		this.epsilon = 1e-5;
 		this._scratchOutput = new Float32Array(128);
 		this._scratchSuppressed = new Float32Array(128);
 		this._volumeCounter = 0;
-		this._volumePeak = 0;
+		this._meterPeak = {
+			effective: 0,
+			raw: 0,
+			residual: 0,
+			clippedRatio: 0,
+			unstableEcho: false,
+		};
 		this._volumeSkip = 4;
 
 		this.port.onmessage = (ev) => {
@@ -64,9 +70,16 @@ class CaptureProcessor extends AudioWorkletProcessor {
 			processedInput = input;
 		}
 
+		let rawSum = 0;
+		let residualSum = 0;
+		let clippedSamples = 0;
 		for (let i = 0; i < len; i++) {
+			const raw = input[i];
+			rawSum += raw * raw;
 			const s = processedInput[i];
 			const clamped = s > 1 ? 1 : s < -1 ? -1 : s;
+			if (clamped !== s) clippedSamples++;
+			residualSum += clamped * clamped;
 			this.buffer[this.writePos++] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
 
 			if (this.writePos >= this.threshold) {
@@ -83,21 +96,55 @@ class CaptureProcessor extends AudioWorkletProcessor {
 			}
 		}
 
-		let sum = 0;
-		for (let i = 0; i < len; i++) {
-			const v = processedInput[i];
-			sum += v * v;
-		}
-		const rms = Math.sqrt(sum / len);
-		if (rms > this._volumePeak) this._volumePeak = rms;
+		const metrics = this._buildFrameMetrics({
+			rawSum,
+			residualSum,
+			clippedSamples,
+			len,
+		});
+		if (metrics.effective > this._meterPeak.effective) this._meterPeak.effective = metrics.effective;
+		if (metrics.raw > this._meterPeak.raw) this._meterPeak.raw = metrics.raw;
+		if (metrics.residual > this._meterPeak.residual) this._meterPeak.residual = metrics.residual;
+		if (metrics.clippedRatio > this._meterPeak.clippedRatio) this._meterPeak.clippedRatio = metrics.clippedRatio;
+		if (metrics.unstableEcho) this._meterPeak.unstableEcho = true;
 		this._volumeCounter++;
 		if (this._volumeCounter >= this._volumeSkip) {
-			this.port.postMessage({ type: 'volume', value: this._volumePeak });
+			this.port.postMessage({ type: 'volume', value: this._meterPeak });
 			this._volumeCounter = 0;
-			this._volumePeak = 0;
+			this._meterPeak = {
+				effective: 0,
+				raw: 0,
+				residual: 0,
+				clippedRatio: 0,
+				unstableEcho: false,
+			};
 		}
 
 		return true;
+	}
+
+	_buildFrameMetrics({ rawSum, residualSum, clippedSamples, len }) {
+		const rawRms = Math.sqrt(rawSum / len);
+		const residualRms = Math.sqrt(residualSum / len);
+		const clippedRatio = clippedSamples / len;
+		let effective = residualRms;
+		let unstableEcho = false;
+
+		if (this.isPlaybackActive && this.echoSuppression) {
+			const overshootLimit = rawRms * 1.15 + 0.02;
+			if (residualRms > overshootLimit || clippedRatio > 0.08) {
+				unstableEcho = true;
+			}
+			effective = Math.min(effective, overshootLimit);
+		}
+
+		return {
+			effective,
+			raw: rawRms,
+			residual: residualRms,
+			clippedRatio,
+			unstableEcho,
+		};
 	}
 
 	_applyLMSFilter(micSignal, len) {
@@ -156,7 +203,7 @@ export class AudioCapture extends Emitter {
 	async start(retries = 2) {
 		this.stop();
 		this.stream = await navigator.mediaDevices.getUserMedia({
-			audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+			audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false }
 		});
 		this.ctx = new AudioContext({ sampleRate: 16000 });
 

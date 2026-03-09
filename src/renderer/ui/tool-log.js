@@ -63,13 +63,19 @@ function formatArgs(name, args) {
 	return '';
 }
 
+export function getToolDisplay(name, args) {
+	return {
+		label: TOOL_LABELS[name] || name.replace(/_/g, ' '),
+		detail: formatArgs(name, args),
+	};
+}
+
 export function showToolStart(name, args, index, total) {
 	clearTimeout(hideTimer);
 	const el = getContainer();
 	el.classList.add('visible');
 
-	const label = TOOL_LABELS[name] || name.replace(/_/g, ' ');
-	const detail = formatArgs(name, args);
+	const { label, detail } = getToolDisplay(name, args);
 	const counter = total > 1 ? `[${index + 1}/${total}] ` : '';
 
 	const entry = document.createElement('div');

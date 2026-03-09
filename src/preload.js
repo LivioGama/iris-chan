@@ -1,10 +1,26 @@
+const os = require('node:os');
+const path = require('node:path');
 const { contextBridge, ipcRenderer } = require('electron');
 const { CHANNELS, RUNTIME_CHANNELS } = require('./shared/ipc-contracts');
 
 const avatarConfigPromise = ipcRenderer.invoke(CHANNELS.GET_AVATAR_CONFIG);
+const irisSourceDir = path.resolve(__dirname, '..');
+const homeDir = os.homedir();
+
+function formatHomeRelativePath(targetPath) {
+	const relativePath = path.relative(homeDir, targetPath);
+	if (!relativePath || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))) {
+		return relativePath ? `~/${relativePath.split(path.sep).join('/')}` : '~';
+	}
+	return targetPath;
+}
 
 contextBridge.exposeInMainWorld('avatarConfig', null);
 contextBridge.exposeInMainWorld('getAvatarConfig', () => avatarConfigPromise);
+contextBridge.exposeInMainWorld('irisPaths', {
+	sourceDir: irisSourceDir,
+	sourceDirDisplay: formatHomeRelativePath(irisSourceDir),
+});
 
 contextBridge.exposeInMainWorld('electronAPI', {
 	getApiKey: () => ipcRenderer.invoke(CHANNELS.GET_API_KEY),

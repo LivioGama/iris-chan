@@ -4,9 +4,11 @@ import { cleanTranscript, shouldDropTranscript } from './transcription-policy.js
 import { createToolCallHandler } from './tool-call-handler.js';
 import { createScreenCaptureController } from './screen-capture-controller.js';
 import { createClaudeCodeBatcher } from './claude-code-batcher.js';
+import { BargeInDetector } from './barge-in-detector.js';
 import { VocabMatcher } from '../vocab/matcher.js';
 import { findBestNgram } from '../vocab/learner.js';
 import { showBubble, clearBubbles, showStreamingBubble, finalizeStreamingBubble } from '../ui/bubbles.js';
+import { setPresence, clearPresence, clearAllPresence } from '../ui/presence-indicator.js';
 import { updateIndicator } from '../ui/status-indicators.js';
 import { showPanel as showToolsPanel, hidePanel as hideToolsPanel } from '../ui/tools-skills-panel.js';
 import { refreshWorkspace } from '../ui/workspace-bar.js';
@@ -47,6 +49,8 @@ export class VoiceEngine extends Emitter {
 		this._newTurnThresholdMs = 3000;
 		this._lastUserTurn = '';
 		this.volumeThreshold = 0.015;
+		this._bargeIn = new BargeInDetector({ activationThreshold: this.volumeThreshold });
+		this._dropModelOutputUntilTurnComplete = false;
 
 		this._autonomousMode = false;
 		this._autonomousInterval = null;
@@ -115,6 +119,7 @@ export class VoiceEngine extends Emitter {
 		this.gemini.on('disconnected', () => {
 			updateIndicator('ws', false);
 			updateIndicator('send', false);
+			clearPresence('voice');
 			// Finalize any in-flight streaming bubbles so they don't hang forever
 			finalizeStreamingBubble('stream-model');
 			finalizeStreamingBubble('stream-user');
@@ -127,6 +132,7 @@ export class VoiceEngine extends Emitter {
 
 		this.gemini.on('audio', (data) => {
 			if (this._muted) return;
+			if (this._dropModelOutputUntilTurnComplete) return;
 			if (!this._shouldAcceptModelOutput()) return;
 			if (this.state !== STATES.RESPONDING) {
 				if (this._accum.user) {
@@ -147,12 +153,14 @@ export class VoiceEngine extends Emitter {
 
 		this.gemini.on('outputTranscription', (text) => {
 			if (this._muted) return;
+			if (this._dropModelOutputUntilTurnComplete) return;
 			if (!this._shouldAcceptModelOutput()) return;
 			if (shouldDropTranscript(text)) return;
 			this._appendTranscript('model', text);
 		});
 
 		this.gemini.on('turnComplete', () => {
+			this._dropModelOutputUntilTurnComplete = false;
 			this._setState(STATES.LISTENING);
 			updateIndicator('think', false);
 			// Finalize streaming bubbles so they start their auto-hide timers
@@ -200,6 +208,7 @@ export class VoiceEngine extends Emitter {
 		});
 
 		this.gemini.on('interrupted', () => {
+			this._dropModelOutputUntilTurnComplete = false;
 			this.playback.stop();
 			this._setState(STATES.LISTENING);
 			// Finalize the model bubble on interruption so it doesn't hang
@@ -223,6 +232,10 @@ export class VoiceEngine extends Emitter {
 			// Only block audio for synchronous tool execution (not background tasks
 			// like fix_project/self_fix which run async in main process)
 			if (this._toolExecuting) return;
+			if (this.state === STATES.RESPONDING) {
+				this._bargeIn.bufferChunk(base64);
+				return;
+			}
 			// Send audio in LISTENING too — Gemini's server-side VAD handles speech
 			// detection with lower latency than local volume gating
 			if (this.state !== STATES.IDLE) {
@@ -230,14 +243,31 @@ export class VoiceEngine extends Emitter {
 			}
 		});
 
-		this.capture.on('volume', (vol) => {
-			if (vol > this.volumeThreshold && this.state === STATES.LISTENING) {
+		this.capture.on('volume', (reading) => {
+			const meter = this._normalizeVolumeReading(reading);
+			if (meter.effective > this.volumeThreshold && this.state === STATES.LISTENING) {
 				this._setState(STATES.USER_SPEAKING);
-			} else if (vol > this.volumeThreshold && this.state === STATES.RESPONDING) {
-				logInfo('Voice', 'User speaking during response — interrupting');
-				this.playback.stop();
-				this._setState(STATES.USER_SPEAKING);
-			} else if (vol < this.volumeThreshold * 0.5 && this.state === STATES.USER_SPEAKING) {
+			} else if (this.state === STATES.RESPONDING) {
+				const playbackVolume = this.playback.getVolume();
+				const gate = this._bargeIn.observeVolume({
+					micVolume: meter.effective,
+					playbackVolume,
+					unstableEcho: meter.unstableEcho,
+				});
+				if (gate.confirmed) {
+					this._confirmBargeIn('sustained speech', {
+						heldMs: gate.heldMs,
+						micVolume: meter.effective,
+						rawMicVolume: meter.raw,
+						residualMicVolume: meter.residual,
+						playbackVolume,
+						threshold: gate.threshold,
+						noiseFloor: gate.noiseFloor,
+						clippedRatio: meter.clippedRatio,
+						unstableEcho: meter.unstableEcho,
+					});
+				}
+			} else if (meter.effective < this.volumeThreshold * 0.5 && this.state === STATES.USER_SPEAKING) {
 				this._setState(STATES.PROCESSING);
 			}
 		});
@@ -257,7 +287,13 @@ export class VoiceEngine extends Emitter {
 			}
 		});
 
-		this.playback.on('stopped', () => updateIndicator('speak', false));
+		this.playback.on('stopped', () => {
+			updateIndicator('speak', false);
+			this.capture.notifyPlaybackStop();
+			if (this.state === STATES.RESPONDING) {
+				this._setState(STATES.LISTENING);
+			}
+		});
 	}
 
 	_shouldAcceptModelOutput() {
@@ -276,6 +312,12 @@ export class VoiceEngine extends Emitter {
 		if (this.state === state) return;
 		const prev = this.state;
 		this.state = state;
+
+		if (prev !== STATES.RESPONDING && state === STATES.RESPONDING) {
+			this._bargeIn.beginResponse();
+		} else if (prev === STATES.RESPONDING && state !== STATES.RESPONDING) {
+			this._bargeIn.endResponse();
+		}
 
 		if (prev === STATES.LISTENING && state === STATES.USER_SPEAKING) {
 			this._screen.capture();
@@ -303,6 +345,60 @@ export class VoiceEngine extends Emitter {
 		updateIndicator('voice', state === STATES.USER_SPEAKING);
 		updateIndicator('think', state === STATES.PROCESSING);
 		updateIndicator('speak', state === STATES.RESPONDING);
+
+		if (state === STATES.PROCESSING) {
+			setPresence('voice', 'thinking', {
+				title: 'Thinking',
+				detail: 'Working out the next response',
+			});
+		} else if (state === STATES.TOOL_EXECUTING) {
+			setPresence('voice', 'thinking', {
+				title: 'Working',
+				detail: 'Using tools to make progress',
+			});
+		} else if (state === STATES.RESPONDING) {
+			setPresence('voice', 'responding', {
+				title: 'Replying',
+				detail: 'Turning the answer into speech',
+			});
+		} else {
+			clearPresence('voice');
+		}
+	}
+
+	_confirmBargeIn(reason, details = {}) {
+		if (this.state !== STATES.RESPONDING) return;
+		const bufferedChunks = this._bargeIn.confirm();
+		this._dropModelOutputUntilTurnComplete = true;
+		logInfo(
+			'Voice',
+			`User speaking during response — interrupting (${reason}, held=${details.heldMs ?? 0}ms, mic=${(details.micVolume || 0).toFixed(3)}, raw=${(details.rawMicVolume || 0).toFixed(3)}, residual=${(details.residualMicVolume || 0).toFixed(3)}, playback=${(details.playbackVolume || 0).toFixed(3)}, threshold=${(details.threshold || 0).toFixed(3)}, floor=${(details.noiseFloor || 0).toFixed(3)}, clipped=${(details.clippedRatio || 0).toFixed(3)}, unstableEcho=${details.unstableEcho ? 'yes' : 'no'})`
+		);
+		this.playback.stop();
+		this._setState(STATES.USER_SPEAKING);
+		for (const chunk of bufferedChunks) {
+			this.gemini.sendAudio(chunk);
+		}
+	}
+
+	_normalizeVolumeReading(reading) {
+		if (typeof reading === 'number') {
+			return {
+				effective: reading,
+				raw: reading,
+				residual: reading,
+				clippedRatio: 0,
+				unstableEcho: false,
+			};
+		}
+
+		return {
+			effective: reading?.effective || 0,
+			raw: reading?.raw || 0,
+			residual: reading?.residual || 0,
+			clippedRatio: reading?.clippedRatio || 0,
+			unstableEcho: !!reading?.unstableEcho,
+		};
 	}
 
 	_appendTranscript(who, chunk) {
@@ -542,6 +638,7 @@ export class VoiceEngine extends Emitter {
 		for (const id of ['ws', 'mic', 'voice', 'send', 'think', 'speak', 'tool', 'srch']) {
 			updateIndicator(id, false);
 		}
+		clearAllPresence();
 		clearBubbles();
 		hideToolsPanel();
 		window.electronAPI.searchHide();

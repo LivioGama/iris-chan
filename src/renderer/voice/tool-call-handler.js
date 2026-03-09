@@ -1,5 +1,6 @@
 import { EVENT_TYPES } from '../../shared/event-types.web.js';
-import { showToolStart, showToolDone, hideToolLog } from '../ui/tool-log.js';
+import { showToolStart, showToolDone, hideToolLog, getToolDisplay } from '../ui/tool-log.js';
+import { setPresence, clearPresence } from '../ui/presence-indicator.js';
 import { updateIfWorkspaceTool } from '../ui/workspace-bar.js';
 import { info as logInfo, error as logError } from '../logger.js';
 
@@ -29,7 +30,20 @@ function searchLabel(name, args) {
 }
 
 export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }) {
+	let activeToolCount = 0;
+
+	function updateToolPresence(name, args, index, total) {
+		const { label, detail } = getToolDisplay(name, args);
+		const step = total > 1 ? `Step ${index + 1} of ${total}` : 'In progress';
+		setPresence('tool', 'tool', {
+			title: 'Working',
+			detail: detail ? `${step} · ${label}: ${detail}` : `${step} · ${label}`,
+		});
+	}
+
 	const _executeOne = async (name, args, id, index, total) => {
+		activeToolCount++;
+		updateToolPresence(name, args, index, total);
 		showToolStart(name, args, index, total);
 		logInfo('Tool', `Executing: ${name}(${JSON.stringify(args || {})})`.slice(0, 500));
 
@@ -57,6 +71,11 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 			window.electronAPI.saveToolExecution(name, args, err.message, false, Date.now() - toolStart);
 			if (isSearch) {
 				window.electronAPI.searchResult(searchLabel(name, args), 'Error: ' + err.message);
+			}
+		} finally {
+			activeToolCount = Math.max(0, activeToolCount - 1);
+			if (activeToolCount === 0) {
+				clearPresence('tool');
 			}
 		}
 	};

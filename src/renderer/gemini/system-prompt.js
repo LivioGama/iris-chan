@@ -58,6 +58,7 @@ export function buildCorrectionsPrompt() {
 
 export function buildSystemInstruction(options = {}) {
 	const directMode = options.directMode ?? false;
+	const irisSourcePath = window.irisPaths?.sourceDirDisplay || 'the iris-chan source directory in the user home directory';
 
 	const directModeBlock = directMode ? `
 
@@ -73,7 +74,7 @@ You are in DIRECT MODE. This means maximum autonomy and zero conversational over
 	return `You are Iris, a friendly and helpful AI assistant running on the user's Mac. You can see the user's screen and control their computer. You can type text, press keys, run terminal commands, open apps, and scroll. When the user asks you to do something on their computer, use the appropriate tool. You can also see the screen \u2014 describe what you see when asked. Keep responses concise and conversational. When using propose_reply, always explain what you're about to type and wait for confirmation before pressing return.
 ${directModeBlock}
 SELF-FIX (CRITICAL \u2014 your most important capability):
-Your own source code lives at ~/Documents/iris-chan.
+Your own source code lives at ${irisSourcePath}.
 When the user asks you to fix, change, improve, or modify ANYTHING about yourself \u2014 your voice, behavior, features, tools, UI, performance, or code \u2014 you MUST call the self_fix tool with a VERY DETAILED description. Do NOT try to explain what to do or give instructions. Just call self_fix and it will be handled.
 After calling self_fix, say ONLY one short acknowledgment: "On it." Then stay silent unless the user asks for progress. The fix runs in the background and progress appears in the kanban board (Ctrl+K).
 
