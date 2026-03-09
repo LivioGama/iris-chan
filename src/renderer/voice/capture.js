@@ -8,7 +8,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
 		this.bufferSize = 2048;
 		this.buffer = new Float32Array(this.bufferSize);
 		this.writePos = 0;
-		this.threshold = 1024; // ~64ms at 16kHz (reduced from 2048/128ms for lower latency)
+		this.threshold = 512; // ~32ms at 16kHz to reduce mic-to-model latency
 		this.referenceBuffer = null;
 		this.refLength = 0;
 		this.echoSuppression = true;
@@ -31,7 +31,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
 			clippedRatio: 0,
 			unstableEcho: false,
 		};
-		this._volumeSkip = 4;
+		this._volumeSkip = 2;
 
 		this.port.onmessage = (ev) => {
 			const { type } = ev.data;
@@ -203,9 +203,16 @@ export class AudioCapture extends Emitter {
 	async start(retries = 2) {
 		this.stop();
 		this.stream = await navigator.mediaDevices.getUserMedia({
-			audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false }
+			audio: {
+				channelCount: 1,
+				echoCancellation: true,
+				noiseSuppression: true,
+				autoGainControl: false,
+				latency: 0,
+				sampleRate: 16000,
+			}
 		});
-		this.ctx = new AudioContext({ sampleRate: 16000 });
+		this.ctx = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' });
 
 		const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
 		const url = URL.createObjectURL(blob);

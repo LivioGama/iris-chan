@@ -17,6 +17,8 @@ export class AudioPlayback extends Emitter {
 		this._resampleScratch = new Float32Array(8192);
 		this._generation = 0;
 		this._initPromise = null;
+		this._catchUpLeadSeconds = 0.2;
+		this._catchUpPlaybackRate = 1.04;
 	}
 
 	setReferenceCallback(callback) {
@@ -29,7 +31,7 @@ export class AudioPlayback extends Emitter {
 
 		this._initPromise = (async () => {
 			if (!this.ctx) {
-				this.ctx = new AudioContext({ sampleRate: 24000 });
+				this.ctx = new AudioContext({ sampleRate: 24000, latencyHint: 'interactive' });
 			}
 
 			if (!this.analyser || !this.gainNode) {
@@ -123,9 +125,16 @@ export class AudioPlayback extends Emitter {
 		source.connect(this.gainNode);
 
 		const now = this.ctx.currentTime;
+		const bufferedLead = Math.max(0, this.nextStartTime - now);
+		const playbackRate = bufferedLead > this._catchUpLeadSeconds
+			? this._catchUpPlaybackRate
+			: 1;
+		if (source.playbackRate && typeof source.playbackRate.value === 'number') {
+			source.playbackRate.value = playbackRate;
+		}
 		const startTime = Math.max(now, this.nextStartTime);
 		source.start(startTime);
-		this.nextStartTime = startTime + audioBuffer.duration;
+		this.nextStartTime = startTime + (audioBuffer.duration / playbackRate);
 
 		this.sources.push(source);
 		const gen = this._generation;
@@ -150,7 +159,7 @@ export class AudioPlayback extends Emitter {
 		if (this.gainNode && this.ctx) {
 			const now = this.ctx.currentTime;
 			this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
-			this.gainNode.gain.linearRampToValueAtTime(0, now + 0.05);
+			this.gainNode.gain.linearRampToValueAtTime(0, now + 0.02);
 
 			const sourcesToStop = [...this.sources];
 			setTimeout(() => {
@@ -160,7 +169,7 @@ export class AudioPlayback extends Emitter {
 				if (this.gainNode && this.ctx) {
 					this.gainNode.gain.setValueAtTime(1, this.ctx.currentTime);
 				}
-			}, 60);
+			}, 25);
 		}
 
 		this.sources = [];

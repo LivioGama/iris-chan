@@ -6,6 +6,13 @@ import { info as logInfo, error as logError } from '../logger.js';
 
 const ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 const MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
+const LOW_LATENCY_ACTIVITY_DETECTION = {
+	disabled: false,
+	startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+	endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
+	prefixPaddingMs: 20,
+	silenceDurationMs: 140,
+};
 
 export class GeminiClient extends Emitter {
 	constructor() {
@@ -22,10 +29,10 @@ export class GeminiClient extends Emitter {
 		this._directMode = false;
 		this._audioMsg = {
 			realtimeInput: {
-				mediaChunks: [{
+				audio: {
 					mimeType: 'audio/pcm;rate=16000',
 					data: '',
-				}],
+				},
 			},
 		};
 	}
@@ -121,13 +128,8 @@ export class GeminiClient extends Emitter {
 					},
 				},
 				realtimeInputConfig: {
-					automaticActivityDetection: {
-						disabled: false,
-						startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
-						endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
-						prefixPaddingMs: 150,
-						silenceDurationMs: 500,
-					},
+					activityHandling: 'START_OF_ACTIVITY_INTERRUPTS',
+					automaticActivityDetection: LOW_LATENCY_ACTIVITY_DETECTION,
 				},
 				outputAudioTranscription: {},
 				inputAudioTranscription: {},
@@ -202,7 +204,7 @@ export class GeminiClient extends Emitter {
 
 	sendAudio(base64Data) {
 		if (!this.sessionReady) return;
-		this._audioMsg.realtimeInput.mediaChunks[0].data = base64Data;
+		this._audioMsg.realtimeInput.audio.data = base64Data;
 		this._send(this._audioMsg);
 	}
 
@@ -229,6 +231,15 @@ export class GeminiClient extends Emitter {
 			clientContent: {
 				turns: [{ role: 'user', parts: [{ text }] }],
 				turnComplete: true,
+			},
+		});
+	}
+
+	sendRealtimeText(text) {
+		if (!this.sessionReady || !text) return;
+		this._send({
+			realtimeInput: {
+				text,
 			},
 		});
 	}

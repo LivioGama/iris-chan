@@ -51,6 +51,10 @@ export class VoiceEngine extends Emitter {
 		this.volumeThreshold = 0.015;
 		this._bargeIn = new BargeInDetector({ activationThreshold: this.volumeThreshold });
 		this._dropModelOutputUntilTurnComplete = false;
+		this._speechReleaseTimer = null;
+		this._speechReleaseMs = 160;
+		this._lastSpeechEnergyAt = 0;
+		this._turnLatency = null;
 
 		this._autonomousMode = false;
 		this._autonomousInterval = null;
@@ -107,6 +111,13 @@ export class VoiceEngine extends Emitter {
 		this.gemini.on('ready', async () => {
 			this.capture.stop();
 			this.playback.stop();
+			if (typeof this.playback.init === 'function') {
+				try {
+					await this.playback.init();
+				} catch (err) {
+					logError('Playback', 'Warmup error:', err);
+				}
+			}
 			try {
 				await this.capture.start();
 			} catch (err) {
@@ -123,6 +134,8 @@ export class VoiceEngine extends Emitter {
 			// Finalize any in-flight streaming bubbles so they don't hang forever
 			finalizeStreamingBubble('stream-model');
 			finalizeStreamingBubble('stream-user');
+			this._clearSpeechReleaseTimer();
+			this._resetTurnLatency();
 			this._setState(STATES.IDLE);
 		});
 
@@ -142,6 +155,7 @@ export class VoiceEngine extends Emitter {
 				this._accum.user = '';
 			}
 			this._setState(STATES.RESPONDING);
+			this._noteFirstModelAudio();
 			this.playback.enqueue(data);
 		});
 
@@ -161,6 +175,7 @@ export class VoiceEngine extends Emitter {
 
 		this.gemini.on('turnComplete', () => {
 			this._dropModelOutputUntilTurnComplete = false;
+			this._clearSpeechReleaseTimer();
 			this._setState(STATES.LISTENING);
 			updateIndicator('think', false);
 			// Finalize streaming bubbles so they start their auto-hide timers
@@ -181,6 +196,7 @@ export class VoiceEngine extends Emitter {
 			}
 			this._accum.model = '';
 			this._lastUserTurn = '';
+			this._resetTurnLatency();
 
 			if (!this._autonomousMode) {
 				const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
@@ -210,6 +226,8 @@ export class VoiceEngine extends Emitter {
 		this.gemini.on('interrupted', () => {
 			this._dropModelOutputUntilTurnComplete = false;
 			this.playback.stop();
+			this._clearSpeechReleaseTimer();
+			this._resetTurnLatency();
 			this._setState(STATES.LISTENING);
 			// Finalize the model bubble on interruption so it doesn't hang
 			finalizeStreamingBubble('stream-model');
@@ -245,9 +263,8 @@ export class VoiceEngine extends Emitter {
 
 		this.capture.on('volume', (reading) => {
 			const meter = this._normalizeVolumeReading(reading);
-			if (meter.effective > this.volumeThreshold && this.state === STATES.LISTENING) {
-				this._setState(STATES.USER_SPEAKING);
-			} else if (this.state === STATES.RESPONDING) {
+			const now = Date.now();
+			if (this.state === STATES.RESPONDING) {
 				const playbackVolume = this.playback.getVolume();
 				const gate = this._bargeIn.observeVolume({
 					micVolume: meter.effective,
@@ -267,8 +284,20 @@ export class VoiceEngine extends Emitter {
 						unstableEcho: meter.unstableEcho,
 					});
 				}
-			} else if (meter.effective < this.volumeThreshold * 0.5 && this.state === STATES.USER_SPEAKING) {
-				this._setState(STATES.PROCESSING);
+				return;
+			}
+
+			if (meter.effective > this.volumeThreshold) {
+				this._lastSpeechEnergyAt = now;
+				this._clearSpeechReleaseTimer();
+				if (this.state === STATES.LISTENING || this.state === STATES.PROCESSING) {
+					this._setState(STATES.USER_SPEAKING);
+				}
+				return;
+			}
+
+			if (this.state === STATES.USER_SPEAKING) {
+				this._scheduleSpeechRelease(now);
 			}
 		});
 
@@ -320,11 +349,15 @@ export class VoiceEngine extends Emitter {
 		}
 
 		if (prev === STATES.LISTENING && state === STATES.USER_SPEAKING) {
-			this._screen.capture();
+			this._screen.capture({ passive: false });
 		}
 
 		if (state === STATES.USER_SPEAKING) {
+			if (prev === STATES.LISTENING || prev === STATES.RESPONDING || prev === STATES.IDLE) {
+				this._beginTurnLatency();
+			}
 			this._lastUserSpeechTime = Date.now();
+			this._lastSpeechEnergyAt = this._lastUserSpeechTime;
 			this._screen.setLastUserSpeechTime(this._lastUserSpeechTime);
 			this._unpromptedTurnCount = 0;
 			this._consecutiveAutoTurns = 0;
@@ -364,6 +397,46 @@ export class VoiceEngine extends Emitter {
 		} else {
 			clearPresence('voice');
 		}
+	}
+
+	_scheduleSpeechRelease(now = Date.now()) {
+		if (this._speechReleaseTimer) return;
+		const remaining = Math.max(0, this._speechReleaseMs - (now - this._lastSpeechEnergyAt));
+		this._speechReleaseTimer = setTimeout(() => {
+			this._speechReleaseTimer = null;
+			if (this.state !== STATES.USER_SPEAKING) return;
+			if (Date.now() - this._lastSpeechEnergyAt < this._speechReleaseMs) {
+				this._scheduleSpeechRelease();
+				return;
+			}
+			this._setState(STATES.PROCESSING);
+		}, remaining);
+	}
+
+	_clearSpeechReleaseTimer() {
+		if (!this._speechReleaseTimer) return;
+		clearTimeout(this._speechReleaseTimer);
+		this._speechReleaseTimer = null;
+	}
+
+	_beginTurnLatency() {
+		this._turnLatency = {
+			userSpeechStartedAt: Date.now(),
+			firstModelAudioAt: 0,
+		};
+	}
+
+	_noteFirstModelAudio() {
+		if (!this._turnLatency?.userSpeechStartedAt || this._turnLatency.firstModelAudioAt) return;
+		this._turnLatency.firstModelAudioAt = Date.now();
+		logInfo(
+			'Latency',
+			`Speech -> first audio chunk: ${this._turnLatency.firstModelAudioAt - this._turnLatency.userSpeechStartedAt}ms`
+		);
+	}
+
+	_resetTurnLatency() {
+		this._turnLatency = null;
 	}
 
 	_confirmBargeIn(reason, details = {}) {
@@ -619,6 +692,8 @@ export class VoiceEngine extends Emitter {
 	deactivate() {
 		this._active = false;
 		this._toolExecuting = false;
+		this._clearSpeechReleaseTimer();
+		this._resetTurnLatency();
 		this._stopAutonomousLoop();
 		this._autonomousMode = false;
 		this._consecutiveAutoTurns = 0;
@@ -647,6 +722,8 @@ export class VoiceEngine extends Emitter {
 
 	async reconnect() {
 		this.needsReconnect = false;
+		this._clearSpeechReleaseTimer();
+		this._resetTurnLatency();
 		this._lastUserSpeechTime = Date.now();
 		this._unpromptedTurnCount = 0;
 		this._idleMessageSent = false;

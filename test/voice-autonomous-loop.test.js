@@ -34,6 +34,10 @@ class FakeGemini extends MockEmitter {
 	sendText(text) {
 		this.sentTexts.push(text);
 	}
+
+	sendRealtimeText() {}
+
+	sendImage() {}
 }
 
 class FakeCapture extends MockEmitter {
@@ -247,6 +251,8 @@ console.log('Running autonomous loop timer tests...');
 	try {
 		const voiceModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/renderer/voice/voice-engine.js')).href;
 		const { VoiceEngine } = await import(voiceModuleUrl);
+		const screenControllerModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/renderer/voice/screen-capture-controller.js')).href;
+		const { createScreenCaptureController } = await import(screenControllerModuleUrl);
 
 		{
 			const { voice, gemini } = createVoiceHarness(VoiceEngine);
@@ -286,6 +292,49 @@ console.log('Running autonomous loop timer tests...');
 
 			voice._stopAutonomousLoop();
 			assert.strictEqual(timers.activeCount(), 0, 'stopping after a sent prompt should clear the re-armed timer');
+		}
+
+		{
+			const sentRealtimeTexts = [];
+			const sentTurnTexts = [];
+			const sentImages = [];
+			const originalCaptureScreen = window.electronAPI.captureScreen;
+			window.electronAPI.captureScreen = async () => ({
+				ok: true,
+				data: 'screen-frame',
+				context: {
+					imageWidth: 1600,
+					imageHeight: 900,
+					displayWidth: 1440,
+					displayHeight: 900,
+					scaleFactor: 2,
+					cursorX: 320,
+					cursorY: 240,
+				},
+			});
+
+			const screen = createScreenCaptureController({
+				gemini: {
+					sendRealtimeText(text) {
+						sentRealtimeTexts.push(text);
+					},
+					sendText(text) {
+						sentTurnTexts.push(text);
+					},
+					sendImage(data) {
+						sentImages.push(data);
+					},
+				},
+			});
+
+			await screen.capture();
+			await screen.capture();
+
+			assert.strictEqual(sentRealtimeTexts.length, 1, 'active screen context should stream as realtime text once');
+			assert.strictEqual(sentTurnTexts.length, 0, 'active screen context should not create a completed text turn');
+			assert.deepStrictEqual(sentImages, ['screen-frame'], 'screen capture should still send the image frame');
+
+			window.electronAPI.captureScreen = originalCaptureScreen;
 		}
 
 		console.log('Autonomous loop timer tests passed.');

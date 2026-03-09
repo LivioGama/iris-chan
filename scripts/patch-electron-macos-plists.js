@@ -4,8 +4,19 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const KEY = 'NSCameraUseContinuityCameraDeviceType';
 const PLIST_BUDDY = '/usr/libexec/PlistBuddy';
+const REQUIRED_KEYS = [
+	{
+		key: 'NSCameraUseContinuityCameraDeviceType',
+		type: 'bool',
+		value: 'true',
+	},
+	{
+		key: 'NSMicrophoneUsageDescription',
+		type: 'string',
+		value: 'Iris uses the microphone for real-time voice conversations.',
+	},
+];
 
 function log(message) {
 	process.stdout.write(`[electron-plist-patch] ${message}\n`);
@@ -35,8 +46,8 @@ function getTargetPlists(electronAppPath) {
 	].filter((plistPath) => fs.existsSync(plistPath));
 }
 
-function readKey(plistPath) {
-	const result = run(PLIST_BUDDY, ['-c', `Print :${KEY}`, plistPath]);
+function readKey(plistPath, key) {
+	const result = run(PLIST_BUDDY, ['-c', `Print :${key}`, plistPath]);
 	if (result.status !== 0) {
 		return null;
 	}
@@ -44,15 +55,23 @@ function readKey(plistPath) {
 	return result.stdout.trim();
 }
 
-function writeKey(plistPath) {
-	const current = readKey(plistPath);
-	if (current === 'true') {
+function formatValueForPlistBuddy(keySpec) {
+	if (keySpec.type === 'bool') {
+		return keySpec.value;
+	}
+	return JSON.stringify(keySpec.value);
+}
+
+function writeKey(plistPath, keySpec) {
+	const current = readKey(plistPath, keySpec.key);
+	if (current === keySpec.value) {
 		return false;
 	}
 
+	const formattedValue = formatValueForPlistBuddy(keySpec);
 	const command = current === null
-		? `Add :${KEY} bool true`
-		: `Set :${KEY} true`;
+		? `Add :${keySpec.key} ${keySpec.type} ${formattedValue}`
+		: `Set :${keySpec.key} ${formattedValue}`;
 	const result = run(PLIST_BUDDY, ['-c', command, plistPath]);
 
 	if (result.status !== 0) {
@@ -87,14 +106,20 @@ function main() {
 
 	let changed = 0;
 	for (const plistPath of plistPaths) {
-		if (writeKey(plistPath)) {
-			changed++;
+		let plistChanged = false;
+		for (const keySpec of REQUIRED_KEYS) {
+			if (writeKey(plistPath, keySpec)) {
+				changed++;
+				plistChanged = true;
+			}
+		}
+		if (plistChanged) {
 			log(`Patched ${plistPath}`);
 		}
 	}
 
 	if (changed === 0) {
-		log('All target plists already contain the Continuity Camera key');
+		log('All target plists already contain the required macOS permission keys');
 	}
 }
 

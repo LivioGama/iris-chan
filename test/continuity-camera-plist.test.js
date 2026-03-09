@@ -4,7 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const KEY = 'NSCameraUseContinuityCameraDeviceType';
+const REQUIRED_KEYS = [
+	{ key: 'NSCameraUseContinuityCameraDeviceType', expected: 'true' },
+	{
+		key: 'NSMicrophoneUsageDescription',
+		expected: 'Iris uses the microphone for real-time voice conversations.',
+	},
+];
 const ROOT = path.resolve(__dirname, '..');
 const ELECTRON_APP_PATH = path.join(ROOT, 'node_modules', 'electron', 'dist', 'Electron.app');
 const PATCH_SCRIPT = path.join(ROOT, 'scripts', 'patch-electron-macos-plists.js');
@@ -46,17 +52,19 @@ for (const plistPath of plistPaths) {
 		fail(`Missing plist: ${plistPath}`);
 	}
 
-	const readRun = spawnSync(PLIST_BUDDY, ['-c', `Print :${KEY}`, plistPath], {
-		encoding: 'utf8',
-	});
+	for (const keySpec of REQUIRED_KEYS) {
+		const readRun = spawnSync(PLIST_BUDDY, ['-c', `Print :${keySpec.key}`, plistPath], {
+			encoding: 'utf8',
+		});
 
-	if (readRun.status !== 0) {
-		fail(`Key missing in ${plistPath}`);
+		if (readRun.status !== 0) {
+			fail(`Key ${keySpec.key} missing in ${plistPath}`);
+		}
+
+		if (readRun.stdout.trim() !== keySpec.expected) {
+			fail(`Unexpected value for ${keySpec.key} in ${plistPath}: ${readRun.stdout.trim()}`);
+		}
+
+		process.stdout.write(`Verified ${keySpec.key} in ${plistPath}\n`);
 	}
-
-	if (readRun.stdout.trim() !== 'true') {
-		fail(`Unexpected value in ${plistPath}: ${readRun.stdout.trim()}`);
-	}
-
-	process.stdout.write(`Verified ${KEY}=true in ${plistPath}\n`);
 }
