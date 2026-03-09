@@ -645,3 +645,8 @@ canvas { display: block; }
 		max-width: calc(100vw - 24px);
 	}
 }
+
+/* Hide the presence card shown near Iris's head; keep the rest of the overlay UI. */
+#presence-indicator {
+	display: none !important;
+}
