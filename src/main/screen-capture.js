@@ -1,15 +1,65 @@
 // Screen capture: periodic screenshots via Electron desktopCapturer
-const { desktopCapturer, screen, BrowserWindow } = require('electron');
+const { desktopCapturer, screen, systemPreferences } = require('electron');
 const log = require('./logger');
 
 // Latest image→screen mapping, updated every capture.
 // Tools use this to convert Gemini's image-pixel coords → CGEvent logical coords.
 // offsetX/offsetY = display origin in global screen space (non-zero on multi-monitor).
 let _lastMapping = { scaleX: 1, scaleY: 1, offsetX: 0, offsetY: 0 };
+let _lastCaptureHealth = {
+	lastCaptureAt: 0,
+	lastError: 'No screen capture has succeeded yet.',
+	permissionStatus: 'unknown',
+};
+let _lastLoggedError = '';
+let _lastLoggedAt = 0;
 
 function getMapping() { return _lastMapping; }
+function getCaptureHealth() { return { ..._lastCaptureHealth }; }
+
+function getScreenPermissionStatus() {
+	if (process.platform !== 'darwin') return 'granted';
+	try {
+		return systemPreferences.getMediaAccessStatus('screen') || 'unknown';
+	} catch {
+		return 'unknown';
+	}
+}
+
+function describeCaptureError(err) {
+	if (!err) return 'Unknown screen capture error';
+	if (err instanceof Error) return err.stack || err.message || String(err);
+	if (typeof err === 'object') {
+		try {
+			return JSON.stringify(err);
+		} catch {
+			return String(err);
+		}
+	}
+	return String(err);
+}
+
+function buildPermissionError(permissionStatus) {
+	return `Screen capture unavailable. Screen Recording permission is ${permissionStatus}. Enable Screen Recording for Electron / Iris in System Settings > Privacy & Security > Screen Recording, then restart Iris.`;
+}
+
+function rememberCaptureFailure(error, permissionStatus) {
+	_lastCaptureHealth = {
+		..._lastCaptureHealth,
+		lastError: error,
+		permissionStatus,
+	};
+
+	const now = Date.now();
+	if (error !== _lastLoggedError || now - _lastLoggedAt > 10000) {
+		log.error('ScreenCapture', error);
+		_lastLoggedError = error;
+		_lastLoggedAt = now;
+	}
+}
 
 async function capture() {
+	const permissionStatus = getScreenPermissionStatus();
 	try {
 		const cursor = screen.getCursorScreenPoint();
 		const cursorDisplay = screen.getDisplayNearestPoint(cursor);
@@ -24,7 +74,11 @@ async function capture() {
 		});
 
 		if (!sources.length) {
-			return { ok: false, data: null };
+			const error = permissionStatus !== 'granted'
+				? buildPermissionError(permissionStatus)
+				: 'Screen capture returned no sources.';
+			rememberCaptureFailure(error, permissionStatus);
+			return { ok: false, data: null, error, permissionStatus };
 		}
 
 		const match = sources.find(s => String(s.display_id) === String(cursorDisplay.id));
@@ -49,6 +103,13 @@ async function capture() {
 		const cursorImgX = Math.round((cursor.x - display.x) / _lastMapping.scaleX);
 		const cursorImgY = Math.round((cursor.y - display.y) / _lastMapping.scaleY);
 
+		_lastCaptureHealth = {
+			lastCaptureAt: Date.now(),
+			lastError: null,
+			permissionStatus,
+		};
+		_lastLoggedError = '';
+
 		return {
 			ok: true,
 			data: base64,
@@ -63,9 +124,13 @@ async function capture() {
 			}
 		};
 	} catch (err) {
-		log.error('ScreenCapture', err.message);
-		return { ok: false, data: null };
+		const detail = describeCaptureError(err);
+		const error = permissionStatus !== 'granted'
+			? `${buildPermissionError(permissionStatus)} Underlying error: ${detail}`
+			: detail;
+		rememberCaptureFailure(error, permissionStatus);
+		return { ok: false, data: null, error, permissionStatus };
 	}
 }
 
-module.exports = { capture, getMapping };
+module.exports = { capture, getMapping, getCaptureHealth, getScreenPermissionStatus };

@@ -25,6 +25,7 @@ const TOOL_LABELS = {
 	ask_chatgpt: 'Asking ChatGPT',
 	set_volume: 'Setting volume',
 	notify: 'Sending notification',
+	check_permissions: 'Checking permissions',
 	run_terminal_command: 'Running command',
 	self_fix: 'Self-modifying code',
 	propose_reply: 'Composing reply',

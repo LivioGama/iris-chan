@@ -1,6 +1,7 @@
 // Tool handlers: type_text, press_key, click_at, double_click, mouse_move, drag, scroll
 const { runHelper } = require('../native-helper');
-const { getMapping } = require('../screen-capture');
+const { getMapping, getCaptureHealth } = require('../screen-capture');
+const { isCaptureUsable, formatCaptureBlockReason } = require('../screen-capture-health');
 
 // Convert image-pixel coordinates (from Gemini) → logical screen coordinates (for CGEvent).
 // Image (0,0) = top-left of the captured display, which lives at (offsetX, offsetY) in global screen space.
@@ -21,6 +22,14 @@ function fromScreen(screenX, screenY) {
 	};
 }
 
+function requireFreshCapture(actionLabel) {
+	const health = getCaptureHealth();
+	if (!isCaptureUsable(health)) {
+		return { ok: false, result: formatCaptureBlockReason(actionLabel, health) };
+	}
+	return null;
+}
+
 async function type_text(args) {
 	return runHelper({ action: 'type_text', text: args.text || '' });
 }
@@ -30,16 +39,22 @@ async function press_key(args) {
 }
 
 async function click_at(args) {
+	const blocked = requireFreshCapture('click');
+	if (blocked) return blocked;
 	const { x, y } = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
 	return runHelper({ action: 'click_at', x, y, button: args.button || 'left' });
 }
 
 async function double_click(args) {
+	const blocked = requireFreshCapture('double-click');
+	if (blocked) return blocked;
 	const { x, y } = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
 	return runHelper({ action: 'double_click', x, y });
 }
 
 async function mouse_move(args) {
+	const blocked = requireFreshCapture('move the mouse');
+	if (blocked) return blocked;
 	const { x, y } = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
 	const result = await runHelper({ action: 'mouse_move', x, y });
 	if (!result.ok && result.result?.includes('off by')) {
@@ -50,6 +65,8 @@ async function mouse_move(args) {
 }
 
 async function drag(args) {
+	const blocked = requireFreshCapture('drag');
+	if (blocked) return blocked;
 	const from = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
 	const to = toScreen(parseFloat(args.x2 || 0), parseFloat(args.y2 || 0));
 	return runHelper({ action: 'drag', x: from.x, y: from.y, x2: to.x, y2: to.y });

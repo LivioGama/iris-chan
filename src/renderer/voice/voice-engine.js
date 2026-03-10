@@ -414,7 +414,7 @@ export class VoiceEngine extends Emitter {
 		}
 
 		if ((prev === STATES.LISTENING || prev === STATES.PROCESSING) && state === STATES.USER_SPEAKING) {
-			this._screen.capture({ passive: false });
+			this._screen.capture({ passive: false, force: true });
 		}
 
 		if (state === STATES.USER_SPEAKING) {

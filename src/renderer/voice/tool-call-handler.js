@@ -7,6 +7,18 @@ import { info as logInfo, error as logError } from '../logger.js';
 // Tools that return immediately (fire-and-forget in main process).
 // These must NOT block voice capture or enter TOOL_EXECUTING state.
 const BACKGROUND_TOOLS = new Set(['fix_project', 'self_fix', 'add_task']);
+const SCREEN_REFRESH_TOOLS = new Set([
+	'type_text',
+	'press_key',
+	'click_at',
+	'double_click',
+	'mouse_move',
+	'drag',
+	'scroll',
+	'open_app',
+	'window_manage',
+	'activate_app',
+]);
 
 function isSearchTool(name, args) {
 	if (name === 'web_search' || name === 'ask_chatgpt' || name === 'research') return true;
@@ -27,6 +39,16 @@ function searchLabel(name, args) {
 		return m ? m[1] : 'Searching...';
 	}
 	return args?.query || 'Searching...';
+}
+
+export function formatToolResponseText(result) {
+	if (!result || typeof result !== 'object') return 'done';
+	const text = result.result || 'done';
+	return result.ok === false ? `Error: ${text}` : text;
+}
+
+export function shouldRefreshScreenAfterTool(name) {
+	return SCREEN_REFRESH_TOOLS.has(name);
 }
 
 export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }) {
@@ -55,14 +77,18 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		const toolStart = Date.now();
 		try {
 			const result = await window.electronAPI.executeTool(name, args);
+			const toolResponseText = formatToolResponseText(result);
+			if (screen && shouldRefreshScreenAfterTool(name)) {
+				await screen.capture({ passive: false, force: true });
+			}
 			showToolDone(name, index, result.ok !== false);
 			updateIfWorkspaceTool(name);
-			logInfo('Tool', `Result: ${name} → ${result.ok !== false ? 'OK' : 'FAIL'}: ${(result.result || 'done').slice(0, 300)}`);
-			gemini.sendToolResponse(id, name, result.result || 'done');
-			window.electronAPI.saveToolExecution(name, args, result.result || 'done', result.ok !== false, Date.now() - toolStart);
+			logInfo('Tool', `Result: ${name} → ${result.ok !== false ? 'OK' : 'FAIL'}: ${toolResponseText.slice(0, 300)}`);
+			gemini.sendToolResponse(id, name, toolResponseText);
+			window.electronAPI.saveToolExecution(name, args, toolResponseText, result.ok !== false, Date.now() - toolStart);
 
 			if (isSearch) {
-				window.electronAPI.searchResult(searchLabel(name, args), result.ok ? result.result : (result.result || 'Search failed'));
+				window.electronAPI.searchResult(searchLabel(name, args), result.ok ? toolResponseText : toolResponseText);
 			}
 		} catch (err) {
 			showToolDone(name, index, false);
@@ -126,7 +152,9 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 			onEvent('VOCAB_CHANGED');
 		}
 
-		if (screen) await screen.capture();
+		if (screen && blockingCalls.every((call) => !shouldRefreshScreenAfterTool(call.name))) {
+			await screen.capture({ passive: false, force: true });
+		}
 
 		onEvent(EVENT_TYPES.TOOL_END, { tools: calls.map(c => c.name) });
 	};

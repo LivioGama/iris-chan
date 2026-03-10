@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { runHelper } = require('../native-helper');
+const { getCaptureHealth, getScreenPermissionStatus } = require('../screen-capture');
 const workspace = require('../workspace');
 const log = require('../logger');
 
@@ -27,6 +28,20 @@ async function set_volume(args) {
 
 async function notify(args) {
 	return runHelper({ action: 'notify', text: args.text || 'Notification from Iris' });
+}
+
+async function check_permissions() {
+	const accessibility = await runHelper({ action: 'check_accessibility' });
+	const captureHealth = getCaptureHealth();
+	const payload = {
+		screenRecording: {
+			status: getScreenPermissionStatus(),
+			lastCaptureAt: captureHealth.lastCaptureAt || null,
+			lastError: captureHealth.lastError || null,
+		},
+		accessibility: accessibility.ok ? accessibility.result : (accessibility.result || 'unknown'),
+	};
+	return { ok: true, result: JSON.stringify(payload) };
 }
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff']);
@@ -81,4 +96,4 @@ async function run_terminal_command(args) {
 	});
 }
 
-module.exports = { set_volume, notify, run_terminal_command };
+module.exports = { set_volume, notify, run_terminal_command, check_permissions };

@@ -13,4 +13,8 @@ async function window_manage(args) {
 	return runHelper({ action: 'window_manage', position: args.position || 'maximize' });
 }
 
-module.exports = { open_app, get_frontmost_app, window_manage };
+module.exports = {
+	open_app,
+	get_frontmost_app,
+	window_manage,
+};

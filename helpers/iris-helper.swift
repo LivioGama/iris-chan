@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Carbon.HIToolbox
+import ApplicationServices
 
 // MARK: - JSON helpers
 struct Command: Decodable {
@@ -65,6 +66,74 @@ let keycodeMap: [String: CGKeyCode] = [
     "slash": 44, "backslash": 42, "grave": 50,
 ]
 
+func accessibilityPromptOptions() -> CFDictionary {
+    [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+}
+
+func accessibilityErrorMessage(_ capability: String) -> String {
+    "Accessibility permission is required for \(capability). macOS should show a prompt. Enable Accessibility for the app running Iris, then retry."
+}
+
+func requireAccessibility(_ capability: String, prompt: Bool = true) {
+    let trusted = prompt ? AXIsProcessTrustedWithOptions(accessibilityPromptOptions()) : AXIsProcessTrusted()
+    if !trusted {
+        respond(false, accessibilityErrorMessage(capability))
+    }
+}
+
+func currentCursorPositionCG() -> CGPoint? {
+    if let point = CGEvent(source: nil)?.location {
+        return point
+    }
+
+    let point = NSEvent.mouseLocation
+    let primaryHeight = NSScreen.screens.first?.frame.height ?? NSScreen.main?.frame.height ?? 0
+    guard primaryHeight > 0 else {
+        return CGPoint(x: point.x, y: point.y)
+    }
+    return CGPoint(x: point.x, y: primaryHeight - point.y)
+}
+
+func describe(point: CGPoint) -> String {
+    "(\(Int(point.x.rounded())),\(Int(point.y.rounded())))"
+}
+
+@discardableResult
+func requireCursor(at target: CGPoint, tolerance: CGFloat = 5, action: String) -> CGPoint {
+    guard let actual = currentCursorPositionCG() else {
+        respond(false, "\(action) failed: could not read cursor position.")
+    }
+
+    let withinTolerance = abs(actual.x - target.x) <= tolerance && abs(actual.y - target.y) <= tolerance
+    if !withinTolerance {
+        let hint = AXIsProcessTrusted()
+            ? "Synthetic input was blocked or the coordinates were wrong."
+            : accessibilityErrorMessage("mouse input")
+        respond(false, "\(action) failed: requested \(describe(point: target)) but cursor is at \(describe(point: actual)). \(hint)")
+    }
+
+    return actual
+}
+
+func eventFlags(from parts: [String]) -> CGEventFlags {
+    var flags: CGEventFlags = []
+    for part in parts {
+        switch part {
+        case "cmd", "command":
+            flags.insert(.maskCommand)
+        case "ctrl", "control":
+            flags.insert(.maskControl)
+        case "shift":
+            flags.insert(.maskShift)
+        case "alt", "option":
+            flags.insert(.maskAlternate)
+        default:
+            break
+        }
+    }
+    return flags
+}
+
 // MARK: - Actions
 switch cmd.action {
 
@@ -72,6 +141,7 @@ case "type_text":
     guard let text = cmd.text, !text.isEmpty else {
         respond(false, "Missing text")
     }
+    requireAccessibility("keyboard input")
     let pb = NSPasteboard.general
     let oldContents = pb.pasteboardItems?.compactMap { item -> (String, Data)? in
         guard let type = item.types.first, let data = item.data(forType: type) else { return nil }
@@ -101,41 +171,33 @@ case "press_key":
     guard let key = cmd.key?.lowercased(), !key.isEmpty else {
         respond(false, "Missing key")
     }
+    requireAccessibility("keyboard input")
 
     // Small delay so prior actions (paste, focus) settle in web apps
     usleep(150_000)
 
     let parts = key.split(separator: "+").map(String.init)
-    var modifiers: [String] = []
     var keyStr = parts.last ?? key
-
-    for part in parts.dropLast() {
-        switch part {
-        case "cmd", "command": modifiers.append("command down")
-        case "ctrl", "control": modifiers.append("control down")
-        case "shift": modifiers.append("shift down")
-        case "alt", "option": modifiers.append("option down")
-        default: break
-        }
-    }
     if parts.count == 1 { keyStr = parts[0] }
 
-    // Use AppleScript System Events — works reliably across all apps including Electron
     guard let keycode = keycodeMap[keyStr] else {
         respond(false, "Unknown key: \(keyStr)")
     }
 
-    let modStr = modifiers.isEmpty ? "" : " using {\(modifiers.joined(separator: ", "))}"
-    let script = "tell application \"System Events\" to key code \(keycode)\(modStr)"
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    proc.arguments = ["-e", script]
-    try? proc.run()
-    proc.waitUntilExit()
+    let flags = eventFlags(from: Array(parts.dropLast()))
+    let src = CGEventSource(stateID: .hidSystemState)
+    let down = CGEvent(keyboardEventSource: src, virtualKey: keycode, keyDown: true)!
+    down.flags = flags
+    let up = CGEvent(keyboardEventSource: src, virtualKey: keycode, keyDown: false)!
+    up.flags = flags
+    down.post(tap: .cghidEventTap)
+    usleep(20_000)
+    up.post(tap: .cghidEventTap)
 
     respond(true, "Pressed \(key)")
 
 case "scroll":
+    requireAccessibility("scrolling")
     let dir = cmd.direction?.lowercased() ?? "down"
     let amount = cmd.amount ?? 3
     let delta = dir == "up" ? Int32(amount) : Int32(-amount)
@@ -151,6 +213,7 @@ case "click_at":
     guard let x = cmd.x, let y = cmd.y else {
         respond(false, "Missing x or y coordinates")
     }
+    requireAccessibility("mouse input")
     let point = CGPoint(x: x, y: y)
     let src = CGEventSource(stateID: .hidSystemState)
     let isRight = cmd.button?.lowercased() == "right"
@@ -158,7 +221,8 @@ case "click_at":
     // Move cursor to target first so CGEvent click lands correctly
     let preMove = CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!
     preMove.post(tap: .cghidEventTap)
-    usleep(20_000)
+    usleep(40_000)
+    let movedActual = requireCursor(at: point, action: "Mouse move before click")
 
     if isRight {
         let down = CGEvent(mouseEventSource: src, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right)!
@@ -174,20 +238,20 @@ case "click_at":
         up.post(tap: .cghidEventTap)
     }
     usleep(20_000)
-    // Read back actual position
-    let clickActual = NSEvent.mouseLocation
-    let clickScreenH = NSScreen.main?.frame.height ?? 0
-    let clickActualX = Int(clickActual.x)
-    let clickActualY = Int(clickScreenH - clickActual.y)
     let clickLabel = isRight ? "Right-clicked" : "Clicked"
-    respond(true, "\(clickLabel) at (\(Int(x)),\(Int(y))) — cursor verified at (\(clickActualX),\(clickActualY))")
+    respond(true, "\(clickLabel) at \(describe(point: point)) — cursor verified at \(describe(point: movedActual))")
 
 case "double_click":
     guard let x = cmd.x, let y = cmd.y else {
         respond(false, "Missing x or y coordinates")
     }
+    requireAccessibility("mouse input")
     let dblPoint = CGPoint(x: x, y: y)
     let dblSrc = CGEventSource(stateID: .hidSystemState)
+    let preMove = CGEvent(mouseEventSource: dblSrc, mouseType: .mouseMoved, mouseCursorPosition: dblPoint, mouseButton: .left)!
+    preMove.post(tap: .cghidEventTap)
+    usleep(40_000)
+    _ = requireCursor(at: dblPoint, action: "Mouse move before double click")
     for i in 0..<2 {
         let down = CGEvent(mouseEventSource: dblSrc, mouseType: .leftMouseDown, mouseCursorPosition: dblPoint, mouseButton: .left)!
         let up = CGEvent(mouseEventSource: dblSrc, mouseType: .leftMouseUp, mouseCursorPosition: dblPoint, mouseButton: .left)!
@@ -204,26 +268,20 @@ case "mouse_move":
     guard let x = cmd.x, let y = cmd.y else {
         respond(false, "Missing x or y coordinates")
     }
+    requireAccessibility("mouse input")
     let movePoint = CGPoint(x: x, y: y)
     let moveSrc = CGEventSource(stateID: .hidSystemState)
     let moveEvent = CGEvent(mouseEventSource: moveSrc, mouseType: .mouseMoved, mouseCursorPosition: movePoint, mouseButton: .left)!
     moveEvent.post(tap: .cghidEventTap)
     usleep(30_000) // 30ms settle before reading back
-    // Read back actual position to verify
-    let actualPos = NSEvent.mouseLocation
-    let moveScreenH = NSScreen.main?.frame.height ?? 0
-    let actualX = Int(actualPos.x)
-    let actualY = Int(moveScreenH - actualPos.y) // Convert AppKit→CGEvent coords
-    let moveDist = abs(actualX - Int(x)) + abs(actualY - Int(y))
-    if moveDist > 5 {
-        respond(false, "Move may have failed: requested (\(Int(x)),\(Int(y))) but cursor is at (\(actualX),\(actualY)), off by \(moveDist)px")
-    }
-    respond(true, "Moved to (\(Int(x)),\(Int(y))) — verified at (\(actualX),\(actualY))")
+    let actual = requireCursor(at: movePoint, action: "Mouse move")
+    respond(true, "Moved to \(describe(point: movePoint)) — verified at \(describe(point: actual))")
 
 case "drag":
     guard let x = cmd.x, let y = cmd.y, let x2 = cmd.x2, let y2 = cmd.y2 else {
         respond(false, "Missing coordinates (need x, y, x2, y2)")
     }
+    requireAccessibility("mouse input")
 
     let from = CGPoint(x: x, y: y)
     var to = CGPoint(x: x2, y: y2)
@@ -265,6 +323,7 @@ case "drag":
     let moveStart = CGEvent(mouseEventSource: dragSrc, mouseType: .mouseMoved, mouseCursorPosition: from, mouseButton: .left)!
     moveStart.post(tap: .cghidEventTap)
     usleep(50_000) // 50ms settle
+    _ = requireCursor(at: from, action: "Mouse move before drag")
 
     // Press down - LOCK focus to current window
     let dragDown = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseDown, mouseCursorPosition: from, mouseButton: .left)!
@@ -293,14 +352,17 @@ case "drag":
     let dragUp = CGEvent(mouseEventSource: dragSrc, mouseType: .leftMouseUp, mouseCursorPosition: to, mouseButton: .left)!
     dragUp.post(tap: .cghidEventTap)
     usleep(30_000) // Final settle
-
-    respond(true, "Dragged from (\(Int(x)),\(Int(y))) to (\(Int(to.x)),\(Int(to.y))) on screen")
+    let finalActual = requireCursor(at: to, tolerance: 8, action: "Drag")
+    respond(true, "Dragged from \(describe(point: from)) to \(describe(point: to)) — cursor verified at \(describe(point: finalActual))")
 
 case "get_mouse_position":
-    let pos = NSEvent.mouseLocation
-    let screenH = NSScreen.main?.frame.height ?? 0
-    // Convert from AppKit (bottom-left origin) to CGEvent (top-left origin)
-    respond(true, "x:\(Int(pos.x)),y:\(Int(screenH - pos.y))")
+    guard let pos = currentCursorPositionCG() else {
+        respond(false, "Could not read cursor position")
+    }
+    respond(true, "x:\(Int(pos.x.rounded())),y:\(Int(pos.y.rounded()))")
+
+case "check_accessibility":
+    respond(true, AXIsProcessTrusted() ? "granted" : "not granted")
 
 case "clipboard_read":
     let pb = NSPasteboard.general
@@ -416,6 +478,7 @@ case "get_frontmost_app":
     respond(true, "App: \(appName), Windows: \(windows)")
 
 case "window_manage":
+    requireAccessibility("window management")
     let pos = cmd.position?.lowercased() ?? "maximize"
     let script: String
     switch pos {
@@ -475,27 +538,27 @@ case "slow_move":
     guard let x = cmd.x, let y = cmd.y else {
         respond(false, "Missing x or y coordinates")
     }
+    requireAccessibility("mouse input")
     let movePoint = CGPoint(x: x, y: y)
     let moveSrc = CGEventSource(stateID: .hidSystemState)
 
     // Smooth animation: move in 20 steps over 500ms
     let steps = 20
-    let startPos = NSEvent.mouseLocation
-    let screenH = NSScreen.main?.frame.height ?? 800
-    let currentY = screenH - startPos.y // Convert to CGEvent coordinates
+    let startPos = currentCursorPositionCG() ?? movePoint
 
     for i in 0...steps {
         let progress = Double(i) / Double(steps)
         let mid = CGPoint(
             x: startPos.x + (movePoint.x - startPos.x) * progress,
-            y: currentY + (movePoint.y - currentY) * progress
+            y: startPos.y + (movePoint.y - startPos.y) * progress
         )
         let moveEvent = CGEvent(mouseEventSource: moveSrc, mouseType: .mouseMoved, mouseCursorPosition: mid, mouseButton: .left)!
         moveEvent.post(tap: .cghidEventTap)
         usleep(25_000) // 25ms between steps
     }
 
-    respond(true, "Slowly moved to (\(Int(x)), \(Int(y)))")
+    let finalActual = requireCursor(at: movePoint, action: "Slow mouse move")
+    respond(true, "Slowly moved to \(describe(point: movePoint)) — verified at \(describe(point: finalActual))")
 
 case "activate_app":
     guard let name = cmd.name, !name.isEmpty else {

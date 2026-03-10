@@ -7,7 +7,7 @@ export const toolDeclarations = [
 	},
 	{
 		name: 'press_key',
-		description: 'Press a keyboard key or combo. Supported: return, space, escape, tab, delete, up, down, left, right, single letters a-z, or combos like cmd+c, ctrl+shift+a',
+		description: 'Press a keyboard key or combo. Supported: return, space, escape, tab, delete, up, down, left, right, single letters a-z, or combos like cmd+c, ctrl+shift+a. For browser navigation, cmd+l focuses the address bar in Safari and Chromium browsers.',
 		parameters: { type: 'OBJECT', properties: { key: { type: 'STRING' } }, required: ['key'] },
 	},
 	{
@@ -74,6 +74,11 @@ export const toolDeclarations = [
 		name: 'notify',
 		description: 'Show a macOS notification to the user with a message.',
 		parameters: { type: 'OBJECT', properties: { text: { type: 'STRING' } }, required: ['text'] },
+	},
+	{
+		name: 'check_permissions',
+		description: 'Check whether Iris currently has the permissions needed for screen interaction, including Screen Recording and Accessibility.',
+		parameters: { type: 'OBJECT', properties: {} },
 	},
 	{
 		name: 'propose_reply',

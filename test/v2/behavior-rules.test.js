@@ -77,4 +77,10 @@ console.log('Running V2 behavior rules tests...');
 	assert.ok(src.includes('markSelfFixAckSent'), 'behavior-engine contains self-fix ack gate');
 }
 
+{
+	const promptSrc = fs.readFileSync('src/renderer/gemini/system-prompt.js', 'utf-8');
+	assert.ok(promptSrc.includes('your turn must start with tool calls'), 'system prompt requires tool-first behavior for direct computer-control requests');
+	assert.ok(promptSrc.includes('Do not say "Done", "I clicked it", or "I went there"'), 'system prompt forbids claiming UI actions without same-turn tool use');
+}
+
 console.log('V2 behavior rules tests passed.');
