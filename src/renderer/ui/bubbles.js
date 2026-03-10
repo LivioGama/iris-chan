@@ -36,13 +36,6 @@ export function showBubble(lane, text, { role } = {}) {
 	}, getBubbleDurationMs(safeText, safeLane));
 	hideTimers.set(bubble, timeout);
 }
-
-<<<<<<< Updated upstream
-/**
- * Show or update a streaming bubble. Reuses the same DOM element for a given
- * streamId so that incoming tokens update the text in-place instead of
- * creating a new bubble per token.
- */
 export function showStreamingBubble(lane, text, streamId, { role } = {}) {
 	const safeLane = ['chat', 'context', 'thinking'].includes(lane) ? lane : 'chat';
 	const safeText = String(text || '').trim();
@@ -52,41 +45,14 @@ export function showStreamingBubble(lane, text, streamId, { role } = {}) {
 
 	const existing = streamingBubbles.get(streamId);
 	if (existing && existing.el.parentNode) {
-		// Update the existing bubble text in-place
 		existing.el.textContent = safeText;
-		// Clear any pending hide timer so it stays visible while streaming
 		if (hideTimers.has(existing.el)) {
 			clearTimeout(hideTimers.get(existing.el));
 			hideTimers.delete(existing.el);
 		}
 		return;
-=======
-	const bubble = document.getElementById(bubbleId);
-	if (bubble) {
-		// Detect context/thinking messages and apply distinct styling
-		const isContext = who === 'model' && text && (
-			text.startsWith('[SCREEN CONTEXT]') ||
-			text.startsWith('[CONTEXT]') ||
-			text.startsWith('[SYSTEM]') ||
-			text.startsWith('[THINKING]')
-		);
-		bubble.classList.toggle('bubble-context', isContext);
-
-		// Truncate context messages to 2 visible lines
-		const textEl = document.getElementById(textId);
-		if (isContext && textEl) {
-			const maxLen = 120;
-			textEl.textContent = text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
-		}
-
-		bubble.classList.add('visible');
-		clearTimeout(hideTimers[who]);
-		const duration = isContext ? 3000 : calcDuration(text);
-		hideTimers[who] = setTimeout(() => bubble.classList.remove('visible'), duration);
->>>>>>> Stashed changes
 	}
 
-	// Create a new bubble for this stream
 	const bubble = document.createElement('div');
 	const roleClass = role && ['user', 'iris'].includes(role) ? ` role-${role}` : '';
 	bubble.className = `bubble lane-${safeLane}${roleClass}`;
@@ -96,20 +62,14 @@ export function showStreamingBubble(lane, text, streamId, { role } = {}) {
 
 	streamingBubbles.set(streamId, { el: bubble, lane: safeLane });
 }
-
-/**
- * Finalize a streaming bubble — starts the auto-hide timer based on the
- * final text content. After this, the bubble behaves like a normal bubble.
- */
 export function finalizeStreamingBubble(streamId) {
 	const entry = streamingBubbles.get(streamId);
 	if (!entry) return;
 	streamingBubbles.delete(streamId);
 
 	const { el, lane } = entry;
-	if (!el.parentNode) return; // already removed
+	if (!el.parentNode) return;
 
-	// Clear any leftover timer (shouldn't exist, but be safe)
 	if (hideTimers.has(el)) {
 		clearTimeout(hideTimers.get(el));
 	}

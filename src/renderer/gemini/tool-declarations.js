@@ -190,6 +190,13 @@ export const toolDeclarations = [
 		} },
 	},
 	{
+		name: 'execute_setup',
+		description: 'Load and execute a setup script — a list of instructions stored in ~/.iris/setups/. Each setup is a .md file with numbered steps. Without a name, lists available setups. With a name, loads the instructions for step-by-step execution. Use when the user says "execute the setup", "run setup X", "do the setup", etc.',
+		parameters: { type: 'OBJECT', properties: {
+			name: { type: 'STRING', description: 'Name of the setup to load (without .md extension). Omit to list available setups.' },
+		} },
+	},
+	{
 		name: 'add_task',
 		description: 'Add a task to the autonomous queue for any project. Auto-detects the project from what the user is hovering in Finder/IDE. The task will be enriched with project context via Gemini Flash, reviewed with a 10-second countdown, then executed autonomously by Claude Code SDK. Use when user says "add task", "queue this", "do this later", etc.',
 		parameters: { type: 'OBJECT', properties: {

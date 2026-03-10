@@ -346,6 +346,21 @@ canvas { display: block; }
 }
 .tool-entry.success { border-left: 2px solid #4ade80; }
 .tool-entry.error { border-left: 2px solid #f87171; }
+.tool-entry.preview {
+	border-left: 2px solid #60a5fa;
+	background: rgba(37, 99, 235, 0.18);
+	color: rgba(255, 255, 255, 0.85);
+	white-space: normal;
+	max-width: 420px;
+}
+.tool-entry.preview .tool-preview-icon {
+	font-size: 11px;
+	flex-shrink: 0;
+}
+.tool-entry.preview .tool-preview-text {
+	opacity: 0.8;
+	font-style: italic;
+}
 
 /* Bubbles, tools-skills panel, activity timeline */
 

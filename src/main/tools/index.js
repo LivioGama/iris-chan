@@ -3,7 +3,7 @@ const log = require('../logger');
 const workspace = require('../workspace');
 const { isFrontmostExcluded, isInputTool, getFrontmostAppName } = require('../app-exclusion');
 
-const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue'];
+const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue', './macos-prefs', './setup'];
 
 function loadHandlers() {
 	const handlers = {};

@@ -21,6 +21,13 @@ const STATES = {
 	TOOL_EXECUTING: 'TOOL_EXECUTING',
 };
 
+const SCREEN_RUN_REQUEST_PATTERNS = [
+	/\b(run|execute|follow|do)\b.*\b(screen|on screen|instructions|list|setup)\b/i,
+	/\bwhat('?s| is)\s+written\s+on\s+screen\b/i,
+];
+const SCREEN_RUN_YES_PATTERN = /^\s*(yes|yeah|yep|oui|ok|okay|confirm|go|proceed|do it)\b/i;
+const SCREEN_RUN_NO_PATTERN = /^\s*(no|non|stop|cancel|abort|do not|don't)\b/i;
+
 export class VoiceEngine extends Emitter {
 	constructor({ gemini, capture, playback, behavior, eventBus, vocab, screen, claudeCodeBatcher }) {
 		super();
@@ -51,6 +58,7 @@ export class VoiceEngine extends Emitter {
 		this._consecutiveAutoTurns = 0;
 		this._lastAutonomousPromptTime = 0;
 		this._autonomousResponseExpected = false;
+		this._screenRunAwaitingConfirmation = false;
 
 		this._matcher = vocab || new VocabMatcher();
 		this._correctionCandidates = new Map();
@@ -83,6 +91,10 @@ export class VoiceEngine extends Emitter {
 				this.eventBus?.emitEvent?.(type, payload, 'voice-engine');
 			},
 			screen: this._screen,
+			screenRunGuard: {
+				isAwaitingConfirmation: () => this._screenRunAwaitingConfirmation,
+				getBlockedMessage: (toolName) => `Blocked ${toolName}: waiting for your yes/no confirmation before executing on-screen instructions.`,
+			},
 		});
 
 		this.playback.setReferenceCallback((float32Samples) => {
@@ -90,6 +102,28 @@ export class VoiceEngine extends Emitter {
 		});
 
 		this._bind();
+	}
+
+	_handleScreenRunFlow(text) {
+		const normalized = String(text || '').trim();
+		if (!normalized) return;
+		if (this._screenRunAwaitingConfirmation) {
+			if (SCREEN_RUN_NO_PATTERN.test(normalized)) {
+				this._screenRunAwaitingConfirmation = false;
+				this.gemini.sendText('[SYSTEM: SCREEN RUN CANCELLED] The user said no. Do not execute the on-screen instruction list. Reply with one short sentence confirming cancellation, then stop.');
+				return;
+			}
+			if (SCREEN_RUN_YES_PATTERN.test(normalized)) {
+				this._screenRunAwaitingConfirmation = false;
+				this.gemini.sendText('[SYSTEM: SCREEN RUN APPROVED] The user said yes. Execute the on-screen instruction list now, step-by-step, with verification after each step.');
+				return;
+			}
+			return;
+		}
+		if (!SCREEN_RUN_REQUEST_PATTERNS.some((re) => re.test(normalized))) return;
+		this._screenRunAwaitingConfirmation = true;
+		this._screen.capture(false, { persistForDebug: true, reason: 'screen-run-plan' }).catch(() => {});
+		this.gemini.sendText('[SYSTEM: SCREEN RUN PRECHECK] The user asked you to execute instructions visible on the screen. First reply with exactly two short sentences: sentence 1 summarizes what you read, sentence 2 explains how you will execute it. Then ask for explicit yes/no and wait. Do not call action tools until the user says yes.');
 	}
 
 	_bind() {
@@ -320,8 +354,12 @@ export class VoiceEngine extends Emitter {
 		}
 		this._lastTranscriptTime[who] = now;
 
+		const corrected = this._correctTranscript(this._accum[who]);
 		const role = who === 'model' ? 'iris' : 'user';
-		showStreamingBubble('chat', this._correctTranscript(this._accum[who]), `stream-${who}`, { role });
+		showStreamingBubble('chat', corrected, `stream-${who}`, { role });
+		if (who === 'user') {
+			this._handleScreenRunFlow(corrected);
+		}
 	}
 
 	async loadVocabulary() {
@@ -506,6 +544,7 @@ export class VoiceEngine extends Emitter {
 
 		this._batcher.start();
 		this._active = true;
+		this._screenRunAwaitingConfirmation = false;
 		this._lastUserSpeechTime = Date.now();
 		this._unpromptedTurnCount = 0;
 		this._idleMessageSent = false;
@@ -515,6 +554,7 @@ export class VoiceEngine extends Emitter {
 	deactivate() {
 		this._active = false;
 		this._toolExecuting = false;
+		this._screenRunAwaitingConfirmation = false;
 		this._stopAutonomousLoop();
 		this._autonomousMode = false;
 		this._consecutiveAutoTurns = 0;

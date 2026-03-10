@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	getApiKey: () => ipcRenderer.invoke(CHANNELS.GET_API_KEY),
 	onToggleVoice: (cb) => ipcRenderer.on(CHANNELS.TOGGLE_VOICE, cb),
 	executeTool: (name, args) => ipcRenderer.invoke(CHANNELS.EXECUTE_TOOL, name, args),
-	captureScreen: () => ipcRenderer.invoke(CHANNELS.CAPTURE_SCREEN),
+	captureScreen: (options) => ipcRenderer.invoke(CHANNELS.CAPTURE_SCREEN, options),
 	searchSpinner: (query) => ipcRenderer.send(CHANNELS.SEARCH_SPINNER, query),
 	searchResult: (query, content) => ipcRenderer.send(CHANNELS.SEARCH_RESULT, query, content),
 	searchHide: () => ipcRenderer.send(CHANNELS.SEARCH_HIDE),

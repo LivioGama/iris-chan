@@ -4,30 +4,44 @@
 // SuperRun is excluded by default because Iris's CGEvent posting and AX queries
 // conflict with its own accessibility-based interaction model.
 
-const { execFileSync } = require('child_process');
+const { execFile } = require('child_process');
 const log = require('./logger');
 
 // ── Exclusion list ──────────────────────────────────────────────────────────
 const EXCLUDED_APPS = new Set(['SuperRun']);
 
-// ── Frontmost-app cache (avoids spawning osascript on every check) ───────────
+// ── Frontmost-app cache (fully async — never blocks the main thread) ────────
 let _cachedApp = '';
 let _cachedAt = 0;
+let _refreshInFlight = false;
 const CACHE_TTL_MS = 1500; // refresh at most every 1.5 s
 
+/** Trigger a background refresh of the frontmost app name (non-blocking). */
+function _triggerRefresh() {
+	if (_refreshInFlight) return;
+	_refreshInFlight = true;
+
+	execFile('osascript', [
+		'-e',
+		'tell application "System Events" to get name of first application process whose frontmost is true',
+	], { timeout: 2000, encoding: 'utf8' }, (err, stdout) => {
+		_refreshInFlight = false;
+		if (!err && stdout) {
+			_cachedApp = stdout.trim();
+			_cachedAt = Date.now();
+		}
+		// On failure keep the stale cached value rather than blocking
+	});
+}
+
+/**
+ * Returns the cached frontmost app name (instant, never blocks).
+ * Kicks off a background refresh when the cache is stale.
+ */
 function getFrontmostAppName() {
 	const now = Date.now();
-	if (_cachedApp && now - _cachedAt < CACHE_TTL_MS) return _cachedApp;
-
-	try {
-		const result = execFileSync('osascript', [
-			'-e',
-			'tell application "System Events" to get name of first application process whose frontmost is true',
-		], { timeout: 2000, encoding: 'utf8' });
-		_cachedApp = (result || '').trim();
-		_cachedAt = now;
-	} catch {
-		// On failure keep the stale cached value rather than blocking
+	if (now - _cachedAt >= CACHE_TTL_MS) {
+		_triggerRefresh();
 	}
 	return _cachedApp;
 }

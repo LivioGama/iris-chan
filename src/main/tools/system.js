@@ -21,6 +21,17 @@ function logSkillOutput(label, command, stdout, stderr, err) {
 	try { fs.appendFileSync(SKILL_LOG, lines.join('\n') + '\n'); } catch {}
 }
 
+/** Build a clean env with CLAUDECODE vars stripped (avoids shell wrapper overhead). */
+function cleanEnv() {
+	const env = { ...process.env };
+	for (const key of Object.keys(env)) {
+		if (key === 'CLAUDECODE' || key.startsWith('CLAUDE_CODE_')) {
+			delete env[key];
+		}
+	}
+	return env;
+}
+
 async function set_volume(args) {
 	return runHelper({ action: 'set_volume', level: parseFloat(args.level || 0.5) });
 }
@@ -47,12 +58,13 @@ async function run_terminal_command(args) {
 	const command = args.command || '';
 	if (!command) return { ok: false, result: 'No command provided' };
 	const cwd = workspace.get();
+	const env = cleanEnv();
 
 	// Long-running commands: spawn detached and return immediately
 	if (LONG_RUNNING.test(command)) {
 		log.info('Tools', `Detaching long-running command: ${command.slice(0, 100)}`);
-		const child = spawn('/bin/zsh', ['-l', '-c', `unset CLAUDECODE; cd "${cwd.replace(/"/g, '\\"')}" && ${command}`], {
-			cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+		const child = spawn('/bin/zsh', ['-c', `cd "${cwd.replace(/"/g, '\\"')}" && ${command}`], {
+			cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
 		});
 		let stdout = '';
 		child.stdout.on('data', (d) => { stdout += d; });
@@ -67,17 +79,37 @@ async function run_terminal_command(args) {
 		});
 	}
 
-	const wrapped = `/bin/zsh -l -c 'unset CLAUDECODE; cd "${cwd.replace(/"/g, '\\"')}" && ${command.replace(/'/g, "'\\''")}'`;
+	// Normal commands: use spawn (not exec) with clean env — no login shell overhead
 	return new Promise((resolve) => {
-		exec(wrapped, { timeout: 60000, maxBuffer: 1024 * 512, cwd }, (err, stdout, stderr) => {
-			logSkillOutput('run_terminal_command', command, stdout, stderr, err);
-			if (!err) autoOpenGeneratedImage(stdout);
-			if (err && !stdout && !stderr) {
-				return resolve({ ok: false, result: err.message });
+		let stdout = '';
+		let stderr = '';
+		const child = spawn('/bin/zsh', ['-c', `cd "${cwd.replace(/"/g, '\\"')}" && ${command}`], {
+			cwd, env, timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'],
+		});
+
+		child.stdout.on('data', (d) => { stdout += d; });
+		child.stderr.on('data', (d) => { stderr += d; });
+
+		child.on('close', (code) => {
+			logSkillOutput('run_terminal_command', command, stdout, stderr, code ? new Error(`exit code ${code}`) : null);
+			if (!code) autoOpenGeneratedImage(stdout);
+			if (code && !stdout && !stderr) {
+				return resolve({ ok: false, result: `Command exited with code ${code}` });
 			}
 			const output = (stdout || '') + (stderr ? '\n' + stderr : '');
-			resolve({ ok: !err, result: output.trim().slice(0, 2000) || '(no output)' });
+			resolve({ ok: !code, result: output.trim().slice(0, 2000) || '(no output)' });
 		});
+
+		child.on('error', (err) => {
+			logSkillOutput('run_terminal_command', command, stdout, stderr, err);
+			resolve({ ok: false, result: err.message });
+		});
+
+		// Hard timeout safety net (spawn timeout only kills child, doesn't reject)
+		setTimeout(() => {
+			try { child.kill('SIGTERM'); } catch {}
+			setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 2000);
+		}, 62000);
 	});
 }
 

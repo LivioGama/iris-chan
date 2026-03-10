@@ -95,6 +95,23 @@ export function showToolDone(name, index, ok) {
 	}
 }
 
+export function showToolPreview(name, explanation) {
+	clearTimeout(hideTimer);
+	const el = getContainer();
+	el.classList.add('visible');
+
+	const label = TOOL_LABELS[name] || name.replace(/_/g, ' ');
+	const entry = document.createElement('div');
+	entry.className = 'tool-entry preview';
+	entry.innerHTML = `<span class="tool-preview-icon">👁️</span><span class="tool-label">${label}</span><span class="tool-detail tool-preview-text">${explanation}</span>`;
+	el.appendChild(entry);
+
+	// Keep only last 5 entries visible
+	while (el.children.length > 5) {
+		el.removeChild(el.firstChild);
+	}
+}
+
 export function hideToolLog() {
 	clearTimeout(hideTimer);
 	hideTimer = setTimeout(() => {

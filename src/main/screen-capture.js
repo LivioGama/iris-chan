@@ -1,5 +1,8 @@
 // Screen capture: periodic screenshots via Electron desktopCapturer
 const { desktopCapturer, screen, BrowserWindow } = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
 const log = require('./logger');
 
 // Latest image→screen mapping, updated every capture.
@@ -9,7 +12,7 @@ let _lastMapping = { scaleX: 1, scaleY: 1, offsetX: 0, offsetY: 0 };
 
 function getMapping() { return _lastMapping; }
 
-async function capture() {
+async function capture(options = {}) {
 	try {
 		const cursor = screen.getCursorScreenPoint();
 		const cursorDisplay = screen.getDisplayNearestPoint(cursor);
@@ -33,6 +36,21 @@ async function capture() {
 		const thumbSize = source.thumbnail.getSize();
 		const jpeg = source.thumbnail.toJPEG(40);
 		const base64 = jpeg.toString('base64');
+		let debugImagePath = null;
+		if (options?.persistForDebug) {
+			const logsDir = path.join(os.homedir(), '.iris', 'logs');
+			const ts = new Date().toISOString().replace(/[:.]/g, '-');
+			const reasonRaw = String(options?.reason || 'capture');
+			const reason = reasonRaw.replace(/[^a-zA-Z0-9_-]/g, '_');
+			debugImagePath = path.join(logsDir, `screen-${ts}-${reason}.jpg`);
+			try {
+				fs.mkdirSync(logsDir, { recursive: true });
+				fs.writeFileSync(debugImagePath, jpeg);
+			} catch (writeErr) {
+				log.error('ScreenCapture', `Debug save failed: ${writeErr.message}`);
+				debugImagePath = null;
+			}
+		}
 
 		// Update mapping: image pixels → logical screen points (CGEvent coords)
 		// offsetX/offsetY = display origin for multi-monitor support.
@@ -60,6 +78,7 @@ async function capture() {
 				scaleFactor,
 				cursorX: cursorImgX,
 				cursorY: cursorImgY,
+				debugImagePath,
 			}
 		};
 	} catch (err) {

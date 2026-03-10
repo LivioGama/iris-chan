@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-02-19T06:53:33.047Z",
+  "updatedAt": "2026-03-10T19:10:18.559Z",
   "tasks": [
     {
       "id": "task-7",
@@ -24,9 +24,7 @@
       "action": "",
       "verify": "",
       "done": "",
-      "dependsOn": [],
-      "createdAt": "2026-02-17T22:31:06.903Z",
-      "updatedAt": "2026-02-17T22:31:06.903Z"
+      "logs": ""
     },
     {
       "id": "task-9",
@@ -38,9 +36,7 @@
       "action": "",
       "verify": "",
       "done": "",
-      "dependsOn": [],
-      "createdAt": "2026-02-17T22:41:07.151Z",
-      "updatedAt": "2026-02-17T22:41:07.151Z"
+      "logs": ""
     },
     {
       "id": "task-10",
@@ -52,9 +48,22 @@
       "action": "",
       "verify": "",
       "done": "",
+      "logs": ""
+    },
+    {
+      "id": "task-11",
+      "title": "The user is experiencing significant lag with terminal command launches and spec",
+      "description": "The user is experiencing significant lag with terminal command launches and specifically reports that `Claude Code` command validation gets stuck, describing the behavior as \"too slow\" and wanting it \"completely gone\". This is a critical performance and reliability self-fix. The goal is to achieve instant terminal command execution and ensure Claude Code validation processes are reliable and fast, eliminating all unresponsiveness and lag. This likely involves optimizing process spawning in `src/main/index.js` or `src/main/tools/index.js`, implementing robust timeouts and asynchronous handling in `src/main/tools/index.js` for Claude Code integration to prevent hanging, and generally profiling the command execution pipeline for bottlenecks. Files likely involved include `src/main/index.js`, `src/main/tools/index.js`, `src/renderer/gemini/client.js`, and potentially `helpers/iris-helper.swift` for native execution performance.",
+      "status": "PENDING",
+      "order": 5,
+      "files": [],
+      "action": "",
+      "verify": "",
+      "done": "",
+      "logs": "[tool: Read]\n[tool: Read]\nNow let me read the specific files that are most likely causing the lag:\n[tool: Read]\n[tool: Read]\n[tool: Read]\n[tool: Read]\nNow let me look at the app-exclusion module and other key files:\n[tool: Read]\n[tool: Read]\n[tool: Read]\n[tool: Read]\n[tool: TodoWrite]\nNow I've identified the bottlenecks. Let me implement all the fixes:\n\n**Bottleneck #1 (MAJOR):** `run_terminal_command` wraps every command in `/bin/zsh -l -c 'unset CLAUDECODE; ...'` — the `-l` (login shell) flag forces zsh to load all profile files (.zprofile, .zshrc, etc.) adding 500ms-2s+ per command. The `unset CLAUDECODE` shell wrapper is unnecessary since we can clean the env in Node.js.\n\n**Bottleneck #2 (MODERATE):** `getFrontmostAppName()` uses `execFileSync('osascript')` which synchronously blocks the main Electron thread for up to 2 seconds when the cache expires.\n\n**Bottleneck #3:** The tool router calls the synchronous blocking guard on every tool execution.\n\nLet me fix all three:\n[tool: Edit]\nNow fix the app-exclusion module — make `getFrontmostAppName` async with background refresh:\n[tool: Write]\n[tool: TodoWrite]\nNow let me search for any other places using CLAUDECODE unset patterns or login shells:\n[tool: Grep]\n[tool: Grep]\n[tool: Read]\n[tool: Read]\n[tool: Read]\n[tool: Grep]\nGood — the `system.js` spawns are already fixed (they use `-c` not `-l`). Now let me also check the `auth.js` to ensure it doesn't have the login-shell issue:\n[tool: Read]\nGood — `auth.js` is fine, it uses direct commands without login shell. Let me also look at the `input.js` and `apps.js` tools for any synchronous blocking:\n[tool: Read]\n[tool: Read]\nGood — input and app tools are clean (they use the async `runHelper`). Now let me check the `files.js` tool which had `spawnSync`:\n[tool: Read]\nNow let me verify the changes are correct and run the project's dev/lint tools:\n[tool: TodoWrite]\n[tool: Read]\n[tool: Bash]\n[tool: Read]\n[tool: Read]\nLet me run the existing tests to make sure nothing is broken:\n[tool: Bash]\n[tool: Bash]\nAll existing tests pass. Now let me write a dedicated performance verification test that proves the fixes work:\n⚠️ Reset from IN_PROGRESS (app restarted during execution)",
       "dependsOn": [],
-      "createdAt": "2026-02-19T06:53:33.047Z",
-      "updatedAt": "2026-02-19T06:53:33.047Z"
+      "createdAt": "2026-03-10T18:29:50.324Z",
+      "updatedAt": "2026-03-10T19:10:18.559Z"
     }
   ]
 }

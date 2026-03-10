@@ -2,10 +2,25 @@ import { EVENT_TYPES } from '../../shared/event-types.web.js';
 import { showToolStart, showToolDone, hideToolLog } from '../ui/tool-log.js';
 import { updateIfWorkspaceTool } from '../ui/workspace-bar.js';
 import { info as logInfo, error as logError } from '../logger.js';
+import { isScreenAction, showScreenActionPreview } from './screen-action-preview.js';
 
 // Tools that return immediately (fire-and-forget in main process).
 // These must NOT block voice capture or enter TOOL_EXECUTING state.
 const BACKGROUND_TOOLS = new Set(['fix_project', 'self_fix', 'add_task']);
+const ACTION_TOOLS = new Set([
+	'type_text',
+	'press_key',
+	'scroll',
+	'click_at',
+	'double_click',
+	'mouse_move',
+	'drag',
+	'run_terminal_command',
+	'open_app',
+	'write_file',
+	'move_file',
+	'propose_reply',
+]);
 
 function isSearchTool(name, args) {
 	if (name === 'web_search' || name === 'ask_chatgpt' || name === 'research') return true;
@@ -28,10 +43,26 @@ function searchLabel(name, args) {
 	return args?.query || 'Searching...';
 }
 
-export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }) {
+export function createToolCallHandler({ gemini, onStateChange, onEvent, screen, screenRunGuard }) {
 	const _executeOne = async (name, args, id, index, total) => {
+		// ── Screen Action Preview ──────────────────────────────────────
+		// For screen-interaction tools, show a mandatory explanation of
+		// what's about to happen before executing, for transparency.
+		if (isScreenAction(name)) {
+			await showScreenActionPreview(name, args, gemini);
+		}
+
 		showToolStart(name, args, index, total);
 		logInfo('Tool', `Executing: ${name}(${JSON.stringify(args || {})})`.slice(0, 500));
+		if (ACTION_TOOLS.has(name) && screenRunGuard?.isAwaitingConfirmation?.()) {
+			const blockedMessage = screenRunGuard?.getBlockedMessage?.(name)
+				|| `Blocked ${name}: waiting for explicit yes/no confirmation before executing on-screen instructions.`;
+			showToolDone(name, index, false);
+			logInfo('Tool', `Blocked: ${name} pending screen-run confirmation`);
+			gemini.sendToolResponse(id, name, blockedMessage);
+			window.electronAPI.saveToolExecution(name, args, blockedMessage, false, 0);
+			return;
+		}
 
 		const isSearch = isSearchTool(name, args);
 		if (isSearch) {
