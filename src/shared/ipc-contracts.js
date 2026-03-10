@@ -1,5 +1,6 @@
 const CHANNELS = {
 	GET_API_KEY: 'get-api-key',
+	GET_VOICE_CONFIG: 'get-voice-config',
 	EXECUTE_TOOL: 'execute-tool',
 	CAPTURE_SCREEN: 'capture-screen',
 	TOGGLE_VOICE: 'toggle-voice',

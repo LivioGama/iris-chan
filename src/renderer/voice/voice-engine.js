@@ -5,6 +5,7 @@ import { createToolCallHandler } from './tool-call-handler.js';
 import { createScreenCaptureController } from './screen-capture-controller.js';
 import { createClaudeCodeBatcher } from './claude-code-batcher.js';
 import { BargeInDetector } from './barge-in-detector.js';
+import { ListeningGate } from './listening-gate.js';
 import { VocabMatcher } from '../vocab/matcher.js';
 import { findBestNgram } from '../vocab/learner.js';
 import { showBubble, clearBubbles, showStreamingBubble, finalizeStreamingBubble } from '../ui/bubbles.js';
@@ -25,14 +26,63 @@ const STATES = {
 
 const AUTONOMOUS_LOOP_INTERVAL_MS = 600000;
 
+const DEFAULT_VOICE_CONFIG = Object.freeze({
+	volumeThreshold: 0.015,
+	screenCaptureInterval: 10000,
+	newTurnThresholdMs: 3000,
+	replyCooldownMs: 45000,
+	speechReleaseMs: 160,
+	echoSuppressionGain: 0.8,
+	listeningGate: {
+		minSpeechMs: 180,
+		candidateGapMs: 90,
+		preRollMs: 450,
+		noiseFloorAttack: 0.22,
+		noiseFloorRelease: 0.05,
+		noiseFloorMultiplier: 1.8,
+		noiseFloorOffset: 0.02,
+		frameMsFallback: 32,
+	},
+	bargeIn: {
+		minRespondingThreshold: 0.04,
+		minSpeechMs: 180,
+		candidateGapMs: 90,
+		preRollMs: 450,
+		playbackDominanceRatio: 0.35,
+		settleMs: 120,
+		noiseFloorAttack: 0.22,
+		noiseFloorRelease: 0.05,
+		noiseFloorMultiplier: 1.6,
+		noiseFloorOffset: 0.012,
+		frameMsFallback: 32,
+	},
+});
+
+function buildVoiceConfig(voiceConfig = {}) {
+	const overrides = voiceConfig && typeof voiceConfig === 'object' ? voiceConfig : {};
+	return {
+		...DEFAULT_VOICE_CONFIG,
+		...overrides,
+		listeningGate: {
+			...DEFAULT_VOICE_CONFIG.listeningGate,
+			...(overrides.listeningGate || {}),
+		},
+		bargeIn: {
+			...DEFAULT_VOICE_CONFIG.bargeIn,
+			...(overrides.bargeIn || {}),
+		},
+	};
+}
+
 export class VoiceEngine extends Emitter {
-	constructor({ gemini, capture, playback, behavior, eventBus, vocab, screen, claudeCodeBatcher }) {
+	constructor({ gemini, capture, playback, behavior, eventBus, vocab, screen, claudeCodeBatcher, voiceConfig }) {
 		super();
 		this.gemini = gemini;
 		this.capture = capture;
 		this.playback = playback;
 		this.behavior = behavior;
 		this.eventBus = eventBus;
+		this.voiceConfig = buildVoiceConfig(voiceConfig);
 		this.state = STATES.IDLE;
 		this._active = false;
 		this._apiKey = null;
@@ -46,13 +96,21 @@ export class VoiceEngine extends Emitter {
 
 		this._accum = { user: '', model: '' };
 		this._lastTranscriptTime = { user: 0, model: 0 };
-		this._newTurnThresholdMs = 3000;
+		this._newTurnThresholdMs = this.voiceConfig.newTurnThresholdMs;
 		this._lastUserTurn = '';
-		this.volumeThreshold = 0.015;
-		this._bargeIn = new BargeInDetector({ activationThreshold: this.volumeThreshold });
+		this.volumeThreshold = this.voiceConfig.volumeThreshold;
+		this._listeningGate = new ListeningGate({
+			activationThreshold: this.volumeThreshold,
+			...this.voiceConfig.listeningGate,
+		});
+		this._bargeIn = new BargeInDetector({
+			activationThreshold: this.volumeThreshold,
+			...this.voiceConfig.bargeIn,
+		});
 		this._dropModelOutputUntilTurnComplete = false;
 		this._speechReleaseTimer = null;
-		this._speechReleaseMs = 160;
+		this._speechReleaseMs = this.voiceConfig.speechReleaseMs;
+		this._echoSuppressionGain = this.voiceConfig.echoSuppressionGain;
 		this._lastSpeechEnergyAt = 0;
 		this._turnLatency = null;
 
@@ -241,8 +299,11 @@ export class VoiceEngine extends Emitter {
 			updateIndicator('send', true);
 			this._setState(STATES.LISTENING);
 			this.capture.setEchoSuppression(true);
-			this.capture.setSuppressionGain(0.8);
-			logInfo('Echo', 'Echo cancellation active (browser AEC + software suppression at 80%)');
+			this.capture.setSuppressionGain(this._echoSuppressionGain);
+			logInfo(
+				'Echo',
+				`Echo cancellation active (browser AEC + software suppression at ${Math.round(this._echoSuppressionGain * 100)}%)`
+			);
 		});
 
 		this.capture.on('data', (base64) => {
@@ -254,8 +315,6 @@ export class VoiceEngine extends Emitter {
 				this._bargeIn.bufferChunk(base64);
 				return;
 			}
-			// Send audio in LISTENING too — Gemini's server-side VAD handles speech
-			// detection with lower latency than local volume gating
 			if (this.state !== STATES.IDLE) {
 				this.gemini.sendAudio(base64);
 			}
@@ -342,13 +401,19 @@ export class VoiceEngine extends Emitter {
 		const prev = this.state;
 		this.state = state;
 
+		if (!this._isListeningGateState(prev) && this._isListeningGateState(state)) {
+			this._listeningGate.begin();
+		} else if (this._isListeningGateState(prev) && !this._isListeningGateState(state)) {
+			this._listeningGate.end();
+		}
+
 		if (prev !== STATES.RESPONDING && state === STATES.RESPONDING) {
 			this._bargeIn.beginResponse();
 		} else if (prev === STATES.RESPONDING && state !== STATES.RESPONDING) {
 			this._bargeIn.endResponse();
 		}
 
-		if (prev === STATES.LISTENING && state === STATES.USER_SPEAKING) {
+		if ((prev === STATES.LISTENING || prev === STATES.PROCESSING) && state === STATES.USER_SPEAKING) {
 			this._screen.capture({ passive: false });
 		}
 
@@ -439,6 +504,27 @@ export class VoiceEngine extends Emitter {
 		this._turnLatency = null;
 	}
 
+	_isListeningGateState(state = this.state) {
+		return state === STATES.LISTENING || state === STATES.PROCESSING;
+	}
+
+	_flushAudioChunks(chunks) {
+		for (const chunk of chunks) {
+			this.gemini.sendAudio(chunk);
+		}
+	}
+
+	_confirmListeningSpeech(reason, details = {}) {
+		if (!this._isListeningGateState()) return;
+		const bufferedChunks = this._listeningGate.confirm();
+		logInfo(
+			'Voice',
+			`Local speech gate opened (${reason}, held=${details.heldMs ?? 0}ms, mic=${(details.micVolume || 0).toFixed(3)}, raw=${(details.rawMicVolume || 0).toFixed(3)}, residual=${(details.residualMicVolume || 0).toFixed(3)}, threshold=${(details.threshold || 0).toFixed(3)}, floor=${(details.noiseFloor || 0).toFixed(3)}, clipped=${(details.clippedRatio || 0).toFixed(3)})`
+		);
+		this._setState(STATES.USER_SPEAKING);
+		this._flushAudioChunks(bufferedChunks);
+	}
+
 	_confirmBargeIn(reason, details = {}) {
 		if (this.state !== STATES.RESPONDING) return;
 		const bufferedChunks = this._bargeIn.confirm();
@@ -449,9 +535,7 @@ export class VoiceEngine extends Emitter {
 		);
 		this.playback.stop();
 		this._setState(STATES.USER_SPEAKING);
-		for (const chunk of bufferedChunks) {
-			this.gemini.sendAudio(chunk);
-		}
+		this._flushAudioChunks(bufferedChunks);
 	}
 
 	_normalizeVolumeReading(reading) {

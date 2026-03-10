@@ -40,10 +40,16 @@ class FakeCapture extends MockEmitter {
 	constructor() {
 		super();
 		this.playbackStopCount = 0;
+		this.echoSuppressionEnabled = false;
+		this.suppressionGain = 0;
 	}
 
-	setEchoSuppression() {}
-	setSuppressionGain() {}
+	setEchoSuppression(enabled) {
+		this.echoSuppressionEnabled = !!enabled;
+	}
+	setSuppressionGain(gain) {
+		this.suppressionGain = gain;
+	}
 	sendReferenceSignal() {}
 	notifyPlaybackStop() {
 		this.playbackStopCount++;
@@ -233,6 +239,29 @@ console.log('Running voice barge-in gate tests...');
 	try {
 		const voiceModuleUrl = pathToFileURL(path.join(process.cwd(), 'src/renderer/voice/voice-engine.js')).href;
 		const { VoiceEngine } = await import(voiceModuleUrl);
+
+		{
+			const { voice, gemini, capture } = createVoiceHarness(VoiceEngine);
+			capture.emit('started');
+
+			capture.emit('data', 'listening-live-0');
+			capture.emit('data', 'listening-live-1');
+			clock.advance(32);
+			emitMeter(capture, {
+				effective: 0.02,
+				raw: 0.02,
+				residual: 0.02,
+			});
+
+			assert.strictEqual(capture.echoSuppressionEnabled, true, 'capture should enable echo suppression on start');
+			assert.strictEqual(capture.suppressionGain, 0.8, 'capture should receive the configured suppression gain');
+			assert.deepStrictEqual(
+				gemini.sentAudio.slice(0, 2),
+				['listening-live-0', 'listening-live-1'],
+				'listening state should stream live audio to Gemini for normal dictation'
+			);
+			assert.strictEqual(voice.state, 'USER_SPEAKING', 'speech energy should still move the engine into USER_SPEAKING');
+		}
 
 		{
 			const { voice, gemini, playback } = createVoiceHarness(VoiceEngine);

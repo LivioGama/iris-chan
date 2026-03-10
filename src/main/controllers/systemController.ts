@@ -8,6 +8,7 @@ import * as skills from '../skills';
 
 export function register(apiKey: string) {
     ipcMain.handle(ch.GET_API_KEY, () => apiKey);
+    ipcMain.handle(ch.GET_VOICE_CONFIG, () => config.voice);
 
     ipcMain.on(ch.SET_IGNORE_MOUSE, (_, ignore: boolean) => {
         const win = avatarWindow.get();

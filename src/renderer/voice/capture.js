@@ -1,7 +1,7 @@
 // Mic capture via AudioWorklet -> PCM16 16kHz chunks
 import { Emitter } from '../../shared/emitter.js';
 
-const WORKLET_CODE = `
+export const WORKLET_CODE = `
 class CaptureProcessor extends AudioWorkletProcessor {
 	constructor() {
 		super();
@@ -22,7 +22,6 @@ class CaptureProcessor extends AudioWorkletProcessor {
 		this.refPower = 0;
 		this.epsilon = 1e-5;
 		this._scratchOutput = new Float32Array(128);
-		this._scratchSuppressed = new Float32Array(128);
 		this._volumeCounter = 0;
 		this._meterPeak = {
 			effective: 0,
@@ -58,14 +57,6 @@ class CaptureProcessor extends AudioWorkletProcessor {
 
 		if (this.refLength > 0 && this.echoSuppression) {
 			processedInput = this._applyLMSFilter(input, len);
-		} else if (this.isPlaybackActive && this.echoSuppression) {
-			if (this._scratchSuppressed.length < len) {
-				this._scratchSuppressed = new Float32Array(len);
-			}
-			for (let i = 0; i < len; i++) {
-				this._scratchSuppressed[i] = input[i] * 0.01;
-			}
-			processedInput = this._scratchSuppressed;
 		} else {
 			processedInput = input;
 		}
@@ -169,6 +160,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
 			}
 
 			const error = micSignal[i] - echoEstimate;
+			const suppressed = micSignal[i] - (this.suppressionGain * echoEstimate);
 
 			this.refPower = 0.99 * this.refPower + 0.01 * (refSample * refSample);
 			const step = this.stepSize / (this.refPower + this.epsilon);
@@ -177,7 +169,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
 				coeffs[j] += step * error * refHist[(this.historyIndex + j) % filterOrder];
 			}
 
-			output[i] = error;
+			output[i] = suppressed;
 		}
 
 		this.referenceBuffer = null;

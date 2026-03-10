@@ -22,6 +22,31 @@ export interface Config {
 		screenCaptureInterval: number;
 		newTurnThresholdMs: number;
 		replyCooldownMs: number;
+		speechReleaseMs: number;
+		echoSuppressionGain: number;
+		listeningGate: {
+			minSpeechMs: number;
+			candidateGapMs: number;
+			preRollMs: number;
+			noiseFloorAttack: number;
+			noiseFloorRelease: number;
+			noiseFloorMultiplier: number;
+			noiseFloorOffset: number;
+			frameMsFallback: number;
+		};
+		bargeIn: {
+			minRespondingThreshold: number;
+			minSpeechMs: number;
+			candidateGapMs: number;
+			preRollMs: number;
+			playbackDominanceRatio: number;
+			settleMs: number;
+			noiseFloorAttack: number;
+			noiseFloorRelease: number;
+			noiseFloorMultiplier: number;
+			noiseFloorOffset: number;
+			frameMsFallback: number;
+		};
 	};
 	vocab: {
 		hotPromoteCount: number;
@@ -88,6 +113,31 @@ const config: Config = {
 		screenCaptureInterval: 10000,
 		newTurnThresholdMs: 3000,
 		replyCooldownMs: 45000,
+		speechReleaseMs: 160,
+		echoSuppressionGain: 0.8,
+		listeningGate: {
+			minSpeechMs: 180,
+			candidateGapMs: 90,
+			preRollMs: 450,
+			noiseFloorAttack: 0.22,
+			noiseFloorRelease: 0.05,
+			noiseFloorMultiplier: 1.8,
+			noiseFloorOffset: 0.02,
+			frameMsFallback: 32,
+		},
+		bargeIn: {
+			minRespondingThreshold: 0.04,
+			minSpeechMs: 180,
+			candidateGapMs: 90,
+			preRollMs: 450,
+			playbackDominanceRatio: 0.35,
+			settleMs: 120,
+			noiseFloorAttack: 0.22,
+			noiseFloorRelease: 0.05,
+			noiseFloorMultiplier: 1.6,
+			noiseFloorOffset: 0.012,
+			frameMsFallback: 32,
+		},
 	},
 	vocab: {
 		hotPromoteCount: 5,

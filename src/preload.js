@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('irisPaths', {
 
 contextBridge.exposeInMainWorld('electronAPI', {
 	getApiKey: () => ipcRenderer.invoke(CHANNELS.GET_API_KEY),
+	getVoiceConfig: () => ipcRenderer.invoke(CHANNELS.GET_VOICE_CONFIG),
 	onToggleVoice: (cb) => ipcRenderer.on(CHANNELS.TOGGLE_VOICE, cb),
 	executeTool: (name, args) => ipcRenderer.invoke(CHANNELS.EXECUTE_TOOL, name, args),
 	captureScreen: () => ipcRenderer.invoke(CHANNELS.CAPTURE_SCREEN),

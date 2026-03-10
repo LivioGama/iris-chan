@@ -1,19 +1,16 @@
 const DEFAULTS = {
 	activationThreshold: 0.015,
-	minRespondingThreshold: 0.04,
 	minSpeechMs: 180,
 	candidateGapMs: 90,
 	preRollMs: 450,
-	playbackDominanceRatio: 0.35,
-	settleMs: 120,
 	noiseFloorAttack: 0.22,
 	noiseFloorRelease: 0.05,
-	noiseFloorMultiplier: 1.6,
-	noiseFloorOffset: 0.012,
+	noiseFloorMultiplier: 1.8,
+	noiseFloorOffset: 0.02,
 	frameMsFallback: 32,
 };
 
-export class BargeInDetector {
+export class ListeningGate {
 	constructor(options = {}) {
 		this.options = { ...DEFAULTS, ...options };
 		this.reset();
@@ -25,19 +22,17 @@ export class BargeInDetector {
 		this._candidateMs = 0;
 		this._lastFrameAt = 0;
 		this._lastCandidateAt = 0;
-		this._responseStartedAt = 0;
 		this._noiseFloor = this.options.activationThreshold;
 		this._buffer = [];
 	}
 
-	beginResponse(now = Date.now()) {
+	begin(now = Date.now()) {
 		this.reset();
 		this._active = true;
 		this._lastFrameAt = now;
-		this._responseStartedAt = now;
 	}
 
-	endResponse() {
+	end() {
 		this.reset();
 	}
 
@@ -47,8 +42,8 @@ export class BargeInDetector {
 		this._trimBuffer(now);
 	}
 
-	observeVolume({ micVolume, playbackVolume = 0, unstableEcho = false, now = Date.now() }) {
-		const threshold = this._requiredMicVolume(playbackVolume);
+	observeVolume({ micVolume, now = Date.now() }) {
+		const threshold = this._requiredMicVolume();
 		if (!this._active || this._confirmed) {
 			return {
 				confirmed: false,
@@ -56,43 +51,11 @@ export class BargeInDetector {
 				heldMs: this._candidateMs,
 				threshold,
 				noiseFloor: this._noiseFloor,
-				settling: false,
-				unstableEcho,
 			};
 		}
 
 		const delta = this._frameDelta(now);
-		if (unstableEcho) {
-			this._candidateMs = 0;
-			this._updateNoiseFloor(Math.min(micVolume, threshold));
-			return {
-				confirmed: false,
-				candidate: false,
-				heldMs: this._candidateMs,
-				threshold: this._requiredMicVolume(playbackVolume),
-				noiseFloor: this._noiseFloor,
-				settling: false,
-				unstableEcho: true,
-			};
-		}
-
-		const settling = now - this._responseStartedAt < this.options.settleMs;
-		if (settling) {
-			this._candidateMs = 0;
-			this._updateNoiseFloor(micVolume);
-			return {
-				confirmed: false,
-				candidate: false,
-				heldMs: this._candidateMs,
-				threshold: this._requiredMicVolume(playbackVolume),
-				noiseFloor: this._noiseFloor,
-				settling: true,
-				unstableEcho: false,
-			};
-		}
-
-		const effectiveThreshold = this._requiredMicVolume(playbackVolume);
-		const candidate = micVolume >= effectiveThreshold;
+		const candidate = micVolume >= threshold;
 
 		if (candidate) {
 			if (this._lastCandidateAt && now - this._lastCandidateAt > this.options.candidateGapMs) {
@@ -106,7 +69,7 @@ export class BargeInDetector {
 		} else if (this._lastCandidateAt && now - this._lastCandidateAt > this.options.candidateGapMs) {
 			this._candidateMs = 0;
 			this._updateNoiseFloor(micVolume);
-		} else if (!candidate) {
+		} else {
 			this._updateNoiseFloor(micVolume);
 		}
 
@@ -114,10 +77,8 @@ export class BargeInDetector {
 			confirmed: this._confirmed,
 			candidate,
 			heldMs: this._candidateMs,
-			threshold: effectiveThreshold,
+			threshold: this._requiredMicVolume(),
 			noiseFloor: this._noiseFloor,
-			settling: false,
-			unstableEcho: false,
 		};
 	}
 
@@ -132,11 +93,9 @@ export class BargeInDetector {
 		return chunks;
 	}
 
-	_requiredMicVolume(playbackVolume) {
+	_requiredMicVolume() {
 		return Math.max(
 			this.options.activationThreshold,
-			this.options.minRespondingThreshold,
-			playbackVolume * this.options.playbackDominanceRatio,
 			this._noiseFloor * this.options.noiseFloorMultiplier + this.options.noiseFloorOffset
 		);
 	}

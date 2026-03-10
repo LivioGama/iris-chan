@@ -1,6 +1,7 @@
 const { CHANNELS } = require('./ipc-contracts');
 
 export const GET_API_KEY = CHANNELS.GET_API_KEY;
+export const GET_VOICE_CONFIG = CHANNELS.GET_VOICE_CONFIG;
 export const EXECUTE_TOOL = CHANNELS.EXECUTE_TOOL;
 export const CAPTURE_SCREEN = CHANNELS.CAPTURE_SCREEN;
 export const TOGGLE_VOICE = CHANNELS.TOGGLE_VOICE;

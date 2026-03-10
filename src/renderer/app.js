@@ -15,6 +15,7 @@ import { eventBusWeb } from '../shared/event-bus-web.js';
 
 const avatarConfig = window.getAvatarConfig ? await window.getAvatarConfig() : null;
 const avatarType = avatarConfig?.current || 'tripo3d';
+const voiceConfig = await window.electronAPI.getVoiceConfig?.().catch(() => null);
 
 const { renderer, camera, scene } = createScene();
 const { vrm, mixer, glowMaterials = [] } = await loadAvatar(scene, avatarType);
@@ -35,7 +36,7 @@ const eventBus = {
 
 const voice = new VoiceEngine({
 	gemini, capture, playback, behavior,
-	eventBus, screen, claudeCodeBatcher,
+	eventBus, screen, claudeCodeBatcher, voiceConfig,
 });
 window._voicePipeline = voice;
 voice.start();
