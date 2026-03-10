@@ -4,6 +4,7 @@ let container = null;
 let hideTimer = null;
 
 const TOOL_LABELS = {
+	run_ui_task: 'Running UI task',
 	type_text: 'Typing text',
 	press_key: 'Pressing key',
 	click_at: 'Clicking',
@@ -48,6 +49,7 @@ function getContainer() {
 function formatArgs(name, args) {
 	if (!args) return '';
 	if (name === 'open_app' && args.name) return args.name;
+	if (name === 'run_ui_task' && args.goal) return args.goal.length > 60 ? args.goal.slice(0, 60) + '…' : args.goal;
 	if (name === 'read_file' && args.path) return args.path.split('/').pop();
 	if (name === 'write_file' && args.path) return args.path.split('/').pop();
 	if (name === 'list_directory' && args.path) return args.path.split('/').pop() || args.path;

@@ -4,7 +4,7 @@ const geometryStore = require('./runtime/geometry-store');
 const avatarWindow = require('./windows/avatar-window');
 const taskQueueWatcher = require('./task-queue/watcher');
 
-function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, convexClient, dailyLoop, kanbanWindow }) {
+function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow }) {
 	const subscriptions = new Map();
 
 	ipcMain.handle(RUNTIME_CHANNELS.RUNTIME_GET_HEALTH, async () => healthService.getHealth());
@@ -41,6 +41,9 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, conv
 	ipcMain.handle(RUNTIME_CHANNELS.TASKS_RUN, (_, taskId, payload) => taskEngine.runTask(taskId, payload));
 	ipcMain.handle(RUNTIME_CHANNELS.TASKS_STOP, (_, taskId) => taskEngine.stopTask(taskId));
 	ipcMain.handle(RUNTIME_CHANNELS.TASKS_STREAM, () => ({ ok: true, channel: RUNTIME_CHANNELS.TASKS_STREAM }));
+	ipcMain.handle(RUNTIME_CHANNELS.UI_TASK_RUN, (_, goal, opts = {}) => uiTaskService.runTask({ goal, ...(opts || {}) }));
+	ipcMain.handle(RUNTIME_CHANNELS.UI_TASK_STOP, (_, reason) => uiTaskService.stopActiveTask(reason));
+	ipcMain.handle(RUNTIME_CHANNELS.UI_STATE_GET, () => uiTaskService.getState());
 
 	taskEngine.subscribeStream((data) => {
 		const kWin = kanbanWindow.get();
@@ -50,6 +53,17 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, conv
 		const aWin = avatarWindow.get();
 		if (aWin && !aWin.isDestroyed()) {
 			aWin.webContents.send(RUNTIME_CHANNELS.TASKS_STREAM, data);
+		}
+	});
+
+	uiTaskService.subscribeStream((data) => {
+		const kWin = kanbanWindow.get();
+		if (kWin && !kWin.isDestroyed()) {
+			kWin.webContents.send(RUNTIME_CHANNELS.UI_TASK_STREAM, data);
+		}
+		const aWin = avatarWindow.get();
+		if (aWin && !aWin.isDestroyed()) {
+			aWin.webContents.send(RUNTIME_CHANNELS.UI_TASK_STREAM, data);
 		}
 	});
 

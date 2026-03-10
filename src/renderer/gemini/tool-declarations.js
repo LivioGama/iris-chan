@@ -1,13 +1,26 @@
 // Tool schemas as pure data — imported by client.js
 export const toolDeclarations = [
 	{
+		name: 'run_ui_task',
+		description: 'Run a foreground UI task through the fast deterministic macOS executor. Use this first for direct computer-control requests like opening apps, opening URLs, searching inside the current app or page, clicking visible items, selecting items by text, typing into fields, and short multi-step UI flows. Pass the user intent, not coordinates or low-level micro-steps.',
+		parameters: {
+			type: 'OBJECT',
+			properties: {
+				goal: { type: 'STRING', description: 'The full UI task to perform, phrased in plain language. Preserve the user intent instead of rewriting it into x/y click instructions.' },
+				app_hint: { type: 'STRING', description: 'Optional preferred app, such as Safari or Finder.' },
+				success_signal: { type: 'STRING', description: 'Optional text, URL fragment, or visible label that should be present when the task is done.' },
+			},
+			required: ['goal'],
+		},
+	},
+	{
 		name: 'type_text',
 		description: 'Type text into the currently focused input field on the user\'s computer',
 		parameters: { type: 'OBJECT', properties: { text: { type: 'STRING' } }, required: ['text'] },
 	},
 	{
 		name: 'press_key',
-		description: 'Press a keyboard key or combo. Supported: return, space, escape, tab, delete, up, down, left, right, single letters a-z, or combos like cmd+c, ctrl+shift+a. For browser navigation, cmd+l focuses the address bar in Safari and Chromium browsers.',
+		description: 'Press a keyboard key or combo. Supported: return, space, escape, tab, delete, up, down, left, right, single letters a-z, or combos like cmd+c and ctrl+shift+a. Use this as a low-level fallback when run_ui_task is not appropriate.',
 		parameters: { type: 'OBJECT', properties: { key: { type: 'STRING' } }, required: ['key'] },
 	},
 	{

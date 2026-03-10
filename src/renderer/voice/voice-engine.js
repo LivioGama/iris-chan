@@ -417,7 +417,10 @@ export class VoiceEngine extends Emitter {
 			this._screen.capture({ passive: false, force: true });
 		}
 
+		this._toolHandler?.setUserSpeechActive?.(state === STATES.USER_SPEAKING);
+
 		if (state === STATES.USER_SPEAKING) {
+			window.electronAPI.stopUiTask?.('User speech interrupted the foreground UI task').catch(() => {});
 			if (prev === STATES.LISTENING || prev === STATES.RESPONDING || prev === STATES.IDLE) {
 				this._beginTurnLatency();
 			}

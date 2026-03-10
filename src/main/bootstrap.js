@@ -14,6 +14,8 @@ const kanbanWindow = require('./windows/kanban-window');
 const { createTrayController } = require('./status-tray');
 const { registerIpc } = require('./ipc-runtime');
 const { BehaviorModeState } = require('./runtime/behavior-mode');
+const { UITaskService } = require('./automation/ui-task-service');
+const { setUiTaskService } = require('./automation/service-ref');
 const taskQueueWatcher = require('./task-queue/watcher');
 const { setConvexClient: setTqControllerClient, setBehaviorEngine: setTqBehaviorEngine } = require('./controllers/taskQueueController');
 const { setConvexClient: setTqToolClient } = require('./tools/task-queue');
@@ -23,6 +25,7 @@ function startRuntime({ apiKey }) {
 	const convexClient = new ConvexClient({ eventBus });
 	const taskEngine = new TaskEngine({ eventBus });
 	const behaviorEngine = new BehaviorModeState();
+	const uiTaskService = new UITaskService({ eventBus });
 	const healthService = new HealthService({
 		convexClient,
 		taskEngine,
@@ -73,8 +76,9 @@ function startRuntime({ apiKey }) {
 
 	skills.scan();
 	legacyConvexStore.init();
+	setUiTaskService(uiTaskService);
 	legacyIpc.register(apiKey);
-	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, convexClient, dailyLoop, kanbanWindow });
+	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow });
 	setTqControllerClient(convexClient);
 	setTqBehaviorEngine(behaviorEngine);
 	setTqToolClient(convexClient);

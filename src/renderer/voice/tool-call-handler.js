@@ -19,6 +19,8 @@ const SCREEN_REFRESH_TOOLS = new Set([
 	'window_manage',
 	'activate_app',
 ]);
+const FOREGROUND_UI_STABILIZE_MS = 350;
+const SAME_TURN_UI_TASK_MESSAGE = 'Ignored repeated UI task in the same spoken turn';
 
 function isSearchTool(name, args) {
 	if (name === 'web_search' || name === 'ask_chatgpt' || name === 'research') return true;
@@ -47,12 +49,25 @@ export function formatToolResponseText(result) {
 	return result.ok === false ? `Error: ${text}` : text;
 }
 
-export function shouldRefreshScreenAfterTool(name) {
+export function shouldRefreshScreenAfterTool(name, result = null) {
+	if (name === 'run_ui_task') {
+		return result?.ok === false;
+	}
 	return SCREEN_REFRESH_TOOLS.has(name);
+}
+
+export function shouldDeferForegroundUiTool(name, { userSpeaking = false } = {}) {
+	return name === 'run_ui_task' && userSpeaking;
 }
 
 export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }) {
 	let activeToolCount = 0;
+	let userSpeaking = false;
+	let pendingUiCall = null;
+	let pendingUiFlushTimer = null;
+	let speechGeneration = 0;
+	let lastUiTaskSpeechGeneration = null;
+	let toolCallChain = Promise.resolve();
 
 	function updateToolPresence(name, args, index, total) {
 		const { label, detail } = getToolDisplay(name, args);
@@ -61,6 +76,34 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 			title: 'Working',
 			detail: detail ? `${step} · ${label}: ${detail}` : `${step} · ${label}`,
 		});
+	}
+
+	function clearPendingUiFlushTimer() {
+		if (!pendingUiFlushTimer) return;
+		clearTimeout(pendingUiFlushTimer);
+		pendingUiFlushTimer = null;
+	}
+
+	function supersedePendingUiCall(message = 'Deferred UI task superseded by a newer speech transcript') {
+		if (!pendingUiCall) return;
+		gemini.sendToolResponse(pendingUiCall.id, pendingUiCall.name, message);
+		pendingUiCall = null;
+		clearPendingUiFlushTimer();
+	}
+
+	function isUiTaskLockedForCurrentSpeech(name) {
+		return name === 'run_ui_task' && lastUiTaskSpeechGeneration === speechGeneration;
+	}
+
+	function markUiTaskDispatched(name) {
+		if (name === 'run_ui_task') {
+			lastUiTaskSpeechGeneration = speechGeneration;
+		}
+	}
+
+	function rejectDuplicateUiTask(call, message = SAME_TURN_UI_TASK_MESSAGE) {
+		logInfo('Tool', `Suppressing duplicate ${call.name} for speech turn ${speechGeneration}`);
+		gemini.sendToolResponse(call.id, call.name, message);
 	}
 
 	const _executeOne = async (name, args, id, index, total) => {
@@ -78,7 +121,7 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		try {
 			const result = await window.electronAPI.executeTool(name, args);
 			const toolResponseText = formatToolResponseText(result);
-			if (screen && shouldRefreshScreenAfterTool(name)) {
+			if (screen && shouldRefreshScreenAfterTool(name, result)) {
 				await screen.capture({ passive: false, force: true });
 			}
 			showToolDone(name, index, result.ok !== false);
@@ -106,11 +149,82 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		}
 	};
 
-	const handleToolCalls = async (calls) => {
+	const _executeDeferredUiCall = async (call) => {
+		onEvent(EVENT_TYPES.TOOL_START, { tools: [call.name] });
+		if (isUiTaskLockedForCurrentSpeech(call.name)) {
+			rejectDuplicateUiTask(call);
+			onEvent(EVENT_TYPES.TOOL_END, { tools: [call.name] });
+			return;
+		}
+		const shouldBlock = !BACKGROUND_TOOLS.has(call.name);
+		if (shouldBlock) {
+			onStateChange('TOOL_EXECUTING', true);
+		}
+		try {
+			markUiTaskDispatched(call.name);
+			await _executeOne(call.name, call.args, call.id, 0, 1);
+		} finally {
+			hideToolLog();
+			if (shouldBlock) {
+				onStateChange('TOOL_EXECUTING', false);
+			}
+			onEvent(EVENT_TYPES.TOOL_END, { tools: [call.name] });
+		}
+	};
+
+	function schedulePendingUiFlush() {
+		clearPendingUiFlushTimer();
+		if (!pendingUiCall || userSpeaking) return;
+		pendingUiFlushTimer = setTimeout(() => {
+			const call = pendingUiCall;
+			pendingUiCall = null;
+			pendingUiFlushTimer = null;
+			if (!call || userSpeaking) return;
+			_executeDeferredUiCall(call).catch((err) => {
+				logError('Tool', `Deferred UI tool ${call.name} dispatch error: ${err.message}`);
+			});
+		}, FOREGROUND_UI_STABILIZE_MS);
+	}
+
+	function queueDeferredUiCall(call) {
+		if (pendingUiCall) {
+			supersedePendingUiCall('Deferred UI task superseded by a newer speech transcript');
+		}
+		pendingUiCall = call;
+		clearPendingUiFlushTimer();
+		logInfo('Tool', `Deferring ${call.name} while user is still speaking`);
+	}
+
+	const _processToolCalls = async (calls) => {
+		const deferredCalls = [];
+		const executableCalls = [];
+		for (const call of calls) {
+			if (isUiTaskLockedForCurrentSpeech(call.name)) {
+				rejectDuplicateUiTask(call);
+				continue;
+			}
+			if (shouldDeferForegroundUiTool(call.name, { userSpeaking })) {
+				deferredCalls.push(call);
+			} else {
+				if (call.name === 'run_ui_task' && pendingUiCall) {
+					supersedePendingUiCall('Deferred UI task superseded by a newer stable interpretation');
+				}
+				executableCalls.push(call);
+			}
+		}
+
+		for (const call of deferredCalls) {
+			queueDeferredUiCall(call);
+		}
+
+		if (!executableCalls.length) {
+			return;
+		}
+
 		// Split calls into background (fire-and-forget) and blocking (synchronous) groups
 		const bgCalls = [];
 		const blockingCalls = [];
-		for (const call of calls) {
+		for (const call of executableCalls) {
 			if (BACKGROUND_TOOLS.has(call.name)) {
 				bgCalls.push(call);
 			} else {
@@ -118,7 +232,7 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 			}
 		}
 
-		onEvent(EVENT_TYPES.TOOL_START, { tools: calls.map(c => c.name) });
+		onEvent(EVENT_TYPES.TOOL_START, { tools: executableCalls.map(c => c.name) });
 
 		// Background tools: execute WITHOUT blocking voice engine.
 		// They resolve quickly (fire-and-forget in main process) and send their
@@ -140,6 +254,7 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 
 			for (let i = 0; i < blockingCalls.length; i++) {
 				const { name, args, id } = blockingCalls[i];
+				markUiTaskDispatched(name);
 				await _executeOne(name, args, id, i, blockingCalls.length);
 			}
 
@@ -156,8 +271,28 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 			await screen.capture({ passive: false, force: true });
 		}
 
-		onEvent(EVENT_TYPES.TOOL_END, { tools: calls.map(c => c.name) });
+		onEvent(EVENT_TYPES.TOOL_END, { tools: executableCalls.map(c => c.name) });
 	};
 
-	return { handleToolCalls };
+	const handleToolCalls = async (calls) => {
+		const run = () => _processToolCalls(calls);
+		const chained = toolCallChain.then(run, run);
+		toolCallChain = chained.catch(() => {});
+		return chained;
+	};
+
+	function setUserSpeechActive(active) {
+		const next = !!active;
+		if (userSpeaking === next) return;
+		userSpeaking = next;
+		if (userSpeaking) {
+			speechGeneration += 1;
+			lastUiTaskSpeechGeneration = null;
+			supersedePendingUiCall('Deferred UI task cancelled because the user kept speaking');
+			return;
+		}
+		schedulePendingUiFlush();
+	}
+
+	return { handleToolCalls, setUserSpeechActive };
 }

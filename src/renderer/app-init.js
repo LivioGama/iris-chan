@@ -13,6 +13,12 @@ export function bootRenderer({ avatarBounds, tools = [], skills = [] } = {}) {
 
 export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 	if (!evt?.type) return;
+	const isUiTaskEvent = evt.payload?.taskKind === 'ui' && (
+		evt.type === 'TASK_MILESTONE' ||
+		evt.type === 'TASK_DONE' ||
+		evt.type === 'INTERRUPT'
+	);
+	if (isUiTaskEvent) return;
 	pushTimelineEvent(evt);
 	if (evt.type === 'THINKING') {
 		showBubble('thinking', evt.payload?.message || 'Thinking...');

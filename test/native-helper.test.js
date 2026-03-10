@@ -13,6 +13,10 @@ const helperSource = fs.readFileSync(path.join(process.cwd(), 'helpers', 'iris-h
 assert.ok(helperSource.includes('AXIsProcessTrustedWithOptions'), 'helper should prompt for Accessibility permission before interaction');
 assert.ok(helperSource.includes('requireCursor(at:'), 'helper should verify cursor movement for mouse actions');
 assert.ok(!helperSource.includes('tell application "System Events" to key code'), 'press_key should no longer rely on AppleScript key events');
+assert.ok(helperSource.includes('--monitor-input'), 'helper should support persistent user-input monitoring mode');
+assert.ok(helperSource.includes('ax_snapshot'), 'helper should expose accessibility snapshots');
+assert.ok(helperSource.includes('ax_press'), 'helper should expose semantic accessibility presses');
+assert.ok(helperSource.includes('eventSourceUserData'), 'helper should tag synthetic events so the input monitor can ignore them');
 
 assert.deepStrictEqual(
 	parseHelperExecResult(

@@ -76,4 +76,4 @@ async function runHelper(actionObj) {
 	});
 }
 
-module.exports = { runHelper, shouldRecompileHelper, parseHelperExecResult };
+module.exports = { runHelper, ensureCompiled, shouldRecompileHelper, parseHelperExecResult };

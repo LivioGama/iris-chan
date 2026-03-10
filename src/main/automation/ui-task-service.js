@@ -1,0 +1,654 @@
+const { EventEmitter } = require('node:events');
+const { URL } = require('node:url');
+const { EVENT_TYPES } = require('../../shared/event-types.js');
+const { runHelper } = require('../native-helper');
+const { BrowserAdapter } = require('./browser-adapter');
+const { InputMonitor } = require('./input-monitor');
+const { createExecutionPlan } = require('./planner');
+const { WorldState } = require('./world-state');
+
+function createTaskId() {
+	return `ui_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeSignatureText(value = '') {
+	return String(value || '')
+		.toLowerCase()
+		.replace(/["'`]/g, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
+function createTaskSignature({ goal = '', appHint = '', successSignal = '' } = {}) {
+	return JSON.stringify({
+		goal: normalizeSignatureText(goal),
+		appHint: normalizeSignatureText(appHint),
+		successSignal: normalizeSignatureText(successSignal),
+	});
+}
+
+function createPlanSignature(plan = {}) {
+	const steps = Array.isArray(plan.steps) ? plan.steps : [];
+	return JSON.stringify({
+		appHint: normalizeSignatureText(plan.appHint || ''),
+		steps: steps.map((step) => ({
+			type: step.type || '',
+			appName: normalizeSignatureText(step.appName || step.appHint || ''),
+			url: step.url || '',
+			direction: normalizeSignatureText(step.direction || ''),
+			query: normalizeSignatureText(step.query || ''),
+			value: normalizeSignatureText(step.value || ''),
+			resultKind: normalizeSignatureText(step.resultKind || ''),
+			position: Number(step.position || 0),
+			selectorText: normalizeSignatureText(step.selector?.text || ''),
+			selectorRole: normalizeSignatureText(step.selector?.role || ''),
+		})),
+	});
+}
+
+function makeTaskError(message, code = 'ui_task_failed', details = {}) {
+	const err = new Error(message);
+	err.code = code;
+	Object.assign(err, details);
+	return err;
+}
+
+function didBrowserPageChange(beforeInfo, afterInfo) {
+	if (!beforeInfo?.ok || !afterInfo?.ok) return false;
+	const beforeUrl = String(beforeInfo.href || '');
+	const afterUrl = String(afterInfo.href || '');
+	if (beforeUrl && afterUrl && beforeUrl !== afterUrl) return true;
+	const beforeTitle = String(beforeInfo.title || '');
+	const afterTitle = String(afterInfo.title || '');
+	return Boolean(beforeTitle && afterTitle && beforeTitle !== afterTitle);
+}
+
+function parseJsonResult(text, fallback = null) {
+	if (typeof text !== 'string') return fallback;
+	try {
+		return JSON.parse(text);
+	} catch {
+		return fallback;
+	}
+}
+
+function wait(ms, signal) {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(signal.reason || makeTaskError('UI task interrupted', 'aborted'));
+			return;
+		}
+		const timer = setTimeout(() => {
+			cleanup();
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			cleanup();
+			reject(signal.reason || makeTaskError('UI task interrupted', 'aborted'));
+		};
+		const cleanup = () => signal?.removeEventListener?.('abort', onAbort);
+		signal?.addEventListener?.('abort', onAbort, { once: true });
+	});
+}
+
+function throwIfAborted(signal) {
+	if (signal?.aborted) {
+		throw signal.reason || makeTaskError('UI task interrupted', 'aborted');
+	}
+}
+
+function stepLabel(step) {
+	switch (step.type) {
+		case 'openApp':
+			return `Open ${step.appName || step.appHint}`;
+		case 'openUrl':
+			return `Open ${step.url}`;
+		case 'clickElement':
+			return `Click ${step.selector?.text || 'target'}`;
+		case 'selectItemByText':
+			return `Select ${step.selector?.text || 'item'}`;
+		case 'setElementValue':
+			return `Type ${step.value}`;
+		case 'searchInCurrentContext':
+			return `Search for ${step.query}`;
+		case 'clickSearchResult':
+			return `Click first ${step.resultKind || ''} result`;
+		case 'navigateHistory':
+			return step.direction === 'forward' ? 'Go forward' : 'Go back';
+		case 'scrollUntilVisible':
+			return `Scroll ${step.direction}`;
+		default:
+			return step.type;
+	}
+}
+
+class UITaskService extends EventEmitter {
+	constructor({ eventBus } = {}) {
+		super();
+		this.eventBus = eventBus;
+		this.browserAdapter = new BrowserAdapter();
+		this.worldState = new WorldState();
+		this.activeTask = null;
+		this.lastCompletedTask = null;
+		this.inputMonitor = new InputMonitor({
+			onInput: (payload) => {
+				if (!this.activeTask) return;
+				const kind = payload?.type || 'user input';
+				this.stopActiveTask(`User ${kind} interrupted the task`);
+			},
+		});
+	}
+
+	getState() {
+		const active = this.activeTask;
+		return {
+			ok: true,
+			active: active ? {
+				taskId: active.taskId,
+				goal: active.goal,
+				status: active.status,
+				currentStepIndex: active.currentStepIndex,
+				totalSteps: active.plan.steps.length,
+				startedAt: active.startedAt,
+			} : null,
+		};
+	}
+
+	subscribeStream(listener) {
+		this.on('ui-task-stream', listener);
+		return () => this.off('ui-task-stream', listener);
+	}
+
+	_emitStream(payload) {
+		this.emit('ui-task-stream', payload);
+	}
+
+	_emitMilestone(taskId, message, extra = {}) {
+		const payload = {
+			taskId,
+			message,
+			importance: extra.importance || 'medium',
+			status: extra.status || 'running',
+			taskKind: 'ui',
+		};
+		this.eventBus?.emitEvent?.(EVENT_TYPES.TASK_MILESTONE, payload, 'ui-task-service');
+		this._emitStream({ taskId, type: 'milestone', message, ...extra });
+	}
+
+	_emitDone(taskId, status, summary, extra = {}) {
+		const payload = {
+			taskId,
+			message: summary,
+			importance: extra.importance || 'high',
+			status,
+			taskKind: 'ui',
+		};
+		this.eventBus?.emitEvent?.(EVENT_TYPES.TASK_DONE, payload, 'ui-task-service');
+		this._emitStream({ taskId, type: 'done', status, summary, ...extra });
+	}
+
+	async runTask({ goal, app_hint: appHint = '', success_signal: successSignal = '' } = {}) {
+		const normalizedGoal = String(goal || '').trim();
+		if (!normalizedGoal) {
+			return { ok: false, result: 'No UI task goal provided' };
+		}
+		const planned = createExecutionPlan({ goal: normalizedGoal, appHint, successSignal });
+		if (!planned.ok) {
+			return { ok: false, result: planned.error };
+		}
+		const signature = createPlanSignature(planned.plan);
+		if (this.activeTask) {
+			if (this.activeTask.signature === signature) {
+				return {
+					ok: true,
+					result: `UI task already running: ${this.activeTask.goal}`,
+					taskId: this.activeTask.taskId,
+				};
+			}
+			return { ok: false, result: 'A UI task is already running' };
+		}
+		if (this.lastCompletedTask && this.lastCompletedTask.signature === signature && Date.now() - this.lastCompletedTask.completedAt < 6000) {
+			return {
+				ok: this.lastCompletedTask.ok,
+				result: this.lastCompletedTask.result,
+				taskId: this.lastCompletedTask.taskId,
+			};
+		}
+
+		const taskId = createTaskId();
+		const controller = new AbortController();
+		const activeTask = {
+			taskId,
+			goal: normalizedGoal,
+			status: 'running',
+			startedAt: Date.now(),
+			currentStepIndex: 0,
+			plan: planned.plan,
+			trace: [],
+			signature,
+			controller,
+		};
+		this.activeTask = activeTask;
+		this.worldState.invalidate();
+
+		this._emitMilestone(taskId, `UI task started: ${normalizedGoal}`, { plan: planned.plan });
+
+		try {
+			await this.inputMonitor.start();
+			const summary = await this._executePlan(activeTask);
+			activeTask.status = 'completed';
+			this.lastCompletedTask = {
+				signature,
+				taskId,
+				ok: true,
+				result: summary,
+				completedAt: Date.now(),
+			};
+			this._emitDone(taskId, 'completed', summary, { trace: activeTask.trace });
+			return { ok: true, result: summary, taskId };
+		} catch (err) {
+			const code = err?.code || 'ui_task_failed';
+			const summary = err?.message || 'UI task failed';
+			activeTask.status = code === 'aborted' ? 'cancelled' : 'failed';
+			this.lastCompletedTask = {
+				signature,
+				taskId,
+				ok: false,
+				result: summary,
+				completedAt: Date.now(),
+			};
+			if (code === 'aborted') {
+				this.eventBus?.emitEvent?.(EVENT_TYPES.INTERRUPT, {
+					taskId,
+					reason: summary,
+					taskKind: 'ui',
+				}, 'ui-task-service');
+			}
+			this._emitDone(taskId, activeTask.status, summary, { errorCode: code, trace: activeTask.trace });
+			return { ok: false, result: summary, taskId };
+		} finally {
+			this.inputMonitor.stop();
+			this.worldState.invalidate();
+			this.activeTask = null;
+		}
+	}
+
+	stopActiveTask(reason = 'User interrupted the task') {
+		if (!this.activeTask) return { ok: true, result: 'No active UI task' };
+		if (!this.activeTask.controller.signal.aborted) {
+			this.activeTask.controller.abort(makeTaskError(reason, 'aborted'));
+		}
+		return { ok: true, result: `Stopping ${this.activeTask.taskId}` };
+	}
+
+	async _executePlan(activeTask) {
+		const { plan, controller, taskId } = activeTask;
+		for (let i = 0; i < plan.steps.length; i++) {
+			throwIfAborted(controller.signal);
+			const step = plan.steps[i];
+			activeTask.currentStepIndex = i;
+			this._emitMilestone(taskId, `Step ${i + 1}/${plan.steps.length}: ${stepLabel(step)}`, {
+				step,
+				stepIndex: i,
+			});
+			const outcome = await this._executeStep(step, controller.signal);
+			activeTask.trace.push({
+				stepId: step.id,
+				type: step.type,
+				resolutionMethod: outcome.resolutionMethod || 'input',
+				result: outcome.result,
+			});
+			if (step.checkpoint) {
+				await this._verifyCheckpoint(plan, step, outcome, controller.signal);
+			}
+			this.worldState.invalidate();
+		}
+
+		if (plan.successSignal) {
+			await this._verifySuccessSignal(plan, controller.signal);
+		}
+
+		const lastTrace = activeTask.trace[activeTask.trace.length - 1];
+		return lastTrace?.result || `Completed UI task: ${plan.goal}`;
+	}
+
+	async _executeStep(step, signal) {
+		switch (step.type) {
+			case 'openApp':
+				return this._executeOpenApp(step, signal);
+			case 'openUrl':
+				return this._executeOpenUrl(step, signal);
+			case 'clickElement':
+			case 'selectItemByText':
+				return this._executeClickByText(step, signal);
+			case 'setElementValue':
+				return this._executeSetValue(step, signal);
+			case 'searchInCurrentContext':
+				return this._executeSearchInContext(step, signal);
+			case 'clickSearchResult':
+				return this._executeClickSearchResult(step, signal);
+			case 'navigateHistory':
+				return this._executeNavigateHistory(step, signal);
+			case 'scrollUntilVisible':
+				return this._executeScrollUntilVisible(step, signal);
+			default:
+				throw makeTaskError(`Unsupported UI step: ${step.type}`, 'unsupported_step');
+		}
+	}
+
+	async _executeOpenApp(step, signal) {
+		throwIfAborted(signal);
+		const appName = step.appName || step.appHint;
+		const result = await runHelper({ action: 'open_app', name: appName });
+		if (result.ok === false) {
+			throw makeTaskError(result.result || `Could not open ${appName}`, 'open_app_failed');
+		}
+		await wait(250, signal);
+		return {
+			ok: true,
+			resolutionMethod: 'input',
+			result: result.result || `Opened ${appName}`,
+		};
+	}
+
+	async _executeOpenUrl(step, signal) {
+		throwIfAborted(signal);
+		const frontmost = await this.worldState.getFrontmostApp({ force: true });
+		const appName = step.appHint || (frontmost.ok ? frontmost.name : '') || 'Safari';
+		const adapterResult = this.browserAdapter.openUrl({ appName, url: step.url });
+		if (!adapterResult.ok) {
+			throw makeTaskError(adapterResult.error, adapterResult.code || 'open_url_failed');
+		}
+		await wait(350, signal);
+		return adapterResult;
+	}
+
+	async _executeClickByText(step, signal) {
+		throwIfAborted(signal);
+		const targetText = step.selector?.text || '';
+		const frontmost = await this.worldState.getFrontmostApp({ force: true });
+		const appName = frontmost.ok ? frontmost.name : step.appHint || '';
+
+		if (this.browserAdapter.isSupported(appName)) {
+			const browserResult = this.browserAdapter.clickByText({ appName, text: targetText });
+			if (browserResult.ok) {
+				await wait(200, signal);
+				return browserResult;
+			}
+			if (browserResult.code === 'ambiguous') {
+				throw makeTaskError(
+					`Multiple matches for "${targetText}": ${(browserResult.matches || []).join(', ')}`,
+					'ambiguous',
+					{ matches: browserResult.matches || [] }
+				);
+			}
+		}
+
+		const axResult = await runHelper({
+			action: 'ax_press',
+			query: targetText,
+			role: step.selector?.role || '',
+			exact: step.selector?.exact === true,
+		});
+		if (axResult.ok === false) {
+			throw makeTaskError(axResult.result || `Could not click "${targetText}"`, 'ax_press_failed');
+		}
+		const parsed = parseJsonResult(axResult.result, null);
+		if (parsed?.ambiguous) {
+			throw makeTaskError(
+				`Multiple matches for "${targetText}": ${(parsed.matches || []).join(', ')}`,
+				'ambiguous',
+				{ matches: parsed.matches || [] }
+			);
+		}
+		await wait(150, signal);
+		return {
+			ok: true,
+			resolutionMethod: 'accessibility',
+			result: parsed?.message || `Activated "${targetText}"`,
+		};
+	}
+
+	async _executeSetValue(step, signal) {
+		throwIfAborted(signal);
+		if (step.selector?.text) {
+			await runHelper({
+				action: 'ax_focus',
+				query: step.selector.text,
+				role: step.selector.role || '',
+				exact: step.selector.exact === true,
+			});
+		}
+		const axResult = await runHelper({
+			action: 'ax_set_value',
+			query: step.selector?.text || '',
+			role: step.selector?.role || '',
+			exact: step.selector?.exact === true,
+			value: step.value,
+		});
+		if (axResult.ok !== false) {
+			const parsed = parseJsonResult(axResult.result, null);
+			return {
+				ok: true,
+				resolutionMethod: 'accessibility',
+				result: parsed?.message || `Typed "${step.value}"`,
+			};
+		}
+
+		const fallback = await runHelper({ action: 'type_text', text: step.value });
+		if (fallback.ok === false) {
+			throw makeTaskError(fallback.result || `Could not type "${step.value}"`, 'set_value_failed');
+		}
+		return {
+			ok: true,
+			resolutionMethod: 'input',
+			result: fallback.result || `Typed "${step.value}"`,
+		};
+	}
+
+	async _executeSearchInContext(step, signal) {
+		throwIfAborted(signal);
+		const query = String(step.query || '').trim();
+		if (!query) {
+			throw makeTaskError('Missing search query', 'missing_query');
+		}
+
+		const frontmost = await this.worldState.getFrontmostApp({ force: true });
+		const appName = frontmost.ok ? frontmost.name : step.appHint || '';
+
+		if (this.browserAdapter.isSupported(appName)) {
+			const browserResult = this.browserAdapter.searchInPage({ appName, query });
+			if (browserResult.ok) {
+				await wait(250, signal);
+				return browserResult;
+			}
+		}
+
+		const focusAttempts = [
+			{ query: 'search', role: 'search field' },
+			{ query: 'search', role: 'text field' },
+			{ query: 'find', role: 'search field' },
+		];
+		for (const attempt of focusAttempts) {
+			const focusResult = await runHelper({
+				action: 'ax_focus',
+				query: attempt.query,
+				role: attempt.role,
+				exact: false,
+			});
+			if (focusResult.ok === false) continue;
+			const setResult = await runHelper({
+				action: 'ax_set_value',
+				query: attempt.query,
+				role: attempt.role,
+				exact: false,
+				value: query,
+			});
+			if (setResult.ok !== false) {
+				const submit = await runHelper({ action: 'press_key', key: 'return' });
+				if (submit.ok === false) {
+					throw makeTaskError(submit.result || `Search submit failed for "${query}"`, 'search_submit_failed');
+				}
+				const parsed = parseJsonResult(setResult.result, null);
+				return {
+					ok: true,
+					resolutionMethod: 'accessibility',
+					result: parsed?.message || `Searched for "${query}"`,
+				};
+			}
+		}
+
+		throw makeTaskError(`Could not find a search field for "${query}" in ${appName || 'the current app'}`, 'search_field_missing');
+	}
+
+	async _executeClickSearchResult(step, signal) {
+		throwIfAborted(signal);
+		const frontmost = await this.worldState.getFrontmostApp({ force: true });
+		const appName = frontmost.ok ? frontmost.name : step.appHint || '';
+		const browserResult = this.browserAdapter.clickFirstSearchResult({
+			appName,
+			resultKind: step.resultKind || '',
+		});
+		if (!browserResult.ok) {
+			throw makeTaskError(browserResult.error, browserResult.code || 'click_result_failed');
+		}
+		await wait(250, signal);
+		return browserResult;
+	}
+
+	async _executeNavigateHistory(step, signal) {
+		throwIfAborted(signal);
+		const direction = step.direction === 'forward' ? 'forward' : 'back';
+		const shortcut = direction === 'forward' ? 'cmd+rightbracket' : 'cmd+leftbracket';
+		const frontmost = await this.worldState.getFrontmostApp({ force: true });
+		const frontmostName = frontmost.ok ? frontmost.name : '';
+		const appName = this.browserAdapter.isSupported(frontmostName) ? frontmostName : step.appHint || '';
+		if (!this.browserAdapter.isSupported(appName)) {
+			throw makeTaskError(`Browser history navigation is not supported in ${appName || 'the current app'}`, 'unsupported_app');
+		}
+
+		if (frontmostName !== appName) {
+			const openResult = await runHelper({ action: 'open_app', name: appName });
+			if (openResult.ok === false) {
+				throw makeTaskError(openResult.result || `Could not activate ${appName}`, 'open_app_failed');
+			}
+			await wait(250, signal);
+		}
+
+		const beforeInfo = this.browserAdapter.getCurrentPageInfo({ appName });
+		const result = await runHelper({ action: 'press_key', key: shortcut });
+		if (result.ok === false) {
+			throw makeTaskError(result.result || `Could not go ${direction} in ${appName}`, 'history_navigation_failed');
+		}
+		await wait(350, signal);
+
+		const afterInfo = this.browserAdapter.getCurrentPageInfo({ appName });
+		if (beforeInfo.ok && afterInfo.ok && !didBrowserPageChange(beforeInfo, afterInfo)) {
+			throw makeTaskError(`Could not go ${direction} in ${appName} because no history entry was available`, 'history_navigation_failed');
+		}
+
+		return {
+			ok: true,
+			resolutionMethod: 'input',
+			result: `Went ${direction} in ${appName}`,
+			before: beforeInfo.href || '',
+			after: afterInfo.href || '',
+		};
+	}
+
+	async _executeScrollUntilVisible(step, signal) {
+		throwIfAborted(signal);
+		for (let attempt = 0; attempt < 6; attempt++) {
+			if (step.selector?.text) {
+				const axMatch = await this.worldState.findAccessibilityMatches(step.selector.text, { limit: 4 });
+				if (axMatch.ok && axMatch.count > 0) {
+					return {
+						ok: true,
+						resolutionMethod: 'accessibility',
+						result: `Found "${step.selector.text}" after scrolling`,
+					};
+				}
+			}
+
+			const result = await runHelper({
+				action: 'scroll',
+				direction: step.direction || 'down',
+				amount: 4,
+			});
+			if (result.ok === false) {
+				throw makeTaskError(result.result || `Could not scroll ${step.direction}`, 'scroll_failed');
+			}
+			await wait(120, signal);
+			this.worldState.invalidate();
+		}
+
+		throw makeTaskError(`Could not find "${step.selector?.text || 'target'}" after scrolling`, 'scroll_target_missing');
+	}
+
+	async _verifyCheckpoint(plan, step, outcome, signal) {
+		throwIfAborted(signal);
+		if (step.checkpoint?.kind === 'app-switch' && step.appName) {
+			const frontmost = await this.worldState.getFrontmostApp({ force: true });
+			if (!frontmost.ok || frontmost.name !== step.appName) {
+				throw makeTaskError(`Expected ${step.appName} to be frontmost`, 'checkpoint_failed');
+			}
+			return;
+		}
+
+		if (step.checkpoint?.kind === 'navigation' && step.url) {
+			const frontmost = await this.worldState.getFrontmostApp({ force: true });
+			const appName = frontmost.ok ? frontmost.name : step.appHint;
+			if (this.browserAdapter.isSupported(appName)) {
+				const host = (() => {
+					try {
+						return new URL(step.url).host;
+					} catch {
+						return step.url;
+					}
+				})();
+				const verify = this.browserAdapter.verifySignal({ appName, signal: host });
+				if (!verify.ok) {
+					throw makeTaskError(verify.error || `Navigation checkpoint failed for ${step.url}`, 'checkpoint_failed');
+				}
+				return;
+			}
+		}
+
+		if (step.checkpoint?.kind === 'search' && step.query) {
+			if (plan.successSignal) {
+				await this._verifySuccessSignal(plan, signal);
+			}
+			return;
+		}
+
+		if (step.checkpoint?.kind === 'final' && plan.successSignal) {
+			await this._verifySuccessSignal(plan, signal);
+		}
+
+		if (!outcome?.ok) {
+			throw makeTaskError(`Checkpoint failed after ${stepLabel(step)}`, 'checkpoint_failed');
+		}
+	}
+
+	async _verifySuccessSignal(plan, signal) {
+		throwIfAborted(signal);
+		const frontmost = await this.worldState.getFrontmostApp({ force: true });
+		const appName = frontmost.ok ? frontmost.name : plan.appHint;
+		if (this.browserAdapter.isSupported(appName)) {
+			const verify = this.browserAdapter.verifySignal({ appName, signal: plan.successSignal });
+			if (!verify.ok) throw makeTaskError(verify.error, verify.code || 'verify_failed');
+			return;
+		}
+		const axMatch = await this.worldState.findAccessibilityMatches(plan.successSignal, { limit: 4 });
+		if (!axMatch.ok || axMatch.count < 1) {
+			throw makeTaskError(`Verification signal "${plan.successSignal}" was not found`, 'verify_failed');
+		}
+	}
+}
+
+module.exports = {
+	createPlanSignature,
+	createTaskSignature,
+	UITaskService,
+};
