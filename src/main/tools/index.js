@@ -1,6 +1,7 @@
 const skills = require('../skills');
 const log = require('../logger');
 const workspace = require('../workspace');
+const { isFrontmostExcluded, isInputTool, getFrontmostAppName } = require('../app-exclusion');
 
 const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue'];
 
@@ -42,6 +43,19 @@ function reload() {
 }
 
 async function execute(name, args) {
+	// ── Excluded-app guard ──────────────────────────────────────────────
+	// Block input-dispatching tools when an excluded app (e.g. SuperRun)
+	// is in the foreground to prevent Iris's CGEvent posting from
+	// interfering with the app's own interaction model.
+	if (isInputTool(name) && isFrontmostExcluded()) {
+		const app = getFrontmostAppName();
+		log.warn('Tools', `Blocked input tool "${name}" — excluded app "${app}" is focused`);
+		return {
+			ok: false,
+			result: `Tool "${name}" blocked: "${app}" is in the foreground exclusion list. Iris will not send input events while this app is focused.`,
+		};
+	}
+
 	// Workspace tools
 	if (name === 'set_workspace') {
 		const dir = args?.directory || args?.path || '';
@@ -50,6 +64,27 @@ async function execute(name, args) {
 	}
 	if (name === 'get_workspace') {
 		return { ok: true, result: workspace.get() };
+	}
+
+	// detect_project: identify the project under the cursor
+	if (name === 'detect_project') {
+		try {
+			const { detectHoveredPath } = require('../task-queue/path-detector');
+			const detection = await detectHoveredPath();
+			if (detection.ok) {
+				return {
+					ok: true,
+					result: JSON.stringify({
+						projectPath: detection.projectPath,
+						detectedPath: detection.detectedPath || null,
+						app: detection.app || 'Unknown',
+					}),
+				};
+			}
+			return { ok: false, result: detection.error || 'No project detected at cursor position' };
+		} catch (err) {
+			return { ok: false, result: `Detection error: ${err.message}` };
+		}
 	}
 
 	// use_skill: on-demand skill content retrieval

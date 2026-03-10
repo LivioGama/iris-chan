@@ -37,6 +37,7 @@ export function showBubble(lane, text, { role } = {}) {
 	hideTimers.set(bubble, timeout);
 }
 
+<<<<<<< Updated upstream
 /**
  * Show or update a streaming bubble. Reuses the same DOM element for a given
  * streamId so that incoming tokens update the text in-place instead of
@@ -59,6 +60,30 @@ export function showStreamingBubble(lane, text, streamId, { role } = {}) {
 			hideTimers.delete(existing.el);
 		}
 		return;
+=======
+	const bubble = document.getElementById(bubbleId);
+	if (bubble) {
+		// Detect context/thinking messages and apply distinct styling
+		const isContext = who === 'model' && text && (
+			text.startsWith('[SCREEN CONTEXT]') ||
+			text.startsWith('[CONTEXT]') ||
+			text.startsWith('[SYSTEM]') ||
+			text.startsWith('[THINKING]')
+		);
+		bubble.classList.toggle('bubble-context', isContext);
+
+		// Truncate context messages to 2 visible lines
+		const textEl = document.getElementById(textId);
+		if (isContext && textEl) {
+			const maxLen = 120;
+			textEl.textContent = text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
+		}
+
+		bubble.classList.add('visible');
+		clearTimeout(hideTimers[who]);
+		const duration = isContext ? 3000 : calcDuration(text);
+		hideTimers[who] = setTimeout(() => bubble.classList.remove('visible'), duration);
+>>>>>>> Stashed changes
 	}
 
 	// Create a new bubble for this stream

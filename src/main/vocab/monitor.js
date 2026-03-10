@@ -3,6 +3,7 @@ const config = require('../../shared/config').default;
 const vocabStore = require('./store');
 const toolExecutor = require('../tools');
 const log = require('../logger');
+const { isFrontmostExcluded } = require('../app-exclusion');
 
 let vocabBuffer = [];
 let lastClipboard = '';
@@ -67,8 +68,11 @@ function start(apiKey, getWin) {
 	}, config.vocab.clipboardPollMs);
 
 	// Window title collector — every 3 seconds
+	// Skipped when an excluded app (e.g. SuperRun) is focused to avoid
+	// interfering with its accessibility-based interaction model.
 	let lastFocusedMessagingApp = null;
 	setInterval(async () => {
+		if (isFrontmostExcluded()) return;
 		try {
 			const result = await toolExecutor.execute('get_frontmost_app', {});
 			const info = result?.result || '';

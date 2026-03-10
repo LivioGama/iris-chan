@@ -1,6 +1,7 @@
 const { execFile } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
+const { isFrontmostExcluded, getFrontmostAppName } = require('../app-exclusion');
 
 const SWIFT_SCRIPT = path.join(__dirname, '..', '..', '..', 'scripts', 'hover-detect.swift');
 const PROJECT_MARKERS = ['.git', 'package.json', 'Cargo.toml', 'pyproject.toml', 'go.mod', 'Makefile', 'CLAUDE.md'];
@@ -39,6 +40,14 @@ function parseHoverDetectorOutput(stdout, stderr = '') {
 
 function detectHoveredPath() {
 	return new Promise((resolve) => {
+		// Skip accessibility-tree queries when an excluded app (e.g. SuperRun)
+		// is focused — querying its AX hierarchy can conflict with the app's
+		// own accessibility-based interaction model.
+		if (isFrontmostExcluded()) {
+			const app = getFrontmostAppName();
+			return resolve({ ok: false, error: `Skipped — excluded app "${app}" is focused`, app });
+		}
+
 		if (!fs.existsSync(SWIFT_SCRIPT)) {
 			return resolve({ ok: false, error: `Missing hover detector script at ${SWIFT_SCRIPT}` });
 		}

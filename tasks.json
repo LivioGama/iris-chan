@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "updatedAt": "2026-02-19T06:53:33.047Z",
+  "tasks": [
+    {
+      "id": "task-7",
+      "title": "PROBLEM: The model is currently configured for 'absolute silence' during idle pe",
+      "description": "PROBLEM: The model is currently configured for 'absolute silence' during idle periods and responds with 'Silence.' This conversational style is causing concern for the user and is noted as a problem on the Kanban board. Additionally, the user desires a 'multi-mute feature triggered by clicking' as seen on the Kanban board. DESIRED BEHAVIOR: Modify the model's behavior to be more conversational and less abruptly silent during idle periods, removing the 'Silence.' response. Implement the 'multi-mute feature triggered by clicking'. FILES: This likely involves src/renderer/voice/pipeline.js (orchestrates voice state), src/renderer/gemini/client.js (system prompt and conversational style), and potentially src/renderer/index.html or related renderer files for implementing the 'multi-mute feature' UI and logic. IMPLEMENTATION: Update the system prompt in src/renderer/gemini/client.js to remove strict silence constraints and forbidding phrases. Modify src/renderer/voice/pipeline.js state machine to allow for conversational follow-ups and less rigid idle behavior. Implement the multi-mute feature in renderer code, connecting a click trigger to audio controls in src/renderer/voice/capture.js and src/renderer/voice/playback.js. CONTEXT: The Kanban board visible on screen explicitly lists these two problems.",
+      "status": "PENDING",
+      "order": 7,
+      "files": [],
+      "action": "",
+      "verify": "",
+      "done": "",
+      "logs": ""
+    },
+    {
+      "id": "task-8",
+      "title": "PROBLEM: The user perceives Iris is in a continuous operational loop, which is c",
+      "description": "PROBLEM: The user perceives Iris is in a continuous operational loop, which is corroborated by terminal logs showing repeated \"[Voice] Idle loop detected - pausing passive screen captures\" messages. This behavior is likely causing excessive memory usage and resource consumption (\"too many resources\"). DESIRED BEHAVIOR: Optimize the voice pipeline's idle detection and pausing mechanism to eliminate continuous looping, significantly reduce memory and CPU load during idle periods, and improve overall performance and responsiveness. FILES: `src/renderer/voice/pipeline.js`, `src/renderer/voice/capture.js`, and potentially `src/main/index.js` for overall process management. IMPLEMENTATION: Refactor `pipeline.js` to implement a more robust state machine for idle detection, preventing rapid switching between active and idle states. Ensure `capture.js` correctly pauses and releases resources when signaled. Analyze and resolve the condition triggering continuous \"Idle loop detected\" messages in the codebase. CONTEXT: User expressed concern about memory usage and constant looping while Activity Monitor shows high memory consumers and terminal logs explicitly state idle loop detections within the Iris process.",
+      "status": "PENDING",
+      "order": 2,
+      "files": [],
+      "action": "",
+      "verify": "",
+      "done": "",
+      "dependsOn": [],
+      "createdAt": "2026-02-17T22:31:06.903Z",
+      "updatedAt": "2026-02-17T22:31:06.903Z"
+    },
+    {
+      "id": "task-9",
+      "title": "PROBLEM: The user is experiencing significant latency in voice processing and in",
+      "description": "PROBLEM: The user is experiencing significant latency in voice processing and interaction, leading to explicit frustration (\"she's slow as fuck\"). DESIRED BEHAVIOR: The system needs substantial optimization to improve voice pipeline performance, reduce perceived latency, and ensure a more fluid, reliable, and intelligent voice handling experience, potentially implementing full-duplex communication logic for better conversational flow as implied by user feedback (\"handle the voice for the full\"). FILES: src/renderer/voice/pipeline.js, src/renderer/voice/capture.js, src/renderer/voice/playback.js, src/renderer/gemini/client.js, src/main/index.js. IMPLEMENTATION: Analyze src/renderer/voice/pipeline.js for state machine bottlenecks and refine the flow. Optimize src/renderer/voice/capture.js for low-latency audio capture and efficient streaming. Review src/renderer/voice/playback.js for enhanced 24kHz playback performance and accurate lip-sync synchronization. Investigate src/renderer/gemini/client.js configuration for opportunities to reduce API latency. Ensure overall architecture in src/main/index.js supports optimized real-time voice interaction. CONTEXT: Current performance is negatively impacting user satisfaction, and optimization across the voice pipeline is critical for core functionality.",
+      "status": "PENDING",
+      "order": 3,
+      "files": [],
+      "action": "",
+      "verify": "",
+      "done": "",
+      "dependsOn": [],
+      "createdAt": "2026-02-17T22:41:07.151Z",
+      "updatedAt": "2026-02-17T22:41:07.151Z"
+    },
+    {
+      "id": "task-10",
+      "title": "PROBLEM: The `gemini-deep-research-companies` skill's `research.py` script fails",
+      "description": "PROBLEM: The `gemini-deep-research-companies` skill's `research.py` script fails with `Script error (exit 127)` and `remote_exec: command not found`, likely due to an environmental configuration issue related to script execution paths or missing dependencies required by the `use_skill` wrapper. This prevents execution of the `research` tool as demonstrated by the user's attempt.\nDESIRED BEHAVIOR: Ensure the execution environment for skills is correctly configured so that `research.py` executes successfully, resolving the `command not found` error and allowing the Gemini Deep Research functionality to work as intended.\nFILES: `~/.iris/skills/gemini-deep-research-companies/scripts/research.py`, `src/main/tools/index.js`, and system environment configuration related to skill execution paths and dependencies.\nIMPLEMENTATION: Analyze skill execution flow in `src/main/tools/index.js` to identify how `python3` scripts are invoked. Implement necessary environment setup, such as ensuring `/Users/livio/.local/bin` is in the execution PATH or diagnosing why `remote_exec` command is unavailable during skill execution, and apply the fix to guarantee successful script execution.\nCONTEXT: This fix is necessary after the recent failed attempt to use the `research` tool for the query \"companies implementing cutting-edge AI technologies\".",
+      "status": "PENDING",
+      "order": 4,
+      "files": [],
+      "action": "",
+      "verify": "",
+      "done": "",
+      "dependsOn": [],
+      "createdAt": "2026-02-19T06:53:33.047Z",
+      "updatedAt": "2026-02-19T06:53:33.047Z"
+    }
+  ]
+}

@@ -257,8 +257,12 @@ async function main() {
 
   const curatedPath = path.join(DESKTOP, 'Iris_Message_Log.txt');
   const verbosePath = path.join(DESKTOP, 'iris_conversation.log');
+<<<<<<< Updated upstream
   const consolidatedPath = path.join(DESKTOP, 'consolidated_messages.log');
   // consolidated_messages.log is debug output (playback/echo), not conversation data
+=======
+  // consolidated_messages.log is debug output (playback/echo), not conversation data — skip it
+>>>>>>> Stashed changes
 
   const curatedTurns = fs.existsSync(curatedPath) ? parseFile(curatedPath, 'curated') : [];
   const verboseTurns = fs.existsSync(verbosePath) ? parseFile(verbosePath, 'historical') : [];
@@ -288,6 +292,7 @@ async function main() {
     return;
   }
 
+<<<<<<< Updated upstream
   if (!options.force) {
     try {
       const verifyUrl = `${CONVEX_URL}/api/run/conversations/getRecent`;
@@ -321,6 +326,8 @@ async function main() {
     }
   }
 
+=======
+>>>>>>> Stashed changes
   console.log('\nGenerating embeddings (batches of 20)...');
   const batchSize = 20;
   for (let i = 0; i < finalTurns.length; i += batchSize) {
@@ -364,6 +371,7 @@ async function main() {
 
   console.log(`\nDone! Inserted ${inserted} conversation turns.`);
 
+<<<<<<< Updated upstream
   // Verify data actually landed in Convex before deleting source files
   if (inserted > 0) {
     console.log('\nVerifying import in Convex...');
@@ -389,6 +397,11 @@ async function main() {
     }
 
     const filesToDelete = [curatedPath, verbosePath, consolidatedPath];
+=======
+  // Delete log files after successful import
+  if (inserted > 0) {
+    const filesToDelete = [curatedPath, verbosePath, path.join(DESKTOP, 'consolidated_messages.log')];
+>>>>>>> Stashed changes
     for (const file of filesToDelete) {
       if (fs.existsSync(file)) {
         fs.unlinkSync(file);
