@@ -47,6 +47,7 @@ async function execute(name, args) {
 	const resolved = learningManager?.resolveToolRequest?.(name, args || {}) || { name, args };
 	name = resolved.name || name;
 	args = resolved.args || args;
+	const sequenceRemainder = Array.isArray(resolved.sequenceRemainder) ? resolved.sequenceRemainder : [];
 
 	// Workspace tools
 	if (name === 'set_workspace') {
@@ -66,7 +67,21 @@ async function execute(name, args) {
 	const builtin = builtinHandlers[name];
 	if (builtin) {
 		try {
-			return await builtin(args || {});
+			const firstResult = await builtin(args || {});
+			if (firstResult?.ok === false || !sequenceRemainder.length) return firstResult;
+			let lastResult = firstResult;
+			for (const step of sequenceRemainder) {
+				const handler = builtinHandlers[step.name];
+				if (!handler) {
+					return { ok: false, result: `Learned tool sequence references unknown tool: ${step.name}` };
+				}
+				lastResult = await handler(step.args || {});
+				if (lastResult?.ok === false) return lastResult;
+			}
+			return {
+				ok: true,
+				result: lastResult?.result || firstResult?.result || 'done',
+			};
 		} catch (err) {
 			log.error('Tools', `Handler error in ${name}: ${err.message}`);
 			return { ok: false, result: `Tool error: ${err.message}` };

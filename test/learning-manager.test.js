@@ -55,6 +55,59 @@ async function testLearningManagerWritesDefaultBrowserMemory() {
 	);
 }
 
+async function testLearningManagerTracksDefaultAppQueryRecovery() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	manager.recordConversationTurn('user', 'what is my default browser');
+	manager.recordToolExecution('run_ui_task', { goal: 'what is my default browser' }, 'Error: Could not build deterministic plan', false, 10);
+	manager.recordToolExecution('get_default_app', { kind: 'browser' }, 'Default browser app is Arc', true, 10);
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.default_app_resolution' });
+	assert.ok(policy, 'default-app query recovery should keep the native default-app policy in memory');
+}
+
+async function testLearningManagerRewritesDefaultAppQueryFromMemory() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	memoryStore.upsert({
+		kind: 'environment_fact',
+		scope: 'machine',
+		key: 'environment.default_browser.app_name',
+		value: 'Arc',
+		source: 'observed_success',
+		confidence: 1,
+	});
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	const resolved = manager.resolveToolRequest('get_default_app', { kind: 'browser' });
+
+	assert.strictEqual(resolved.args.resolved_app_name, 'Arc', 'default-app query should be enriched from memory');
+	assert.strictEqual(resolved.args.learned_from_memory, true, 'default-app query should be marked as memory-derived');
+}
+
 async function testGetDefaultAppUsesStoredMemory() {
 	const irisDir = createTempDir();
 	const memoryStore = new MemoryStore({ irisDir });
@@ -119,6 +172,45 @@ async function testLearningManagerCreatesReusableToolSkill() {
 	const resolved = manager.resolveToolRequest('open_app', { name: 'open my music app' });
 	assert.strictEqual(resolved.args.name, 'Music', 'learned tool sequence should rewrite future vague tool calls');
 	assert.ok(resolved.args.learned_skill_id, 'learned tool resolution should annotate the learned skill id');
+}
+
+async function testLearningManagerExposesSafeMultiToolSequence() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	selfImprovementManager.createSkill({
+		purpose: 'Open editor and save file',
+		source_goal: 'save this file in code',
+		trigger_source: 'user-correction',
+		match_criteria: {
+			intents: ['save this file in code'],
+			keywords: ['save', 'code'],
+		},
+		preferred_execution_path: {
+			type: 'tool-sequence',
+			sequence: [
+				{ name: 'open_app', args: { name: 'Visual Studio Code' } },
+				{ name: 'press_key', args: { key: 'cmd+s' } },
+			],
+		},
+		stability: 'stable',
+	});
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	const resolved = manager.resolveToolRequest('open_app', { name: 'save this file in code' });
+
+	assert.strictEqual(resolved.args.name, 'Visual Studio Code', 'first step of learned multi-tool sequence should rewrite the direct tool args');
+	assert.strictEqual(Array.isArray(resolved.sequenceRemainder), true, 'learned multi-tool sequence should expose remaining safe steps');
+	assert.strictEqual(resolved.sequenceRemainder.length, 1, 'remaining non-pointer steps should be preserved');
 }
 
 async function testLearningManagerDedupesAutonomousSelfFix() {
@@ -209,10 +301,105 @@ async function testSemanticIssueClusteringMergesNearDuplicateCoreGaps() {
 	await wait(120);
 
 	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
-	const clustered = issues.issues.filter((issue) => String(issue.issueSignature || '').includes('open that channel link'));
-
-	assert.strictEqual(clustered.length, 1, 'near-duplicate structural issues should cluster together');
+	assert.strictEqual(issues.issues.length, 1, 'near-duplicate structural issues should cluster together');
+	assert.strictEqual(issues.issues[0].semanticFeatures.intentFamily, 'navigation');
+	assert.strictEqual(issues.issues[0].semanticFeatures.targets.includes('channel_result'), true);
 	assert.strictEqual(selfFixCalls, 1, 'clustered repeated issue should trigger a single self-fix');
+}
+
+async function testSemanticIssueClusteringMergesParaphrasedFalsePositives() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.enqueue({
+		type: 'false_positive_skill',
+		domain: 'browser',
+		userText: 'you opened youtube instead of the requested video',
+		guidanceText: 'you opened youtube instead of the requested video',
+		classification: { payload: { description: 'opened the wrong video target' } },
+		failedTools: [{ name: 'run_ui_task', success: false }],
+		successfulTools: [{ name: 'open_app', success: true }],
+		createdAt: new Date().toISOString(),
+	});
+	manager.enqueue({
+		type: 'false_positive_skill',
+		domain: 'browser',
+		userText: 'that opened youtube, not the video i asked for',
+		guidanceText: 'that opened youtube, not the video i asked for',
+		classification: { payload: { description: 'opened youtube instead of the requested video' } },
+		failedTools: [{ name: 'get_default_app', success: false }],
+		successfulTools: [{ name: 'open_app', success: true }],
+		createdAt: new Date().toISOString(),
+	});
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 1, 'paraphrased false positives should cluster together');
+	assert.strictEqual(issues.issues[0].semanticFeatures.intentFamily, 'media_control');
+	assert.strictEqual(issues.issues[0].semanticFeatures.targets.includes('video'), true);
+	assert.strictEqual(selfFixCalls, 1, 'clustered false positives should trigger a single self-fix');
+}
+
+async function testSemanticIssueClusteringIgnoresToolPathVariance() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.enqueue({
+		type: 'stabilization_candidate',
+		domain: 'browser',
+		userText: 'click the channel result',
+		guidanceText: 'click the channel result',
+		classification: { payload: { description: 'channel result needed pointer recovery' } },
+		failedTools: [{ name: 'run_ui_task', success: false }],
+		successfulTools: [{ name: 'click_at', success: true }],
+		createdAt: new Date().toISOString(),
+	});
+	manager.enqueue({
+		type: 'stabilization_candidate',
+		domain: 'browser',
+		userText: 'open the channel link',
+		guidanceText: 'open the channel link',
+		classification: { payload: { description: 'channel link needed pointer recovery' } },
+		failedTools: [{ name: 'open_app', success: false }],
+		successfulTools: [{ name: 'double_click', success: true }],
+		createdAt: new Date().toISOString(),
+	});
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 1, 'tool-path variants of the same channel target should cluster together');
+	assert.strictEqual(issues.issues[0].semanticFeatures.targets.includes('channel_result'), true);
+	assert.strictEqual(selfFixCalls, 1, 'clustered stabilization issues should trigger one self-fix');
 }
 
 async function testStabilizationFailureQueuesImmediateSelfFix() {
@@ -316,10 +503,15 @@ Promise.resolve()
 	.then(testMemoryStoreSeedsDefaultPolicy)
 	.then(testGetDefaultAppUsesStoredMemory)
 	.then(testLearningManagerWritesDefaultBrowserMemory)
+	.then(testLearningManagerTracksDefaultAppQueryRecovery)
+	.then(testLearningManagerRewritesDefaultAppQueryFromMemory)
 	.then(testLearningManagerCreatesReusableToolSkill)
+	.then(testLearningManagerExposesSafeMultiToolSequence)
 	.then(testLearningManagerDedupesAutonomousSelfFix)
 	.then(testPointerRecoveryDoesNotCreateLearnedSkill)
 	.then(testSemanticIssueClusteringMergesNearDuplicateCoreGaps)
+	.then(testSemanticIssueClusteringMergesParaphrasedFalsePositives)
+	.then(testSemanticIssueClusteringIgnoresToolPathVariance)
 	.then(testStabilizationFailureQueuesImmediateSelfFix)
 	.then(testDeferredSelfFixIssuesAreRetried)
 	.then(() => {

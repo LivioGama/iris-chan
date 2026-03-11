@@ -23,6 +23,21 @@ assert.ok(
 );
 
 assert.ok(
+	systemPrompt.includes("Treat the user's request as evidence of the surrounding workflow"),
+	'system prompt should require anticipatory intent interpretation for skills'
+);
+
+assert.ok(
+	systemPrompt.includes('Default to a FULL DOMAIN BUNDLE when learning or packaging a skill.'),
+	'system prompt should require full-domain capability bundling for learned skills'
+);
+
+assert.ok(
+	systemPrompt.includes('Never ask a multi-question interview for skill discovery.'),
+	'system prompt should explicitly ban multi-question discovery interviews'
+);
+
+assert.ok(
 	!systemPrompt.includes('`cmd+l` to focus the address bar'),
 	'system prompt should not steer browser navigation through cmd+l anymore'
 );

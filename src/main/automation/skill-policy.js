@@ -27,6 +27,8 @@ function inferGoalCapabilities(goal = '') {
 	if (/\bpaste\b/.test(text)) caps.add('paste');
 	if (/\bselect all\b/.test(text)) caps.add('selectall');
 	if (/\bclose file\b|\bclose tab\b/.test(text)) caps.add('closefile');
+	if (/\bdefault browser\b/.test(text)) caps.add('defaultbrowser');
+	if (/\bdefault mail\b/.test(text)) caps.add('defaultmail');
 	return caps;
 }
 
@@ -72,6 +74,10 @@ function inferPlanCapabilities(plan = {}) {
 				if (step.action === 'paste') caps.add('paste');
 				if (step.action === 'selectAll') caps.add('selectall');
 				if (step.action === 'closeFile') caps.add('closefile');
+				break;
+			case 'resolveSystemDefault':
+				if (step.kind === 'browser') caps.add('defaultbrowser');
+				if (step.kind === 'mail') caps.add('defaultmail');
 				break;
 			default:
 				break;

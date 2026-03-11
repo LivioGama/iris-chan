@@ -59,6 +59,18 @@ assert.strictEqual(
 );
 
 assert.strictEqual(
+	planLikelySatisfiesGoal('What is my default browser', { steps: [{ type: 'resolveSystemDefault', kind: 'browser' }] }),
+	true,
+	'system-default query plans should satisfy matching default-app goals'
+);
+
+assert.strictEqual(
+	planLikelySatisfiesGoal('What is my default browser', { steps: [{ type: 'openUrl', url: 'https://youtube.com' }] }),
+	false,
+	'unrelated navigation plans should not satisfy system-default query goals'
+);
+
+assert.strictEqual(
 	planLikelySatisfiesGoal('Save file', { steps: [{ type: 'openUrl', url: 'https://youtube.com' }] }),
 	false,
 	'non-editor plans should not satisfy editor-command goals'

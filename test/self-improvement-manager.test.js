@@ -5,7 +5,12 @@ const path = require('node:path');
 
 require('ts-node').register({ transpileOnly: true });
 
-const { SelfImprovementManager } = require('../src/main/automation/self-improvement-manager');
+const {
+	SelfImprovementManager,
+	DEFAULT_INFERENCE_POLICY,
+	DEFAULT_QUESTION_POLICY,
+	DEFAULT_STEERING_DECISION_TYPES,
+} = require('../src/main/automation/self-improvement-manager');
 
 console.log('Running self-improvement manager tests...');
 
@@ -52,7 +57,56 @@ async function testCreateSkillWritesPackageAndRegistry() {
 	const registry = readJson(path.join(irisDir, 'skills', '_registry.json'));
 	assert.strictEqual(Array.isArray(registry.skills), true, 'registry should track skills');
 	assert.strictEqual(registry.skills.some((entry) => entry.id === result.skillId), true, 'registry should include the new skill');
+	const createdEntry = registry.skills.find((entry) => entry.id === result.skillId);
+	assert.deepStrictEqual(
+		createdEntry.capabilityBundle,
+		['fulfill_request', 'adjacent_follow_up_readiness'],
+		'createSkill should persist the default capability bundle'
+	);
+	assert.strictEqual(
+		createdEntry.inferencePolicy,
+		DEFAULT_INFERENCE_POLICY,
+		'createSkill should persist the default inference policy'
+	);
+	assert.strictEqual(
+		createdEntry.questionPolicy,
+		DEFAULT_QUESTION_POLICY,
+		'createSkill should persist the default question policy'
+	);
+	assert.deepStrictEqual(
+		createdEntry.steeringDecisionTypes,
+		DEFAULT_STEERING_DECISION_TYPES,
+		'createSkill should persist the default steering-decision types'
+	);
 	assert.ok(fs.existsSync(path.join(irisDir, 'skills', 'skill-author', 'SKILL.md')), 'meta skill should be installed automatically');
+}
+
+async function testImageSkillInfersAnticipatoryBundle() {
+	const irisDir = createTempDir();
+	const manager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	const result = manager.createSkill({
+		purpose: 'Create an image for a landing page hero',
+		source_goal: 'create an image',
+	});
+
+	const registry = readJson(path.join(irisDir, 'skills', '_registry.json'));
+	const createdEntry = registry.skills.find((entry) => entry.id === result.skillId);
+	assert.ok(createdEntry.capabilityBundle.includes('edit'), 'image skill bundle should include edit capability');
+	assert.ok(createdEntry.capabilityBundle.includes('revise'), 'image skill bundle should include revise capability');
+	assert.ok(
+		createdEntry.steeringDecisionTypes.includes('provider_choice'),
+		'image skill bundle should allow one provider-choice steering decision when blocked'
+	);
+	assert.strictEqual(
+		createdEntry.questionPolicy,
+		'zero_questions',
+		'image skill bundle should default to zero-question behavior when a reasonable default exists'
+	);
 }
 
 async function testRepeatedPatternPromotesToLearnedSkill() {
@@ -102,10 +156,112 @@ async function testCoreLaneEscalatesToSelfFix() {
 	assert.strictEqual(result.ok, true, 'core lane should return the self_fix result');
 }
 
+async function testLegacySkillReplacementAddsDefaultPolicies() {
+	const irisDir = createTempDir();
+	const manager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	const registryPath = path.join(irisDir, 'skills', '_registry.json');
+	fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+	fs.writeFileSync(registryPath, JSON.stringify({
+		version: 1,
+		updatedAt: new Date().toISOString(),
+		skills: [{
+			id: 'legacy-skill',
+			name: 'legacy-skill',
+			baseName: 'legacy-skill',
+			slug: 'legacy-skill',
+			description: 'Create an image',
+			status: 'active',
+			version: 1,
+			activeVersion: 1,
+			path: path.join(irisDir, 'skills', 'legacy-skill'),
+			origin: 'user-requested',
+			stability: 'stable',
+			domain: 'general',
+			routingPriority: 100,
+			demotionCount: 0,
+			match: {
+				appNames: [],
+				intents: ['create an image'],
+				keywords: ['create', 'image'],
+				preconditions: [],
+			},
+			preferredExecutionPath: { type: 'ui-plan', plan: { goal: 'create an image', appHint: '', steps: [{ type: 'openApp', appName: 'Preview' }] } },
+			fallbackPath: null,
+			lineage: { replaces: null, replacedBy: null },
+			stats: { successCount: 0, failureCount: 0, lastOutcome: 'created', lastUsedAt: null },
+			failureWindow: [],
+			replacementHistory: [],
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		}],
+		patterns: [],
+	}, null, 2), 'utf8');
+
+	const match = manager.findMatchingSkill({ goal: 'create an image', appHint: '' });
+	assert.ok(match, 'legacy skill entries without new metadata should remain routable');
+
+	const replaced = manager.replaceSkill(match);
+	assert.deepStrictEqual(
+		replaced.capabilityBundle,
+		['create', 'edit', 'revise', 'generate_variants', 'export'],
+		'legacy skill replacement should lazily upgrade to the inferred anticipatory bundle'
+	);
+	assert.strictEqual(
+		replaced.inferencePolicy,
+		DEFAULT_INFERENCE_POLICY,
+		'legacy skill replacement should adopt the default inference policy'
+	);
+	assert.strictEqual(
+		replaced.questionPolicy,
+		DEFAULT_QUESTION_POLICY,
+		'legacy skill replacement should adopt the default question policy'
+	);
+}
+
+async function testReplacementPreservesExistingBundleMetadata() {
+	const irisDir = createTempDir();
+	const manager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	const created = manager.createSkill({
+		purpose: 'Draft a blog post',
+		source_goal: 'draft a blog post',
+		capability_bundle: ['draft', 'revise', 'format'],
+		inference_policy: DEFAULT_INFERENCE_POLICY,
+		question_policy: DEFAULT_QUESTION_POLICY,
+		steering_decision_types: ['provider_choice'],
+	});
+	const registry = readJson(path.join(irisDir, 'skills', '_registry.json'));
+	const original = registry.skills.find((entry) => entry.id === created.skillId);
+	const replaced = manager.replaceSkill(original);
+
+	assert.deepStrictEqual(
+		replaced.capabilityBundle,
+		['draft', 'revise', 'format'],
+		'replacement should preserve an existing bundle instead of re-inferring it'
+	);
+	assert.deepStrictEqual(
+		replaced.steeringDecisionTypes,
+		['provider_choice'],
+		'replacement should preserve the existing steering-decision policy'
+	);
+}
+
 Promise.resolve()
 	.then(testCreateSkillWritesPackageAndRegistry)
+	.then(testImageSkillInfersAnticipatoryBundle)
 	.then(testRepeatedPatternPromotesToLearnedSkill)
 	.then(testCoreLaneEscalatesToSelfFix)
+	.then(testLegacySkillReplacementAddsDefaultPolicies)
+	.then(testReplacementPreservesExistingBundleMetadata)
 	.then(() => {
 		console.log('Self-improvement manager tests passed.');
 	})

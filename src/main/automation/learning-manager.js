@@ -32,6 +32,199 @@ function normalizeIssueText(value = '') {
 		.trim();
 }
 
+const ISSUE_STOP_WORDS = new Set([
+	'a',
+	'an',
+	'and',
+	'at',
+	'current',
+	'currently',
+	'for',
+	'from',
+	'i',
+	'in',
+	'is',
+	'it',
+	'me',
+	'my',
+	'of',
+	'on',
+	'or',
+	'please',
+	'that',
+	'the',
+	'this',
+	'to',
+	'what',
+	'with',
+]);
+
+const ISSUE_TOKEN_MAP = new Map([
+	['application', 'app'],
+	['applications', 'app'],
+	['apps', 'app'],
+	['browsers', 'browser'],
+	['channels', 'channel'],
+	['clicked', 'click'],
+	['clicking', 'click'],
+	['closed', 'close'],
+	['closing', 'close'],
+	['copied', 'copy'],
+	['copying', 'copy'],
+	['cutting', 'cut'],
+	['directories', 'folder'],
+	['directory', 'folder'],
+	['documents', 'document'],
+	['editors', 'editor'],
+	['email', 'mail'],
+	['files', 'file'],
+	['folders', 'folder'],
+	['found', 'find'],
+	['launched', 'activate'],
+	['launching', 'activate'],
+	['opened', 'open'],
+	['opening', 'open'],
+	['pasted', 'paste'],
+	['pasting', 'paste'],
+	['preferences', 'settings'],
+	['queried', 'query'],
+	['querying', 'query'],
+	['results', 'result'],
+	['saved', 'save'],
+	['saving', 'save'],
+	['searched', 'search'],
+	['searching', 'search'],
+	['selected', 'select'],
+	['selecting', 'select'],
+	['tabs', 'tab'],
+	['utilities', 'utility'],
+	['videos', 'video'],
+	['vscode', 'vscode'],
+	['windows', 'window'],
+]);
+
+const GENERIC_ACTION_TOKENS = new Set([
+	'activate',
+	'click',
+	'close',
+	'copy',
+	'cut',
+	'find',
+	'navigate',
+	'open',
+	'paste',
+	'pause',
+	'play',
+	'query',
+	'redo',
+	'resolve',
+	'save',
+	'search',
+	'select',
+	'undo',
+]);
+
+const APP_HINT_TOKENS = new Set([
+	'arc',
+	'chrome',
+	'console',
+	'cursor',
+	'finder',
+	'safari',
+	'settings',
+	'system',
+	'textedit',
+	'utility',
+	'vscode',
+	'youtube',
+	'zed',
+]);
+
+const RECENT_SELF_FIX_COOLDOWN_MS = 30 * 1000;
+
+function canonicalizeIssueText(value = '') {
+	return normalizeIssueText(value)
+		.replace(/\bgo to\b/g, 'open')
+		.replace(/\bgo back\b/g, 'navigate back')
+		.replace(/\bdefault browser\b/g, 'default_browser')
+		.replace(/\bdefault mail\b/g, 'default_mail')
+		.replace(/\bdefault app\b/g, 'default_app')
+		.replace(/\bchannel link\b/g, 'channel_link')
+		.replace(/\bchannel result\b/g, 'channel_result')
+		.replace(/\bsystem settings\b/g, 'system_settings')
+		.replace(/\bvisual studio code\b/g, 'vscode');
+}
+
+function tokenizeIssueText(value = '') {
+	return canonicalizeIssueText(value)
+		.split(/[^a-z0-9_]+/)
+		.filter(Boolean)
+		.map((token) => ISSUE_TOKEN_MAP.get(token) || token)
+		.filter((token) => !ISSUE_STOP_WORDS.has(token));
+}
+
+function uniqueSorted(values = []) {
+	return [...new Set(values.filter(Boolean))].sort();
+}
+
+function toolFamily(toolName = '') {
+	const name = String(toolName || '');
+	if (['click_at', 'double_click', 'mouse_move', 'drag'].includes(name)) return 'pointer';
+	if (name === 'run_ui_task') return 'planner';
+	if (['open_app', 'get_default_app', 'window_manage', 'finder_open_item', 'finder_select_item'].includes(name)) return 'native';
+	if (['type_text', 'press_key', 'scroll'].includes(name)) return 'ax_dom';
+	return name ? 'general' : '';
+}
+
+function deriveIntentFamily(text, tokenSet, domain) {
+	if (text.includes('default_browser') || text.includes('default_mail') || text.includes('default_app')) return 'resolve_default';
+	if (tokenSet.has('pause') || tokenSet.has('play') || tokenSet.has('video')) return 'media_control';
+	if (tokenSet.has('save') || tokenSet.has('undo') || tokenSet.has('redo') || tokenSet.has('copy') || tokenSet.has('paste') || tokenSet.has('cut') || tokenSet.has('find') || tokenSet.has('close')) {
+		return 'editor_command';
+	}
+	if (domain === 'finder' || tokenSet.has('finder') || tokenSet.has('file') || tokenSet.has('folder')) return 'file_navigation';
+	if (tokenSet.has('system') || tokenSet.has('settings') || tokenSet.has('utility')) return 'system_query';
+	if (tokenSet.has('search') || tokenSet.has('query')) return 'search';
+	if (tokenSet.has('activate')) return 'activation';
+	if (tokenSet.has('open') || tokenSet.has('click') || tokenSet.has('select') || tokenSet.has('navigate') || tokenSet.has('link') || tokenSet.has('result')) return 'navigation';
+	return domain || 'structural_gap';
+}
+
+function deriveTargetFeatures(text, tokenSet, domain) {
+	const targets = [];
+	if (text.includes('default_browser')) targets.push('default_browser');
+	if (text.includes('default_mail')) targets.push('default_mail');
+	if (text.includes('channel_link') || text.includes('channel_result') || (tokenSet.has('channel') && (tokenSet.has('link') || tokenSet.has('result')))) {
+		targets.push('channel_result');
+	}
+	if (tokenSet.has('video')) targets.push('video');
+	if (tokenSet.has('file') || tokenSet.has('folder') || domain === 'finder') targets.push('file_target');
+	if (tokenSet.has('tab')) targets.push('tab');
+	if (tokenSet.has('settings')) targets.push('settings');
+	if (tokenSet.has('browser')) targets.push('browser');
+	if (tokenSet.has('editor') || tokenSet.has('vscode') || tokenSet.has('cursor') || tokenSet.has('zed') || tokenSet.has('textedit')) targets.push('editor');
+	if (tokenSet.has('system') || tokenSet.has('utility')) targets.push('system');
+	return uniqueSorted(targets);
+}
+
+function deriveAppFeatures(tokenSet) {
+	return uniqueSorted([...tokenSet].filter((token) => APP_HINT_TOKENS.has(token)));
+}
+
+function deriveEntityFeatures(tokens = [], targets = [], apps = []) {
+	return uniqueSorted(
+		tokens.filter((token) => {
+			if (GENERIC_ACTION_TOKENS.has(token)) return false;
+			if (APP_HINT_TOKENS.has(token)) return false;
+			if (targets.includes(token)) return false;
+			if (apps.includes(token)) return false;
+			return token.length > 2;
+		}).slice(0, 6)
+	);
+}
+
+const POINTER_SEQUENCE_TOOLS = new Set(['click_at', 'double_click', 'mouse_move', 'drag']);
+
 class LearningManager {
 	constructor({ memoryStore, selfImprovementManager, selfFixTool = null, irisDir = config.paths.irisDir } = {}) {
 		this.memoryStore = memoryStore;
@@ -158,18 +351,39 @@ class LearningManager {
 				}
 			}
 		}
+		if (name === 'get_default_app') {
+			const requested = normalizeText(args.kind || 'browser');
+			const appName = this.memoryStore.getValue(
+				requested === 'mail' ? 'environment.default_mail.app_name' : 'environment.default_browser.app_name',
+				''
+			);
+			if (appName) {
+				log.info('Learning', `Resolved default-app query from memory: kind=${requested} app=${appName}`);
+				return {
+					name,
+					args: {
+						...(args || {}),
+						kind: requested,
+						resolved_app_name: appName,
+						learned_from_memory: true,
+					},
+				};
+			}
+		}
 
 		const goal = args.goal || args.name || '';
 		const appHint = args.app_hint || args.appHint || '';
 		const learned = this.selfImprovementManager?.findMatchingSkill?.({ goal, appHint });
 		const sequence = learned?.preferredExecutionPath?.sequence;
-		if (!learned || !Array.isArray(sequence) || sequence.length !== 1) return { name, args };
-		const [step] = sequence;
+		if (!learned || !Array.isArray(sequence) || !sequence.length) return { name, args };
+		if (sequence.some((step) => POINTER_SEQUENCE_TOOLS.has(step.name))) return { name, args };
+		const [step, ...rest] = sequence;
 		if (!step || step.name !== name) return { name, args };
-		log.info('Learning', `Applying learned tool sequence: skill=${learned.id} tool=${name}`);
+		log.info('Learning', `Applying learned tool sequence: skill=${learned.id} tool=${name} length=${sequence.length}`);
 		return {
 			name,
 			args: { ...(args || {}), ...(step.args || {}), learned_skill_id: learned.id },
+			sequenceRemainder: rest,
 		};
 	}
 
@@ -209,9 +423,18 @@ class LearningManager {
 
 	_clusterIssue(event = {}) {
 		const domain = event.domain || inferDomain(event.userText || event.guidanceText || '');
-		const text = normalizeIssueText(event.guidanceText || event.userText || event.classification?.payload?.description || event.issueSignature || '');
-		const failed = (event.failedTools || []).map((item) => item.name).filter(Boolean).join(',');
-		const succeeded = (event.successfulTools || []).map((item) => item.name).filter(Boolean).join(',');
+		const rawText = event.guidanceText || event.userText || event.classification?.payload?.description || event.issueSignature || '';
+		const text = canonicalizeIssueText(rawText);
+		const tokens = tokenizeIssueText(rawText);
+		const tokenSet = new Set(tokens);
+		const intentFamily = deriveIntentFamily(text, tokenSet, domain);
+		const targets = deriveTargetFeatures(text, tokenSet, domain);
+		const apps = deriveAppFeatures(tokenSet);
+		const entities = deriveEntityFeatures(tokens, targets, apps);
+		const entitySignature = targets.length || apps.length ? 'none' : (entities.join('+') || 'none');
+		const failedFamilies = uniqueSorted((event.failedTools || []).map((item) => toolFamily(item.name)));
+		const succeededFamilies = uniqueSorted((event.successfulTools || []).map((item) => toolFamily(item.name)));
+		const pointerMode = failedFamilies.includes('pointer') || succeededFamilies.includes('pointer') ? 'pointer' : 'nonpointer';
 		const family = event.type === 'stabilization_candidate'
 			? 'stabilize'
 			: event.type === 'skill'
@@ -220,9 +443,25 @@ class LearningManager {
 					? 'false_positive'
 					: 'core_gap';
 		return {
-			signature: `${family}:${domain}:${text}:${failed}->${succeeded}`.slice(0, 280),
+			signature: [
+				family,
+				domain || 'general',
+				intentFamily || 'general',
+				targets.join('+') || 'none',
+				apps.join('+') || 'none',
+				entitySignature,
+				pointerMode,
+			].join(':').slice(0, 280),
 			domain,
-			canonicalDescription: text || 'structural gap',
+			canonicalDescription: normalizeIssueText(rawText) || `${intentFamily} ${targets.join(' ')}`.trim() || 'structural gap',
+			semanticFeatures: {
+				intentFamily,
+				targets,
+				apps,
+				entities,
+				failedToolFamilies: failedFamilies,
+				successfulToolFamilies: succeededFamilies,
+			},
 		};
 	}
 
@@ -351,6 +590,7 @@ class LearningManager {
 				domain: clustered.domain,
 				description: event.classification?.payload?.description || event.userText || 'Structural gap detected',
 				canonicalDescription: clustered.canonicalDescription,
+				semanticFeatures: clustered.semanticFeatures,
 				count: 0,
 				status: 'pending',
 				lastQueuedAt: null,
@@ -361,6 +601,7 @@ class LearningManager {
 		}
 		issue.domain = issue.domain || clustered.domain;
 		issue.canonicalDescription = issue.canonicalDescription || clustered.canonicalDescription;
+		issue.semanticFeatures = issue.semanticFeatures || clustered.semanticFeatures;
 		issue.evidence = Array.isArray(issue.evidence) ? issue.evidence : [];
 		const evidence = String(event.guidanceText || event.userText || issue.description || '').trim();
 		if (evidence) {
@@ -371,6 +612,12 @@ class LearningManager {
 		issue.status = 'pending';
 		const queueImmediately = event.forceImmediate === true;
 		if (queueImmediately || issue.count >= 2) {
+			const lastResolvedAt = issue.lastResolvedAt ? Date.parse(issue.lastResolvedAt) : 0;
+			if (lastResolvedAt && Number.isFinite(lastResolvedAt) && (Date.now() - lastResolvedAt) < RECENT_SELF_FIX_COOLDOWN_MS) {
+				log.info('Learning', `Skipping duplicate autonomous self-fix during cooldown: issue=${issue.issueSignature}`);
+				this._writeJson(this.issuePath, issues);
+				return;
+			}
 			if (this.activeIssues.has(issue.issueSignature) || this.activeSelfFixCount >= this._getSelfFixConcurrencyLimit()) {
 				log.info('Learning', `Self-fix issue already active or throttled: issue=${issue.issueSignature}`);
 				issue.status = 'deferred';

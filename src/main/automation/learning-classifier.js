@@ -70,6 +70,14 @@ class LearningClassifier {
 			};
 		}
 
+		if (containsAny(userText, ['default browser', 'default mail']) && successNames.includes('get_default_app')) {
+			return {
+				type: 'memory',
+				key: userText.includes('mail') ? 'environment.default_mail' : 'environment.default_browser',
+				reason: 'resolved default app query after correction',
+			};
+		}
+
 		const pointerHeavy = successfulTools.some((item) => ['click_at', 'double_click', 'mouse_move', 'drag'].includes(item.name));
 		if (pointerHeavy) {
 			return {
