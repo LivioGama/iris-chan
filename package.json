@@ -18,6 +18,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.50",
     "@gltf-transform/core": "^4.3.0",
     "@gltf-transform/extensions": "^4.3.0",
+    "@openai/codex-sdk": "^0.114.0",
     "convex": "^1.31.7",
     "meshopt-decoder": "^1.0.2",
     "meshoptimizer": "^1.0.1",

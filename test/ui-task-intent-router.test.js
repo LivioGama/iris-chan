@@ -71,6 +71,18 @@ assert.strictEqual(
 	'router should preserve the browser history direction'
 );
 
+const defaultBrowserPlan = routeGoal('open my default browser');
+assert.deepStrictEqual(
+	defaultBrowserPlan.steps.map((step) => step.type),
+	['openApp'],
+	'router should treat default browser requests as app-open steps'
+);
+assert.strictEqual(
+	defaultBrowserPlan.steps[0].appName,
+	'default browser',
+	'router should preserve the default browser target for native resolution'
+);
+
 const clickChannelPlan = routeGoal('Search for "Theo GG" on YouTube and click the first channel from the search result.');
 assert.deepStrictEqual(
 	clickChannelPlan.steps.map((step) => step.type),

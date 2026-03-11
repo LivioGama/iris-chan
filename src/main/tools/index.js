@@ -1,8 +1,9 @@
 const skills = require('../skills');
 const log = require('../logger');
 const workspace = require('../workspace');
+const { getLearningManager } = require('../automation/service-ref');
 
-const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue', './ui-task'];
+const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './create-skill', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue', './ui-task'];
 
 function loadHandlers() {
 	const handlers = {};
@@ -42,6 +43,11 @@ function reload() {
 }
 
 async function execute(name, args) {
+	const learningManager = getLearningManager();
+	const resolved = learningManager?.resolveToolRequest?.(name, args || {}) || { name, args };
+	name = resolved.name || name;
+	args = resolved.args || args;
+
 	// Workspace tools
 	if (name === 'set_workspace') {
 		const dir = args?.directory || args?.path || '';

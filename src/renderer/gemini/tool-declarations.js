@@ -176,6 +176,20 @@ export const toolDeclarations = [
 		}, required: ['skill_name'] },
 	},
 	{
+		name: 'create_skill',
+		description: 'Create or revise an installed Iris skill under ~/.iris/skills with match criteria, preferred execution path, fallback path, and replacement metadata. Use when the user explicitly asks to create a skill or when Iris is packaging a learned workflow.',
+		parameters: { type: 'OBJECT', properties: {
+			purpose: { type: 'STRING', description: 'Human-readable purpose of the skill.' },
+			app_scope: { type: 'STRING', description: 'Optional app scope, such as Safari or Finder.' },
+			trigger_source: { type: 'STRING', description: 'Origin of the skill, such as user-requested, repeated-pattern, or failure-driven.' },
+			source_goal: { type: 'STRING', description: 'The user intent or canonical goal the skill should match.' },
+			match_criteria: { type: 'OBJECT', description: 'Optional structured match criteria including appNames, intents, and keywords.' },
+			preferred_execution_path: { type: 'OBJECT', description: 'Preferred execution path, typically a stored UI plan.' },
+			fallback_path: { type: 'OBJECT', description: 'Optional fallback path metadata.' },
+			lane: { type: 'STRING', description: '"skill" (default) or "core" to escalate into self_fix.' },
+		}, required: ['purpose'] },
+	},
+	{
 		name: 'fix_project',
 		description: 'Fix, improve, or build features in ANY project (current workspace or Iris herself). Uses Claude Code directly via JS SDK with full autonomy. Use for workspace projects when user asks to "fix this", "add this feature", "improve this code". For Iris self-modifications, prefer self_fix.',
 		parameters: { type: 'OBJECT', properties: {

@@ -158,6 +158,12 @@ function parseSelectionClause(clause, appHint) {
 function parseOpenClause(clause, appHint, steps) {
 	const lower = clause.toLowerCase();
 	if (!/^(?:open|launch|start)\b/i.test(lower)) return null;
+	if (/\bdefault browser\b/i.test(clause)) {
+		return [{ type: 'openApp', appName: 'default browser' }];
+	}
+	if (/\bdefault mail(?: app)?\b/i.test(clause)) {
+		return [{ type: 'openApp', appName: 'default mail' }];
+	}
 	const appName = detectAppName(clause);
 	const url = extractUrl(clause);
 	const parsed = [];

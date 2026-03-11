@@ -215,6 +215,10 @@ function getLoaded() {
 	}));
 }
 
+function refresh() {
+	return scan();
+}
+
 // Run a skill by name (looks for first available script)
 // Optional onLog callback: called with each output line for streaming logs
 function runSkillByName(skillName, args, onLog) {
@@ -338,4 +342,4 @@ function runSkillByName(skillName, args, onLog) {
 	});
 }
 
-module.exports = { scan, getDeclarations, getSystemPrompts, getHandler, getLoaded, getCatalog, getSkillContent, killSkill, runSkillByName };
+module.exports = { scan, refresh, getDeclarations, getSystemPrompts, getHandler, getLoaded, getCatalog, getSkillContent, killSkill, runSkillByName };

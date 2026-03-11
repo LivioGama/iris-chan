@@ -1,0 +1,158 @@
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+require('ts-node').register({ transpileOnly: true });
+
+const { MemoryStore } = require('../src/main/automation/memory-store');
+const { LearningManager } = require('../src/main/automation/learning-manager');
+const { SelfImprovementManager } = require('../src/main/automation/self-improvement-manager');
+
+console.log('Running learning manager tests...');
+
+function createTempDir() {
+	return fs.mkdtempSync(path.join(os.tmpdir(), 'iris-learning-'));
+}
+
+function wait(ms = 30) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function testMemoryStoreSeedsDefaultPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const policy = memoryStore.find({ key: 'policy.default_app_resolution' });
+	assert.ok(policy, 'memory store should seed default app resolution policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'seeded default policy should be a fallback policy');
+}
+
+async function testLearningManagerWritesDefaultBrowserMemory() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	manager.recordConversationTurn('user', 'my default browser');
+	manager.recordToolExecution('run_ui_task', { goal: 'open my default browser' }, 'Error: No accessibility element matched "my default browser"', false, 10);
+	manager.recordToolExecution('open_app', { name: 'Safari' }, 'Opened Safari', true, 10);
+	await wait(80);
+
+	assert.strictEqual(
+		memoryStore.getValue('environment.default_browser.app_name', ''),
+		'Safari',
+		'resolved default browser should be stored as environment memory'
+	);
+}
+
+async function testLearningManagerCreatesReusableToolSkill() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	manager.recordConversationTurn('user', 'open my music app');
+	manager.recordToolExecution('run_ui_task', { goal: 'open my music app' }, 'Error: Could not build a deterministic UI plan', false, 10);
+	manager.recordToolExecution('open_app', { name: 'Music' }, 'Opened Music', true, 10);
+	await wait(80);
+
+	const resolved = manager.resolveToolRequest('open_app', { name: 'open my music app' });
+	assert.strictEqual(resolved.args.name, 'Music', 'learned tool sequence should rewrite future vague tool calls');
+	assert.ok(resolved.args.learned_skill_id, 'learned tool resolution should annotate the learned skill id');
+}
+
+async function testLearningManagerDedupesAutonomousSelfFix() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'you should stop asking me this every time');
+	manager.recordConversationTurn('user', 'you should stop asking me this every time');
+	await wait(120);
+
+	assert.strictEqual(selfFixCalls, 1, 'repeated structural friction should queue one deduped self-fix');
+}
+
+async function testPointerRecoveryDoesNotCreateLearnedSkill() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'open that channel link');
+	manager.recordToolExecution('run_ui_task', { goal: 'open that channel link' }, 'Error: could not click result', false, 10);
+	manager.recordToolExecution('click_at', { x: 10, y: 20 }, 'Clicked at (10,20)', true, 10);
+	manager.recordConversationTurn('user', 'open that channel link');
+	manager.recordToolExecution('run_ui_task', { goal: 'open that channel link' }, 'Error: could not click result', false, 10);
+	manager.recordToolExecution('click_at', { x: 12, y: 24 }, 'Clicked at (12,24)', true, 10);
+	await wait(120);
+
+	const registry = JSON.parse(fs.readFileSync(path.join(irisDir, 'skills', '_registry.json'), 'utf8'));
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(registry.skills.length, 0, 'pointer-only recovery should not become a learned skill');
+	assert.strictEqual(selfFixCalls >= 1, true, 'repeated pointer-only recovery should escalate as stabilization debt');
+	assert.strictEqual(
+		issues.issues.some((issue) => String(issue.issueSignature || '').startsWith('stabilize:open that channel link')),
+		true,
+		'pointer-only recovery should record stabilization debt instead of a learned skill'
+	);
+}
+
+Promise.resolve()
+	.then(testMemoryStoreSeedsDefaultPolicy)
+	.then(testLearningManagerWritesDefaultBrowserMemory)
+	.then(testLearningManagerCreatesReusableToolSkill)
+	.then(testLearningManagerDedupesAutonomousSelfFix)
+	.then(testPointerRecoveryDoesNotCreateLearnedSkill)
+	.then(() => {
+		console.log('Learning manager tests passed.');
+	})
+	.catch((err) => {
+		console.error(err);
+		process.exit(1);
+	});

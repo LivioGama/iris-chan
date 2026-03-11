@@ -2,6 +2,7 @@ const log = require('../logger');
 const { executeTask } = require('./executor');
 const path = require('node:path');
 const fs = require('node:fs');
+const { buildCodingPrompt } = require('../coding/prompt');
 
 const POLL_INTERVAL_NORMAL_MS = 3000;
 const POLL_INTERVAL_DIRECT_MS = 1000;
@@ -13,23 +14,7 @@ const projectLocks = new Map(); // projectPath → boolean
 function buildPrompt(task) {
 	const prompt = task.enrichedPrompt || task.rawPrompt;
 	const projectPath = task.projectPath;
-
-	let context = '';
-	const claudeMdPath = path.join(projectPath, 'CLAUDE.md');
-	if (fs.existsSync(claudeMdPath)) {
-		try {
-			context += `Project instructions (CLAUDE.md):\n${fs.readFileSync(claudeMdPath, 'utf8').substring(0, 3000)}\n\n`;
-		} catch {}
-	}
-	const pkgPath = path.join(projectPath, 'package.json');
-	if (fs.existsSync(pkgPath)) {
-		try {
-			const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-			context += `Project: ${pkg.name || 'unknown'} — ${pkg.description || ''}\n\n`;
-		} catch {}
-	}
-
-	return `Working directory: ${projectPath}\n${context}\nTask:\n${prompt}\n\nInstructions: Work autonomously. Edit files directly. Run lint/typecheck after changes. Do not ask questions — make reasonable decisions and proceed.`;
+	return buildCodingPrompt({ description: prompt, cwd: projectPath });
 }
 
 async function poll() {

@@ -15,7 +15,11 @@ const { createTrayController } = require('./status-tray');
 const { registerIpc } = require('./ipc-runtime');
 const { BehaviorModeState } = require('./runtime/behavior-mode');
 const { UITaskService } = require('./automation/ui-task-service');
-const { setUiTaskService } = require('./automation/service-ref');
+const { SelfImprovementManager } = require('./automation/self-improvement-manager');
+const { MemoryStore } = require('./automation/memory-store');
+const { LearningManager } = require('./automation/learning-manager');
+const { NativeFallbackManager } = require('./automation/native-fallback-manager');
+const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager } = require('./automation/service-ref');
 const taskQueueWatcher = require('./task-queue/watcher');
 const { setConvexClient: setTqControllerClient, setBehaviorEngine: setTqBehaviorEngine } = require('./controllers/taskQueueController');
 const { setConvexClient: setTqToolClient } = require('./tools/task-queue');
@@ -25,7 +29,11 @@ function startRuntime({ apiKey }) {
 	const convexClient = new ConvexClient({ eventBus });
 	const taskEngine = new TaskEngine({ eventBus });
 	const behaviorEngine = new BehaviorModeState();
-	const uiTaskService = new UITaskService({ eventBus });
+	const memoryStore = new MemoryStore();
+	const nativeFallbackManager = new NativeFallbackManager();
+	const selfImprovementManager = new SelfImprovementManager({ skillsEngine: skills });
+	const learningManager = new LearningManager({ memoryStore, selfImprovementManager });
+	const uiTaskService = new UITaskService({ eventBus, selfImprovementManager, nativeFallbackManager });
 	const healthService = new HealthService({
 		convexClient,
 		taskEngine,
@@ -77,6 +85,10 @@ function startRuntime({ apiKey }) {
 	skills.scan();
 	legacyConvexStore.init();
 	setUiTaskService(uiTaskService);
+	setSelfImprovementManager(selfImprovementManager);
+	setMemoryStore(memoryStore);
+	setLearningManager(learningManager);
+	setNativeFallbackManager(nativeFallbackManager);
 	legacyIpc.register(apiKey);
 	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow });
 	setTqControllerClient(convexClient);

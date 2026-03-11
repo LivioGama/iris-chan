@@ -2,9 +2,13 @@ const { EventEmitter } = require('node:events');
 const { URL } = require('node:url');
 const { EVENT_TYPES } = require('../../shared/event-types.js');
 const { runHelper } = require('../native-helper');
+const { open_app } = require('../tools/apps');
+const log = require('../logger');
 const { BrowserAdapter } = require('./browser-adapter');
 const { InputMonitor } = require('./input-monitor');
+const { isNativeEligiblePlan, isNativeEligibleStep } = require('./native-resolver-registry');
 const { createExecutionPlan } = require('./planner');
+const { planLikelySatisfiesGoal } = require('./skill-policy');
 const { WorldState } = require('./world-state');
 
 function createTaskId() {
@@ -124,9 +128,11 @@ function stepLabel(step) {
 }
 
 class UITaskService extends EventEmitter {
-	constructor({ eventBus } = {}) {
+	constructor({ eventBus, selfImprovementManager = null, nativeFallbackManager = null } = {}) {
 		super();
 		this.eventBus = eventBus;
+		this.selfImprovementManager = selfImprovementManager;
+		this.nativeFallbackManager = nativeFallbackManager;
 		this.browserAdapter = new BrowserAdapter();
 		this.worldState = new WorldState();
 		this.activeTask = null;
@@ -193,11 +199,84 @@ class UITaskService extends EventEmitter {
 		if (!normalizedGoal) {
 			return { ok: false, result: 'No UI task goal provided' };
 		}
-		const planned = createExecutionPlan({ goal: normalizedGoal, appHint, successSignal });
+		let learnedEntry = null;
+		let recoveredFromSkillFailure = false;
+		const explicitAppHint = String(appHint || '').trim();
+		const routeAppHint = explicitAppHint || (await this._getRouteAppHint());
+
+		if (this.selfImprovementManager) {
+			learnedEntry = this.selfImprovementManager.findMatchingSkill({ goal: normalizedGoal, appHint: routeAppHint || explicitAppHint });
+			const learnedPlan = this.selfImprovementManager.buildPlanFromSkill(learnedEntry, {
+				goal: normalizedGoal,
+				appHint: routeAppHint || explicitAppHint,
+				successSignal,
+			});
+			if (learnedEntry && learnedPlan) {
+				log.info('Learning', `Using learned UI skill first: id=${learnedEntry.id} name=${learnedEntry.name} goal=${normalizedGoal}`);
+				const learnedRun = await this._runPlannedTask({
+					goal: normalizedGoal,
+					plan: learnedPlan,
+					planSource: 'learned-skill',
+					sourceSkill: learnedEntry,
+				});
+				if (learnedRun.ok) {
+					if (!planLikelySatisfiesGoal(normalizedGoal, learnedPlan)) {
+						log.info('Learning', `Learned skill produced false-positive success, falling back to builtin planner: id=${learnedEntry.id} goal=${normalizedGoal}`);
+						this.selfImprovementManager.recordLearnedOutcome(learnedEntry, false, {
+							successType: 'false_positive',
+							reason: `Plan does not satisfy goal: ${normalizedGoal}`,
+							result: learnedRun.result,
+						});
+						recoveredFromSkillFailure = true;
+					} else {
+					this.selfImprovementManager.recordLearnedOutcome(learnedEntry, true, { result: learnedRun.result });
+					return learnedRun;
+					}
+				}
+				if (!recoveredFromSkillFailure) {
+					log.info('Learning', `Learned UI skill failed, falling back to builtin planner: id=${learnedEntry.id} reason=${learnedRun.result}`);
+					this.selfImprovementManager.recordLearnedOutcome(learnedEntry, false, { error: learnedRun.result });
+					recoveredFromSkillFailure = true;
+				}
+			}
+		}
+		const planned = createExecutionPlan({ goal: normalizedGoal, appHint: explicitAppHint || routeAppHint, successSignal });
 		if (!planned.ok) {
 			return { ok: false, result: planned.error };
 		}
-		const signature = createPlanSignature(planned.plan);
+		const builtinRun = await this._runPlannedTask({
+			goal: normalizedGoal,
+			plan: planned.plan,
+			planSource: 'builtin',
+			sourceSkill: null,
+		});
+		if (builtinRun.ok && this.selfImprovementManager) {
+			this.selfImprovementManager.recordSuccessfulPlan({
+				goal: normalizedGoal,
+				appHint: explicitAppHint || routeAppHint || planned.plan.appHint,
+				plan: planned.plan,
+				usedLearnedSkill: false,
+				recoveredFromSkillFailure,
+			});
+			if (recoveredFromSkillFailure && learnedEntry) {
+				log.info('Learning', `Builtin planner recovered after learned skill failure: replacing id=${learnedEntry.id}`);
+				this.selfImprovementManager.replaceSkill(learnedEntry, {
+					goal: normalizedGoal,
+					purpose: learnedEntry.description,
+					preferredExecutionPath: { type: 'ui-plan', plan: planned.plan },
+				});
+			}
+		}
+		return builtinRun;
+	}
+
+	async _getRouteAppHint() {
+		const frontmost = await this.worldState.getFrontmostApp({ force: true });
+		return frontmost.ok ? String(frontmost.name || '').trim() : '';
+	}
+
+	async _runPlannedTask({ goal, plan, planSource = 'builtin', sourceSkill = null } = {}) {
+		const signature = createPlanSignature(plan);
 		if (this.activeTask) {
 			if (this.activeTask.signature === signature) {
 				return {
@@ -220,19 +299,28 @@ class UITaskService extends EventEmitter {
 		const controller = new AbortController();
 		const activeTask = {
 			taskId,
-			goal: normalizedGoal,
+			goal,
 			status: 'running',
 			startedAt: Date.now(),
 			currentStepIndex: 0,
-			plan: planned.plan,
+			plan,
 			trace: [],
 			signature,
 			controller,
+			planSource,
+			sourceSkillId: sourceSkill?.id || null,
+			nativeEligible: isNativeEligiblePlan(plan),
 		};
 		this.activeTask = activeTask;
+		this.nativeFallbackManager?.beginTask?.({
+			taskId,
+			goal,
+			appHint: plan.appHint || '',
+			nativeEligible: activeTask.nativeEligible,
+		});
 		this.worldState.invalidate();
 
-		this._emitMilestone(taskId, `UI task started: ${normalizedGoal}`, { plan: planned.plan });
+		this._emitMilestone(taskId, `UI task started: ${goal}`, { plan, planSource, sourceSkillId: sourceSkill?.id || null });
 
 		try {
 			await this.inputMonitor.start();
@@ -246,10 +334,16 @@ class UITaskService extends EventEmitter {
 				completedAt: Date.now(),
 			};
 			this._emitDone(taskId, 'completed', summary, { trace: activeTask.trace });
-			return { ok: true, result: summary, taskId };
+			return { ok: true, result: summary, taskId, planSource, sourceSkillId: sourceSkill?.id || null };
 		} catch (err) {
 			const code = err?.code || 'ui_task_failed';
 			const summary = err?.message || 'UI task failed';
+			if (activeTask.nativeEligible && err?.pointerFallbackEligible) {
+				this.nativeFallbackManager?.authorizePointerFallback?.({
+					taskId,
+					reason: err.pointerFallbackReason || summary,
+				});
+			}
 			activeTask.status = code === 'aborted' ? 'cancelled' : 'failed';
 			this.lastCompletedTask = {
 				signature,
@@ -266,10 +360,15 @@ class UITaskService extends EventEmitter {
 				}, 'ui-task-service');
 			}
 			this._emitDone(taskId, activeTask.status, summary, { errorCode: code, trace: activeTask.trace });
-			return { ok: false, result: summary, taskId };
+			return { ok: false, result: summary, taskId, planSource, sourceSkillId: sourceSkill?.id || null };
 		} finally {
 			this.inputMonitor.stop();
 			this.worldState.invalidate();
+			if (!this.activeTask || this.activeTask.taskId === taskId) {
+				this.nativeFallbackManager?.endTask?.(taskId, {
+					preserveAuthorization: activeTask.status === 'failed',
+				});
+			}
 			this.activeTask = null;
 		}
 	}
@@ -340,7 +439,7 @@ class UITaskService extends EventEmitter {
 	async _executeOpenApp(step, signal) {
 		throwIfAborted(signal);
 		const appName = step.appName || step.appHint;
-		const result = await runHelper({ action: 'open_app', name: appName });
+		const result = await open_app({ name: appName });
 		if (result.ok === false) {
 			throw makeTaskError(result.result || `Could not open ${appName}`, 'open_app_failed');
 		}
@@ -377,7 +476,7 @@ class UITaskService extends EventEmitter {
 				return browserResult;
 			}
 			if (browserResult.code === 'ambiguous') {
-				throw makeTaskError(
+				throw this._makePointerEligibleError(
 					`Multiple matches for "${targetText}": ${(browserResult.matches || []).join(', ')}`,
 					'ambiguous',
 					{ matches: browserResult.matches || [] }
@@ -392,11 +491,11 @@ class UITaskService extends EventEmitter {
 			exact: step.selector?.exact === true,
 		});
 		if (axResult.ok === false) {
-			throw makeTaskError(axResult.result || `Could not click "${targetText}"`, 'ax_press_failed');
+			throw this._makePointerEligibleError(axResult.result || `Could not click "${targetText}"`, 'ax_press_failed');
 		}
 		const parsed = parseJsonResult(axResult.result, null);
 		if (parsed?.ambiguous) {
-			throw makeTaskError(
+			throw this._makePointerEligibleError(
 				`Multiple matches for "${targetText}": ${(parsed.matches || []).join(', ')}`,
 				'ambiguous',
 				{ matches: parsed.matches || [] }
@@ -499,7 +598,7 @@ class UITaskService extends EventEmitter {
 			}
 		}
 
-		throw makeTaskError(`Could not find a search field for "${query}" in ${appName || 'the current app'}`, 'search_field_missing');
+		throw this._makePointerEligibleError(`Could not find a search field for "${query}" in ${appName || 'the current app'}`, 'search_field_missing');
 	}
 
 	async _executeClickSearchResult(step, signal) {
@@ -511,7 +610,7 @@ class UITaskService extends EventEmitter {
 			resultKind: step.resultKind || '',
 		});
 		if (!browserResult.ok) {
-			throw makeTaskError(browserResult.error, browserResult.code || 'click_result_failed');
+			throw this._makePointerEligibleError(browserResult.error, browserResult.code || 'click_result_failed');
 		}
 		await wait(250, signal);
 		return browserResult;
@@ -583,7 +682,14 @@ class UITaskService extends EventEmitter {
 			this.worldState.invalidate();
 		}
 
-		throw makeTaskError(`Could not find "${step.selector?.text || 'target'}" after scrolling`, 'scroll_target_missing');
+		throw this._makePointerEligibleError(`Could not find "${step.selector?.text || 'target'}" after scrolling`, 'scroll_target_missing');
+	}
+
+	_makePointerEligibleError(message, code = 'ui_task_failed', details = {}) {
+		const err = makeTaskError(message, code, details);
+		err.pointerFallbackEligible = true;
+		err.pointerFallbackReason = message;
+		return err;
 	}
 
 	async _verifyCheckpoint(plan, step, outcome, signal) {

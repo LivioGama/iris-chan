@@ -2,6 +2,7 @@
 const { runHelper } = require('../native-helper');
 const { getMapping, getCaptureHealth } = require('../screen-capture');
 const { isCaptureUsable, formatCaptureBlockReason } = require('../screen-capture-health');
+const { getNativeFallbackManager } = require('../automation/service-ref');
 
 // Convert image-pixel coordinates (from Gemini) → logical screen coordinates (for CGEvent).
 // Image (0,0) = top-left of the captured display, which lives at (offsetX, offsetY) in global screen space.
@@ -30,6 +31,10 @@ function fromScreen(screenX, screenY, captureId = '') {
 }
 
 function requireFreshCapture(actionLabel, captureId = '') {
+	const pointerGate = getNativeFallbackManager()?.canUsePointerTools?.();
+	if (pointerGate && pointerGate.ok === false) {
+		return { ok: false, result: pointerGate.reason };
+	}
 	const health = getCaptureHealth(captureId);
 	if (!isCaptureUsable(health)) {
 		return { ok: false, result: formatCaptureBlockReason(actionLabel, health) };

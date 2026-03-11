@@ -3,6 +3,7 @@ const assert = require('node:assert');
 require('ts-node').register({ transpileOnly: true });
 
 const { UITaskService, createTaskSignature, createPlanSignature } = require('../src/main/automation/ui-task-service');
+const { NativeFallbackManager } = require('../src/main/automation/native-fallback-manager');
 
 console.log('Running UI task service tests...');
 
@@ -73,9 +74,153 @@ async function testInFlightDuplicateDedupes() {
 	assert.strictEqual(first.ok, true, 'original task should still complete');
 }
 
+async function testLearnedSkillRunsBeforeBuiltinPlan() {
+	const service = new UITaskService({
+		selfImprovementManager: {
+			findMatchingSkill() {
+				return { id: 'auto-safari-back', name: 'auto-safari-back' };
+			},
+			buildPlanFromSkill() {
+				return {
+					goal: 'go back in my browser',
+					appHint: 'Safari',
+					successSignal: '',
+					steps: [{ type: 'navigateHistory', appHint: 'Safari', direction: 'back' }],
+				};
+			},
+			recordLearnedOutcome() {},
+			recordSuccessfulPlan() {},
+			replaceSkill() {},
+		},
+	});
+	service.worldState.getFrontmostApp = async () => ({ ok: true, name: 'Safari' });
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	const seen = [];
+	service._executePlan = async (activeTask) => {
+		seen.push(activeTask.planSource);
+		return activeTask.planSource === 'learned-skill' ? 'Went back via learned skill' : 'Went back via builtin';
+	};
+
+	const result = await service.runTask({ goal: 'go back in my browser', app_hint: 'Safari' });
+
+	assert.strictEqual(result.ok, true, 'learned skill route should succeed');
+	assert.deepStrictEqual(seen, ['learned-skill'], 'learned skill should run before builtin planning');
+}
+
+async function testBuiltinFallbackReplacesFailingLearnedSkill() {
+	let recordCalls = [];
+	let replaceCalls = [];
+	const service = new UITaskService({
+		selfImprovementManager: {
+			findMatchingSkill() {
+				return { id: 'auto-search', name: 'auto-search', description: 'Search workflow' };
+			},
+			buildPlanFromSkill() {
+				return {
+					goal: 'search for Theo',
+					appHint: 'Safari',
+					successSignal: 'Theo',
+					steps: [{ type: 'searchInCurrentContext', appHint: 'Safari', query: 'Theo' }],
+				};
+			},
+			recordLearnedOutcome(entry, success) {
+				recordCalls.push({ id: entry.id, success });
+			},
+			recordSuccessfulPlan(details) {
+				recordCalls.push({ builtinRecovered: details.recoveredFromSkillFailure === true });
+			},
+			replaceSkill(entry, details) {
+				replaceCalls.push({ id: entry.id, details });
+			},
+		},
+	});
+	service.worldState.getFrontmostApp = async () => ({ ok: true, name: 'Safari' });
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	service._executePlan = async (activeTask) => {
+		if (activeTask.planSource === 'learned-skill') {
+			throw new Error('learned skill failed');
+		}
+		return 'Recovered via builtin workflow';
+	};
+
+	const result = await service.runTask({ goal: 'search for Theo', app_hint: 'Safari' });
+
+	assert.strictEqual(result.ok, true, 'builtin fallback should still succeed');
+	assert.deepStrictEqual(recordCalls[0], { id: 'auto-search', success: false }, 'failed learned skill should be recorded');
+	assert.deepStrictEqual(recordCalls[1], { builtinRecovered: true }, 'builtin recovery should be recorded for promotion logic');
+	assert.strictEqual(replaceCalls.length, 1, 'successful builtin recovery should trigger replacement of the failing learned skill');
+}
+
+async function testNativeEligibleFailureAuthorizesPointerFallback() {
+	const fallbackManager = new NativeFallbackManager();
+	const service = new UITaskService({ nativeFallbackManager: fallbackManager });
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	service._executePlan = async () => {
+		const err = new Error('Need screenshot rescue');
+		err.code = 'ax_press_failed';
+		err.pointerFallbackEligible = true;
+		err.pointerFallbackReason = 'native and accessibility exhausted';
+		throw err;
+	};
+
+	const result = await service.runTask({ goal: 'Open my default browser and go to youtube.com', app_hint: 'Safari' });
+
+	assert.strictEqual(result.ok, false, 'task should still fail after native/AX exhaustion');
+	assert.strictEqual(fallbackManager.canUsePointerTools().ok, true, 'pointer fallback should become temporarily authorized');
+}
+
+async function testFalsePositiveLearnedSkillIsDemotedAndBypassed() {
+	let falsePositiveCalls = [];
+	const service = new UITaskService({
+		selfImprovementManager: {
+			findMatchingSkill() {
+				return { id: 'auto-arc', name: 'auto-arc', description: 'Open YouTube in Arc' };
+			},
+			buildPlanFromSkill() {
+				return {
+					goal: 'Open youtube.com in Arc',
+					appHint: 'Arc',
+					successSignal: 'youtube',
+					steps: [{ type: 'openUrl', appHint: 'Arc', url: 'https://youtube.com' }],
+				};
+			},
+			recordLearnedOutcome(entry, success, details) {
+				if (details?.successType === 'false_positive') {
+					falsePositiveCalls.push({ id: entry.id, reason: details.reason });
+				}
+			},
+			recordSuccessfulPlan() {},
+			replaceSkill() {},
+		},
+	});
+	service.worldState.getFrontmostApp = async () => ({ ok: true, name: 'Arc' });
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	const seen = [];
+	service._executePlan = async (activeTask) => {
+		seen.push(activeTask.planSource);
+		return activeTask.planSource === 'learned-skill'
+			? 'Opened https://youtube.com in Arc'
+			: 'Searched for Theo in Arc';
+	};
+
+	const result = await service.runTask({ goal: 'Search for Theo', app_hint: 'Arc' });
+
+	assert.strictEqual(result.ok, true, 'builtin fallback should still complete');
+	assert.deepStrictEqual(seen, ['learned-skill', 'builtin'], 'false-positive learned skill should be bypassed and builtin planner should run');
+	assert.strictEqual(falsePositiveCalls.length, 1, 'false-positive learned skill should be demoted');
+}
+
 Promise.resolve()
 	.then(testRecentDuplicateDedupes)
 	.then(testInFlightDuplicateDedupes)
+	.then(testLearnedSkillRunsBeforeBuiltinPlan)
+	.then(testBuiltinFallbackReplacesFailingLearnedSkill)
+	.then(testNativeEligibleFailureAuthorizesPointerFallback)
+	.then(testFalsePositiveLearnedSkillIsDemotedAndBypassed)
 	.then(() => {
 		console.log('UI task service tests passed.');
 	})
