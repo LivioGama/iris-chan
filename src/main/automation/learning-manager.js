@@ -22,6 +22,16 @@ function hash(value = '') {
 	return crypto.createHash('sha1').update(String(value || '')).digest('hex').slice(0, 12);
 }
 
+function normalizeIssueText(value = '') {
+	return String(value || '')
+		.toLowerCase()
+		.replace(/https?:\/\/\S+/g, '<url>')
+		.replace(/["'`]/g, '')
+		.replace(/\b\d+\b/g, '<num>')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
 class LearningManager {
 	constructor({ memoryStore, selfImprovementManager, selfFixTool = null, irisDir = config.paths.irisDir } = {}) {
 		this.memoryStore = memoryStore;
@@ -37,7 +47,7 @@ class LearningManager {
 		this.recentTurns = [];
 		this.recentToolExecutions = [];
 		this.activeIssues = new Set();
-		this.maxConcurrentSelfFix = 1;
+		this.deferredIssueQueue = [];
 		this.activeSelfFixCount = 0;
 		this._ensureFiles();
 	}
@@ -197,6 +207,49 @@ class LearningManager {
 		this._writeJson(this.logPath, log);
 	}
 
+	_clusterIssue(event = {}) {
+		const domain = event.domain || inferDomain(event.userText || event.guidanceText || '');
+		const text = normalizeIssueText(event.guidanceText || event.userText || event.classification?.payload?.description || event.issueSignature || '');
+		const failed = (event.failedTools || []).map((item) => item.name).filter(Boolean).join(',');
+		const succeeded = (event.successfulTools || []).map((item) => item.name).filter(Boolean).join(',');
+		const family = event.type === 'stabilization_candidate'
+			? 'stabilize'
+			: event.type === 'skill'
+				? 'skill'
+				: event.type === 'false_positive_skill'
+					? 'false_positive'
+					: 'core_gap';
+		return {
+			signature: `${family}:${domain}:${text}:${failed}->${succeeded}`.slice(0, 280),
+			domain,
+			canonicalDescription: text || 'structural gap',
+		};
+	}
+
+	_getSelfFixConcurrencyLimit() {
+		return Math.max(1, Math.min(3, this.queue.length + 1));
+	}
+
+	_enqueueDeferredIssue(issueSignature, event) {
+		if (this.deferredIssueQueue.some((item) => item.issueSignature === issueSignature)) return;
+		this.deferredIssueQueue.push({
+			issueSignature,
+			event,
+		});
+	}
+
+	_pumpDeferredIssues() {
+		if (!this.deferredIssueQueue.length) return;
+		const next = this.deferredIssueQueue.shift();
+		if (!next) return;
+		setTimeout(() => {
+			this.enqueue({
+				...next.event,
+				forceImmediate: true,
+			});
+		}, 0);
+	}
+
 	_inferTier(toolName = '') {
 		const name = String(toolName || '');
 		if (['click_at', 'double_click', 'mouse_move', 'drag'].includes(name)) return 'pointer';
@@ -223,6 +276,10 @@ class LearningManager {
 		}
 		if (event.type === 'skill') {
 			await this._applySkillEvent(event);
+			return;
+		}
+		if (event.type === 'false_positive_skill') {
+			await this._applyCoreGapEvent(event);
 			return;
 		}
 		if (event.type === 'core-gap') {
@@ -285,24 +342,44 @@ class LearningManager {
 
 	async _applyCoreGapEvent(event) {
 		const issues = this._readJson(this.issuePath, { version: 1, updatedAt: nowIso(), issues: [] });
-		let issue = issues.issues.find((item) => item.issueSignature === event.issueSignature);
+		const clustered = this._clusterIssue(event);
+		let issue = issues.issues.find((item) => item.issueSignature === clustered.signature);
 		if (!issue) {
 			issue = {
-				id: `issue_${hash(event.issueSignature)}`,
-				issueSignature: event.issueSignature,
+				id: `issue_${hash(clustered.signature)}`,
+				issueSignature: clustered.signature,
+				domain: clustered.domain,
 				description: event.classification?.payload?.description || event.userText || 'Structural gap detected',
+				canonicalDescription: clustered.canonicalDescription,
 				count: 0,
 				status: 'pending',
 				lastQueuedAt: null,
 				lastResolvedAt: null,
+				evidence: [],
 			};
 			issues.issues.push(issue);
 		}
+		issue.domain = issue.domain || clustered.domain;
+		issue.canonicalDescription = issue.canonicalDescription || clustered.canonicalDescription;
+		issue.evidence = Array.isArray(issue.evidence) ? issue.evidence : [];
+		const evidence = String(event.guidanceText || event.userText || issue.description || '').trim();
+		if (evidence) {
+			issue.evidence.push({ at: nowIso(), text: evidence.slice(0, 220) });
+			if (issue.evidence.length > 5) issue.evidence = issue.evidence.slice(-5);
+		}
 		issue.count += 1;
 		issue.status = 'pending';
-		if (issue.count >= 2) {
-			if (this.activeIssues.has(issue.issueSignature) || this.activeSelfFixCount >= this.maxConcurrentSelfFix) {
+		const queueImmediately = event.forceImmediate === true;
+		if (queueImmediately || issue.count >= 2) {
+			if (this.activeIssues.has(issue.issueSignature) || this.activeSelfFixCount >= this._getSelfFixConcurrencyLimit()) {
 				log.info('Learning', `Self-fix issue already active or throttled: issue=${issue.issueSignature}`);
+				issue.status = 'deferred';
+				this._enqueueDeferredIssue(issue.issueSignature, {
+					...event,
+					domain: issue.domain,
+					issueSignature: issue.issueSignature,
+					classification: event.classification,
+				});
 				this._writeJson(this.issuePath, issues);
 				return;
 			}
@@ -316,6 +393,7 @@ class LearningManager {
 				description: [
 					'Autonomous self-improvement triggered by repeated user friction.',
 					`Issue signature: ${issue.issueSignature}.`,
+					`Domain: ${issue.domain}.`,
 					`Observed guidance: ${event.guidanceText || event.userText || issue.description}.`,
 					'Add or improve the missing capability so Iris learns this behavior natively and stops asking for the same guidance repeatedly.',
 				].join(' '),
@@ -330,6 +408,7 @@ class LearningManager {
 				}
 				this.activeIssues.delete(issue.issueSignature);
 				this.activeSelfFixCount = Math.max(0, this.activeSelfFixCount - 1);
+				this._pumpDeferredIssues();
 			});
 			return;
 		}
@@ -341,6 +420,7 @@ class LearningManager {
 		await this._applyCoreGapEvent({
 			...event,
 			type: 'core-gap',
+			forceImmediate: true,
 			classification: {
 				payload: event.classification?.payload || {
 					issueSignature: event.issueSignature,

@@ -71,6 +71,66 @@ assert.strictEqual(
 	'router should preserve the browser history direction'
 );
 
+const mediaPausePlan = routeGoal('Pause the currently playing video', 'Arc');
+assert.deepStrictEqual(
+	mediaPausePlan.steps.map((step) => step.type),
+	['mediaControl'],
+	'router should recognize browser media-control intents semantically'
+);
+assert.strictEqual(
+	mediaPausePlan.steps[0].action,
+	'pause',
+	'router should preserve the media control action'
+);
+
+const editorOpenPlan = routeGoal('Open Visual Studio Code');
+assert.deepStrictEqual(
+	editorOpenPlan.steps.map((step) => step.type),
+	['openApp'],
+	'router should recognize editor app launches as semantic openApp steps'
+);
+assert.strictEqual(
+	editorOpenPlan.steps[0].appName,
+	'Visual Studio Code',
+	'router should preserve the editor app target'
+);
+
+const editorCommandPlan = routeGoal('Save', 'Visual Studio Code');
+assert.deepStrictEqual(
+	editorCommandPlan.steps.map((step) => step.type),
+	['editorCommand'],
+	'router should recognize editor commands semantically'
+);
+assert.strictEqual(
+	editorCommandPlan.steps[0].key,
+	'cmd+s',
+	'router should map save to the native editor shortcut'
+);
+
+const settingsOpenPlan = routeGoal('Open system settings');
+assert.deepStrictEqual(
+	settingsOpenPlan.steps.map((step) => step.type),
+	['openApp'],
+	'router should recognize system settings launches as semantic openApp steps'
+);
+assert.strictEqual(
+	settingsOpenPlan.steps[0].appName,
+	'System Settings',
+	'router should preserve the System Settings app target'
+);
+
+const utilityOpenPlan = routeGoal('Open Activity Monitor');
+assert.deepStrictEqual(
+	utilityOpenPlan.steps.map((step) => step.type),
+	['openApp'],
+	'router should recognize utility app launches as semantic openApp steps'
+);
+assert.strictEqual(
+	utilityOpenPlan.steps[0].appName,
+	'Activity Monitor',
+	'router should preserve the utility app target'
+);
+
 const defaultBrowserPlan = routeGoal('open my default browser');
 assert.deepStrictEqual(
 	defaultBrowserPlan.steps.map((step) => step.type),

@@ -11,6 +11,18 @@ const APP_ALIASES = new Map([
 	['microsoft edge', 'Microsoft Edge'],
 	['comet', 'Comet'],
 	['finder', 'Finder'],
+	['system settings', 'System Settings'],
+	['settings', 'System Settings'],
+	['activity monitor', 'Activity Monitor'],
+	['console', 'Console'],
+	['disk utility', 'Disk Utility'],
+	['system information', 'System Information'],
+	['visual studio code', 'Visual Studio Code'],
+	['code', 'Visual Studio Code'],
+	['cursor', 'Cursor'],
+	['zed', 'Zed'],
+	['sublime text', 'Sublime Text'],
+	['nova', 'Nova'],
 	['notes', 'Notes'],
 	['textedit', 'TextEdit'],
 	['text edit', 'TextEdit'],
@@ -125,6 +137,38 @@ function parseHistoryNavigationClause(clause, appHint) {
 	};
 }
 
+function parseMediaControlClause(clause, appHint) {
+	const match = clause.match(/^(pause|play|resume)(?:\s+(?:the\s+)?(?:currently\s+)?playing\s+(?:video|media|audio))?(?:\s+in\s+.+)?\.?$/i);
+	if (!match) return null;
+	return {
+		type: 'mediaControl',
+		appHint,
+		action: /^(play|resume)$/i.test(match[1]) ? 'play' : 'pause',
+	};
+}
+
+function parseEditorCommandClause(clause, appHint) {
+	const normalized = collapseWhitespace(clause);
+	const commands = [
+		{ pattern: /^(?:save|save file|save this file)$/i, action: 'save', key: 'cmd+s' },
+		{ pattern: /^(?:undo)$/i, action: 'undo', key: 'cmd+z' },
+		{ pattern: /^(?:redo)$/i, action: 'redo', key: 'cmd+shift+z' },
+		{ pattern: /^(?:find|search in file)$/i, action: 'find', key: 'cmd+f' },
+		{ pattern: /^(?:new file)$/i, action: 'newFile', key: 'cmd+n' },
+	];
+	for (const command of commands) {
+		if (command.pattern.test(normalized)) {
+			return {
+				type: 'editorCommand',
+				appHint,
+				action: command.action,
+				key: command.key,
+			};
+		}
+	}
+	return null;
+}
+
 function parseNavigationClause(clause, appHint) {
 	const lower = clause.toLowerCase();
 	const url = extractUrl(clause);
@@ -206,6 +250,18 @@ function routeGoal(goal, explicitAppHint = '') {
 			continue;
 		}
 
+		const mediaControlStep = parseMediaControlClause(clause, appHint);
+		if (mediaControlStep) {
+			steps.push(mediaControlStep);
+			continue;
+		}
+
+		const editorCommandStep = parseEditorCommandClause(clause, appHint);
+		if (editorCommandStep) {
+			steps.push(editorCommandStep);
+			continue;
+		}
+
 		const searchStep = parseSearchClause(clause, appHint);
 		if (searchStep) {
 			steps.push(searchStep);
@@ -244,6 +300,8 @@ module.exports = {
 	detectAppName,
 	extractUrl,
 	parseHistoryNavigationClause,
+	parseMediaControlClause,
+	parseEditorCommandClause,
 	parseSearchClause,
 	parseSearchResultClause,
 	normalizeSearchQuery,

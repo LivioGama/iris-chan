@@ -19,7 +19,8 @@ const { SelfImprovementManager } = require('./automation/self-improvement-manage
 const { MemoryStore } = require('./automation/memory-store');
 const { LearningManager } = require('./automation/learning-manager');
 const { NativeFallbackManager } = require('./automation/native-fallback-manager');
-const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager } = require('./automation/service-ref');
+const { EpisodeRecorder } = require('./automation/episode-recorder');
+const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager, setEpisodeRecorder } = require('./automation/service-ref');
 const taskQueueWatcher = require('./task-queue/watcher');
 const { setConvexClient: setTqControllerClient, setBehaviorEngine: setTqBehaviorEngine } = require('./controllers/taskQueueController');
 const { setConvexClient: setTqToolClient } = require('./tools/task-queue');
@@ -31,9 +32,10 @@ function startRuntime({ apiKey }) {
 	const behaviorEngine = new BehaviorModeState();
 	const memoryStore = new MemoryStore();
 	const nativeFallbackManager = new NativeFallbackManager();
+	const episodeRecorder = new EpisodeRecorder();
 	const selfImprovementManager = new SelfImprovementManager({ skillsEngine: skills });
 	const learningManager = new LearningManager({ memoryStore, selfImprovementManager });
-	const uiTaskService = new UITaskService({ eventBus, selfImprovementManager, nativeFallbackManager });
+	const uiTaskService = new UITaskService({ eventBus, selfImprovementManager, nativeFallbackManager, episodeRecorder });
 	const healthService = new HealthService({
 		convexClient,
 		taskEngine,
@@ -89,6 +91,7 @@ function startRuntime({ apiKey }) {
 	setMemoryStore(memoryStore);
 	setLearningManager(learningManager);
 	setNativeFallbackManager(nativeFallbackManager);
+	setEpisodeRecorder(episodeRecorder);
 	legacyIpc.register(apiKey);
 	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow });
 	setTqControllerClient(convexClient);

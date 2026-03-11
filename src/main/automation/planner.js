@@ -6,6 +6,8 @@ function createCheckpoint(step, index, total) {
 	if (step.type === 'openUrl') return { kind: 'navigation', reason: 'url-opened' };
 	if (step.type === 'searchInCurrentContext') return { kind: 'search', reason: 'query-submitted' };
 	if (step.type === 'clickSearchResult') return { kind: 'final', reason: 'result-opened' };
+	if (step.type === 'mediaControl') return { kind: 'final', reason: 'media-control' };
+	if (step.type === 'editorCommand') return { kind: 'final', reason: 'editor-command' };
 	return null;
 }
 
@@ -20,6 +22,8 @@ function toExecutionStep(step, index, total) {
 		direction: step.direction || 'down',
 		query: step.query || '',
 		resultKind: step.resultKind || '',
+		action: step.action || '',
+		key: step.key || '',
 		position: step.position || 0,
 		selector: step.selector || null,
 		checkpoint: createCheckpoint(step, index, total),

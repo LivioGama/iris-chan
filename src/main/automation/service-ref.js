@@ -3,6 +3,7 @@ let selfImprovementManagerRef = null;
 let memoryStoreRef = null;
 let learningManagerRef = null;
 let nativeFallbackManagerRef = null;
+let episodeRecorderRef = null;
 
 function setUiTaskService(service) {
 	uiTaskServiceRef = service || null;
@@ -44,6 +45,14 @@ function getNativeFallbackManager() {
 	return nativeFallbackManagerRef;
 }
 
+function setEpisodeRecorder(recorder) {
+	episodeRecorderRef = recorder || null;
+}
+
+function getEpisodeRecorder() {
+	return episodeRecorderRef;
+}
+
 module.exports = {
 	setUiTaskService,
 	getUiTaskService,
@@ -55,4 +64,6 @@ module.exports = {
 	getLearningManager,
 	setNativeFallbackManager,
 	getNativeFallbackManager,
+	setEpisodeRecorder,
+	getEpisodeRecorder,
 };

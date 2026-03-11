@@ -137,10 +137,137 @@ async function testPointerRecoveryDoesNotCreateLearnedSkill() {
 	assert.strictEqual(registry.skills.length, 0, 'pointer-only recovery should not become a learned skill');
 	assert.strictEqual(selfFixCalls >= 1, true, 'repeated pointer-only recovery should escalate as stabilization debt');
 	assert.strictEqual(
-		issues.issues.some((issue) => String(issue.issueSignature || '').startsWith('stabilize:open that channel link')),
+		issues.issues.some((issue) => String(issue.canonicalDescription || issue.issueSignature || '').includes('open that channel link')),
 		true,
 		'pointer-only recovery should record stabilization debt instead of a learned skill'
 	);
+}
+
+async function testSemanticIssueClusteringMergesNearDuplicateCoreGaps() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'Open that channel link');
+	manager.recordConversationTurn('user', 'open that channel link');
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	const clustered = issues.issues.filter((issue) => String(issue.issueSignature || '').includes('open that channel link'));
+
+	assert.strictEqual(clustered.length, 1, 'near-duplicate structural issues should cluster together');
+	assert.strictEqual(selfFixCalls, 1, 'clustered repeated issue should trigger a single self-fix');
+}
+
+async function testStabilizationFailureQueuesImmediateSelfFix() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.enqueue({
+		type: 'stabilization_candidate',
+		domain: 'browser',
+		issueSignature: 'stabilize:click that channel',
+		userText: 'click that channel link',
+		guidanceText: 'click that channel link',
+		classification: {
+			payload: {
+				issueSignature: 'stabilize:click that channel',
+				description: 'Pointer rescue needs semantic stabilization',
+			},
+		},
+		failedTools: [{ name: 'run_ui_task', success: false }],
+		successfulTools: [{ name: 'click_at', success: true }],
+		createdAt: new Date().toISOString(),
+	});
+	await wait(120);
+
+	assert.strictEqual(selfFixCalls, 1, 'stabilization failure should queue self-fix immediately');
+}
+
+async function testDeferredSelfFixIssuesAreRetried() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.activeSelfFixCount = 3;
+	manager.enqueue({
+		type: 'core-gap',
+		domain: 'system',
+		issueSignature: 'issue:one',
+		userText: 'first issue',
+		guidanceText: 'first issue',
+		classification: { payload: { description: 'first issue' } },
+		createdAt: new Date().toISOString(),
+		forceImmediate: true,
+	});
+	manager.enqueue({
+		type: 'core-gap',
+		domain: 'system',
+		issueSignature: 'issue:two',
+		userText: 'second issue',
+		guidanceText: 'second issue',
+		classification: { payload: { description: 'second issue' } },
+		createdAt: new Date().toISOString(),
+		forceImmediate: true,
+	});
+	await wait(80);
+
+	const issuesBefore = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(
+		issuesBefore.issues.some((issue) => issue.status === 'deferred'),
+		true,
+		'saturated self-fix queue should mark extra issues as deferred'
+	);
+
+	manager.activeSelfFixCount = 0;
+	manager._pumpDeferredIssues();
+	await wait(120);
+
+	assert.strictEqual(selfFixCalls >= 1, true, 'deferred issue should eventually be retried');
 }
 
 Promise.resolve()
@@ -149,6 +276,9 @@ Promise.resolve()
 	.then(testLearningManagerCreatesReusableToolSkill)
 	.then(testLearningManagerDedupesAutonomousSelfFix)
 	.then(testPointerRecoveryDoesNotCreateLearnedSkill)
+	.then(testSemanticIssueClusteringMergesNearDuplicateCoreGaps)
+	.then(testStabilizationFailureQueuesImmediateSelfFix)
+	.then(testDeferredSelfFixIssuesAreRetried)
 	.then(() => {
 		console.log('Learning manager tests passed.');
 	})

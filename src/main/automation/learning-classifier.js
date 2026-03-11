@@ -84,6 +84,19 @@ class LearningClassifier {
 			};
 		}
 
+		if (successfulTools.length && latestUserText && /(didn'?t work|wrong|not what i asked|not what i wanted|that is not it|not correct)/i.test(latestUserText)) {
+			return {
+				type: 'false_positive_skill',
+				key: `false_positive:${userText}`,
+				reason: 'user correction after apparent success',
+				payload: {
+					issueSignature: `false_positive:${userText}`,
+					description: `Apparent success was corrected by user: ${latestUserText}`,
+					evidence: latestUserText,
+				},
+			};
+		}
+
 		if (!successNames.includes('run_ui_task') && successfulTools.length >= 1 && latestUserText) {
 			return {
 				type: 'skill',

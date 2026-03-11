@@ -93,6 +93,53 @@ async function get_finder_selection() {
 	}
 }
 
+function runFinderAppleScript(script, timeout = 5000) {
+	const result = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { timeout, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+	return result;
+}
+
+async function finder_select_item(args) {
+	const name = String(args?.name || '').trim();
+	if (!name) return { ok: false, result: 'No Finder item name provided' };
+	try {
+		const result = runFinderAppleScript(`
+			tell application "Finder"
+				activate
+				if (count of windows) is 0 then error "No Finder window open"
+				set targetFolder to target of front window
+				set matches to every item of targetFolder whose name is "${name.replace(/"/g, '\\"')}"
+				if (count of matches) is 0 then error "No Finder item matched ${name.replace(/"/g, '\\"')}"
+				select item 1 of matches
+				return POSIX path of ((item 1 of matches) as alias)
+			end tell
+		`);
+		return { ok: true, result: `Selected Finder item "${name}"`, path: result };
+	} catch (err) {
+		return { ok: false, result: `Error selecting Finder item: ${err.message}` };
+	}
+}
+
+async function finder_open_item(args) {
+	const name = String(args?.name || '').trim();
+	if (!name) return { ok: false, result: 'No Finder item name provided' };
+	try {
+		const result = runFinderAppleScript(`
+			tell application "Finder"
+				activate
+				if (count of windows) is 0 then error "No Finder window open"
+				set targetFolder to target of front window
+				set matches to every item of targetFolder whose name is "${name.replace(/"/g, '\\"')}"
+				if (count of matches) is 0 then error "No Finder item matched ${name.replace(/"/g, '\\"')}"
+				open item 1 of matches
+				return POSIX path of ((item 1 of matches) as alias)
+			end tell
+		`);
+		return { ok: true, result: `Opened Finder item "${name}"`, path: result };
+	} catch (err) {
+		return { ok: false, result: `Error opening Finder item: ${err.message}` };
+	}
+}
+
 const BROWSER_JS = `
 (function() {
 	var imgs = Array.from(document.querySelectorAll('img'));
@@ -197,4 +244,4 @@ async function download_browser_image(args) {
 	}
 }
 
-module.exports = { read_file, write_file, list_directory, move_file, get_finder_selection, download_browser_image };
+module.exports = { read_file, write_file, list_directory, move_file, get_finder_selection, finder_select_item, finder_open_item, download_browser_image };

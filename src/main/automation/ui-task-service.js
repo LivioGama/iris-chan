@@ -3,10 +3,11 @@ const { URL } = require('node:url');
 const { EVENT_TYPES } = require('../../shared/event-types.js');
 const { runHelper } = require('../native-helper');
 const { open_app } = require('../tools/apps');
+const filesTools = require('../tools/files');
 const log = require('../logger');
 const { BrowserAdapter } = require('./browser-adapter');
 const { InputMonitor } = require('./input-monitor');
-const { isNativeEligiblePlan, isNativeEligibleStep } = require('./native-resolver-registry');
+const { isNativeEligiblePlan, isNativeEligibleStep, resolverIdForStep } = require('./native-resolver-registry');
 const { createExecutionPlan } = require('./planner');
 const { planLikelySatisfiesGoal } = require('./skill-policy');
 const { WorldState } = require('./world-state');
@@ -127,12 +128,22 @@ function stepLabel(step) {
 	}
 }
 
+function classifyOpenAppDomain(appName = '', resolverId = '') {
+	if (resolverId === 'editor.activate') return 'editor';
+	if (resolverId === 'system.default_app') return 'system';
+	if (['System Settings', 'Activity Monitor', 'Console', 'Disk Utility', 'System Information'].includes(String(appName || ''))) {
+		return 'system';
+	}
+	return 'general';
+}
+
 class UITaskService extends EventEmitter {
-	constructor({ eventBus, selfImprovementManager = null, nativeFallbackManager = null } = {}) {
+	constructor({ eventBus, selfImprovementManager = null, nativeFallbackManager = null, episodeRecorder = null } = {}) {
 		super();
 		this.eventBus = eventBus;
 		this.selfImprovementManager = selfImprovementManager;
 		this.nativeFallbackManager = nativeFallbackManager;
+		this.episodeRecorder = episodeRecorder;
 		this.browserAdapter = new BrowserAdapter();
 		this.worldState = new WorldState();
 		this.activeTask = null;
@@ -310,6 +321,11 @@ class UITaskService extends EventEmitter {
 			planSource,
 			sourceSkillId: sourceSkill?.id || null,
 			nativeEligible: isNativeEligiblePlan(plan),
+			episodeId: this.episodeRecorder?.beginEpisode?.({
+				taskId,
+				goal,
+				appHint: plan.appHint || '',
+			}) || null,
 		};
 		this.activeTask = activeTask;
 		this.nativeFallbackManager?.beginTask?.({
@@ -334,6 +350,7 @@ class UITaskService extends EventEmitter {
 				completedAt: Date.now(),
 			};
 			this._emitDone(taskId, 'completed', summary, { trace: activeTask.trace });
+			this.episodeRecorder?.finishEpisode?.(taskId, { ok: true, result: summary, successType: 'true_success' });
 			return { ok: true, result: summary, taskId, planSource, sourceSkillId: sourceSkill?.id || null };
 		} catch (err) {
 			const code = err?.code || 'ui_task_failed';
@@ -360,6 +377,11 @@ class UITaskService extends EventEmitter {
 				}, 'ui-task-service');
 			}
 			this._emitDone(taskId, activeTask.status, summary, { errorCode: code, trace: activeTask.trace });
+			this.episodeRecorder?.finishEpisode?.(taskId, {
+				ok: false,
+				result: summary,
+				successType: code === 'aborted' ? 'technical_success' : 'false_positive',
+			});
 			return { ok: false, result: summary, taskId, planSource, sourceSkillId: sourceSkill?.id || null };
 		} finally {
 			this.inputMonitor.stop();
@@ -392,10 +414,26 @@ class UITaskService extends EventEmitter {
 				stepIndex: i,
 			});
 			const outcome = await this._executeStep(step, controller.signal);
+			log.info('Learning', `Step outcome: task=${taskId} step=${step.type} tier=${outcome.tier || 'unknown'} domain=${outcome.domain || 'general'} resolver=${outcome.resolverId || 'n/a'} successType=${outcome.successType || 'true_success'}`);
 			activeTask.trace.push({
 				stepId: step.id,
 				type: step.type,
+				tier: outcome.tier || 'unknown',
+				domain: outcome.domain || 'general',
+				resolverId: outcome.resolverId || '',
+				verificationMode: outcome.verificationMode || '',
+				successType: outcome.successType || 'true_success',
 				resolutionMethod: outcome.resolutionMethod || 'input',
+				result: outcome.result,
+			});
+			this.episodeRecorder?.recordAttempt?.(taskId, {
+				stepId: step.id,
+				type: step.type,
+				tier: outcome.tier || 'unknown',
+				domain: outcome.domain || 'general',
+				resolverId: outcome.resolverId || '',
+				verificationMode: outcome.verificationMode || '',
+				successType: outcome.successType || 'true_success',
 				result: outcome.result,
 			});
 			if (step.checkpoint) {
@@ -431,6 +469,10 @@ class UITaskService extends EventEmitter {
 				return this._executeNavigateHistory(step, signal);
 			case 'scrollUntilVisible':
 				return this._executeScrollUntilVisible(step, signal);
+			case 'mediaControl':
+				return this._executeMediaControl(step, signal);
+			case 'editorCommand':
+				return this._executeEditorCommand(step, signal);
 			default:
 				throw makeTaskError(`Unsupported UI step: ${step.type}`, 'unsupported_step');
 		}
@@ -446,8 +488,14 @@ class UITaskService extends EventEmitter {
 		await wait(250, signal);
 		return {
 			ok: true,
+			tier: 'native',
+			domain: classifyOpenAppDomain(appName, resolverIdForStep(step, appName)),
+			resolverId: resolverIdForStep(step, appName),
+			verificationMode: 'frontmost-app',
+			successType: 'true_success',
 			resolutionMethod: 'input',
 			result: result.result || `Opened ${appName}`,
+			resolvedAppName: result.resolved_name || appName,
 		};
 	}
 
@@ -460,7 +508,14 @@ class UITaskService extends EventEmitter {
 			throw makeTaskError(adapterResult.error, adapterResult.code || 'open_url_failed');
 		}
 		await wait(350, signal);
-		return adapterResult;
+		return {
+			...adapterResult,
+			tier: 'native',
+			domain: 'browser',
+			resolverId: resolverIdForStep(step, appName),
+			verificationMode: 'browser-navigation',
+			successType: 'true_success',
+		};
 	}
 
 	async _executeClickByText(step, signal) {
@@ -468,6 +523,26 @@ class UITaskService extends EventEmitter {
 		const targetText = step.selector?.text || '';
 		const frontmost = await this.worldState.getFrontmostApp({ force: true });
 		const appName = frontmost.ok ? frontmost.name : step.appHint || '';
+
+		if (appName === 'Finder') {
+			const finderResult = step.type === 'selectItemByText'
+				? await filesTools.finder_select_item({ name: targetText })
+				: await filesTools.finder_open_item({ name: targetText });
+			if (finderResult.ok) {
+				await wait(120, signal);
+				return {
+					ok: true,
+					tier: 'native',
+					domain: 'finder',
+					resolverId: resolverIdForStep(step, appName),
+					verificationMode: 'finder-selection',
+					successType: 'true_success',
+					resolutionMethod: 'native',
+					result: finderResult.result,
+					path: finderResult.path || '',
+				};
+			}
+		}
 
 		if (this.browserAdapter.isSupported(appName)) {
 			const browserResult = this.browserAdapter.clickByText({ appName, text: targetText });
@@ -504,6 +579,11 @@ class UITaskService extends EventEmitter {
 		await wait(150, signal);
 		return {
 			ok: true,
+			tier: 'ax_dom',
+			domain: isNativeEligibleStep(step) ? 'browser' : 'general',
+			resolverId: resolverIdForStep(step, appName),
+			verificationMode: 'accessibility',
+			successType: 'true_success',
 			resolutionMethod: 'accessibility',
 			result: parsed?.message || `Activated "${targetText}"`,
 		};
@@ -530,6 +610,11 @@ class UITaskService extends EventEmitter {
 			const parsed = parseJsonResult(axResult.result, null);
 			return {
 				ok: true,
+				tier: 'ax_dom',
+				domain: 'general',
+				resolverId: resolverIdForStep(step),
+				verificationMode: 'accessibility',
+				successType: 'true_success',
 				resolutionMethod: 'accessibility',
 				result: parsed?.message || `Typed "${step.value}"`,
 			};
@@ -541,6 +626,11 @@ class UITaskService extends EventEmitter {
 		}
 		return {
 			ok: true,
+			tier: 'ax_dom',
+			domain: 'general',
+			resolverId: resolverIdForStep(step),
+			verificationMode: 'input',
+			successType: 'technical_success',
 			resolutionMethod: 'input',
 			result: fallback.result || `Typed "${step.value}"`,
 		};
@@ -560,7 +650,14 @@ class UITaskService extends EventEmitter {
 			const browserResult = this.browserAdapter.searchInPage({ appName, query });
 			if (browserResult.ok) {
 				await wait(250, signal);
-				return browserResult;
+				return {
+					...browserResult,
+					tier: 'native',
+					domain: 'browser',
+					resolverId: resolverIdForStep(step, appName),
+					verificationMode: 'browser-adapter',
+					successType: 'true_success',
+				};
 			}
 		}
 
@@ -592,6 +689,11 @@ class UITaskService extends EventEmitter {
 				const parsed = parseJsonResult(setResult.result, null);
 				return {
 					ok: true,
+					tier: 'ax_dom',
+					domain: 'browser',
+					resolverId: resolverIdForStep(step, appName),
+					verificationMode: 'accessibility',
+					successType: 'true_success',
 					resolutionMethod: 'accessibility',
 					result: parsed?.message || `Searched for "${query}"`,
 				};
@@ -613,7 +715,70 @@ class UITaskService extends EventEmitter {
 			throw this._makePointerEligibleError(browserResult.error, browserResult.code || 'click_result_failed');
 		}
 		await wait(250, signal);
-		return browserResult;
+		return {
+			...browserResult,
+			tier: 'native',
+			domain: 'browser',
+			resolverId: resolverIdForStep(step, appName),
+			verificationMode: 'browser-result',
+			successType: 'true_success',
+		};
+	}
+
+	async _executeMediaControl(step, signal) {
+		throwIfAborted(signal);
+		const frontmost = await this.worldState.getFrontmostApp({ force: true });
+		const appName = frontmost.ok ? frontmost.name : step.appHint || '';
+		if (this.browserAdapter.isSupported(appName)) {
+			const result = this.browserAdapter.controlMedia({ appName, action: step.action || 'pause' });
+			if (result.ok) {
+				await wait(150, signal);
+				return {
+					...result,
+					tier: 'native',
+					domain: 'media',
+					resolverId: resolverIdForStep(step, appName),
+					verificationMode: 'browser-media',
+					successType: 'true_success',
+				};
+			}
+		}
+		const keyResult = await runHelper({ action: 'press_key', key: 'space' });
+		if (keyResult.ok === false) {
+			throw makeTaskError(keyResult.result || `Could not ${step.action || 'pause'} media`, 'media_control_failed');
+		}
+		return {
+			ok: true,
+			tier: 'ax_dom',
+			domain: 'media',
+			resolverId: resolverIdForStep(step, appName),
+			verificationMode: 'media-key',
+			successType: 'technical_success',
+			resolutionMethod: 'input',
+			result: `${step.action === 'play' ? 'Played' : 'Paused'} media in ${appName || 'current app'}`,
+		};
+	}
+
+	async _executeEditorCommand(step, signal) {
+		throwIfAborted(signal);
+		const frontmost = await this.worldState.getFrontmostApp({ force: true });
+		const appName = frontmost.ok ? frontmost.name : step.appHint || '';
+		const key = step.key || 'cmd+s';
+		const result = await runHelper({ action: 'press_key', key });
+		if (result.ok === false) {
+			throw makeTaskError(result.result || `Could not run editor command ${step.action || key}`, 'editor_command_failed');
+		}
+		await wait(120, signal);
+		return {
+			ok: true,
+			tier: 'native',
+			domain: 'editor',
+			resolverId: resolverIdForStep(step, appName),
+			verificationMode: 'editor-shortcut',
+			successType: 'technical_success',
+			resolutionMethod: 'input',
+			result: `Ran editor command ${step.action || key} in ${appName || 'current app'}`,
+		};
 	}
 
 	async _executeNavigateHistory(step, signal) {
@@ -649,6 +814,11 @@ class UITaskService extends EventEmitter {
 
 		return {
 			ok: true,
+			tier: 'native',
+			domain: 'browser',
+			resolverId: resolverIdForStep(step, appName),
+			verificationMode: 'browser-history',
+			successType: 'true_success',
 			resolutionMethod: 'input',
 			result: `Went ${direction} in ${appName}`,
 			before: beforeInfo.href || '',
@@ -664,6 +834,11 @@ class UITaskService extends EventEmitter {
 				if (axMatch.ok && axMatch.count > 0) {
 					return {
 						ok: true,
+						tier: 'ax_dom',
+						domain: 'general',
+						resolverId: resolverIdForStep(step),
+						verificationMode: 'accessibility',
+						successType: 'true_success',
 						resolutionMethod: 'accessibility',
 						result: `Found "${step.selector.text}" after scrolling`,
 					};
@@ -696,8 +871,9 @@ class UITaskService extends EventEmitter {
 		throwIfAborted(signal);
 		if (step.checkpoint?.kind === 'app-switch' && step.appName) {
 			const frontmost = await this.worldState.getFrontmostApp({ force: true });
-			if (!frontmost.ok || frontmost.name !== step.appName) {
-				throw makeTaskError(`Expected ${step.appName} to be frontmost`, 'checkpoint_failed');
+			const expectedName = outcome?.resolvedAppName || step.appName;
+			if (!frontmost.ok || frontmost.name !== expectedName) {
+				throw makeTaskError(`Expected ${expectedName} to be frontmost`, 'checkpoint_failed');
 			}
 			return;
 		}
@@ -726,6 +902,14 @@ class UITaskService extends EventEmitter {
 				await this._verifySuccessSignal(plan, signal);
 			}
 			return;
+		}
+
+		if (step.type === 'editorCommand') {
+			const frontmost = await this.worldState.getFrontmostApp({ force: true });
+			const expectedApp = step.appHint || plan.appHint || '';
+			if (expectedApp && (!frontmost.ok || frontmost.name !== expectedApp)) {
+				throw makeTaskError(`Expected ${expectedApp} to remain frontmost for editor command`, 'checkpoint_failed');
+			}
 		}
 
 		if (step.checkpoint?.kind === 'final' && plan.successSignal) {

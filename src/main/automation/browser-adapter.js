@@ -306,6 +306,26 @@ function verifySignalScript(signal) {
 `.trim();
 }
 
+function mediaControlScript(action) {
+	return `
+(() => {
+  const wanted = ${JSON.stringify(String(action || 'pause').trim().toLowerCase())};
+  const media = Array.from(document.querySelectorAll('video,audio')).find((el) => {
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+  if (!media) return JSON.stringify({ ok: false, error: 'No visible media element found' });
+  if (wanted === 'pause') {
+    media.pause();
+  } else {
+    const playPromise = media.play?.();
+    if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
+  }
+  return JSON.stringify({ ok: true, paused: !!media.paused, currentTime: Number(media.currentTime || 0) });
+})();
+`.trim();
+}
+
 class BrowserAdapter {
 	isSupported(appName) {
 		return appName === 'Safari' || CHROMIUM_APPS.has(appName);
@@ -511,6 +531,31 @@ class BrowserAdapter {
 			location: pageInfo.href || '',
 			title: pageInfo.title || '',
 		};
+	}
+
+	controlMedia({ appName, action }) {
+		if (!this.isSupported(appName)) {
+			return { ok: false, code: 'unsupported_app', error: `Unsupported browser app: ${appName}` };
+		}
+		try {
+			const parsed = parseBrowserJson(runBrowserJavaScript(appName, mediaControlScript(action)));
+			if (parsed.ok) {
+				const pastTense = String(action || 'pause').toLowerCase() === 'pause' ? 'Paused' : 'Played';
+				return {
+					ok: true,
+					resolutionMethod: 'adapter',
+					result: `${pastTense} media in ${appName}`,
+					paused: Boolean(parsed.paused),
+				};
+			}
+			return {
+				ok: false,
+				code: 'media_control_failed',
+				error: parsed.error || `Could not ${action} media in ${appName}`,
+			};
+		} catch (err) {
+			return { ok: false, code: 'media_control_failed', error: err.message };
+		}
 	}
 }
 

@@ -214,6 +214,79 @@ async function testFalsePositiveLearnedSkillIsDemotedAndBypassed() {
 	assert.strictEqual(falsePositiveCalls.length, 1, 'false-positive learned skill should be demoted');
 }
 
+async function testMediaControlStepExecutesViaResolver() {
+	const service = new UITaskService();
+	service.worldState.getFrontmostApp = async () => ({ ok: true, name: 'Arc' });
+	service.browserAdapter.controlMedia = ({ appName, action }) => ({
+		ok: true,
+		result: `Paused media in ${appName}`,
+		action,
+	});
+
+	const result = await service._executeMediaControl({ type: 'mediaControl', action: 'pause', appHint: 'Arc' }, null);
+
+	assert.strictEqual(result.ok, true, 'media control should succeed');
+	assert.strictEqual(result.tier, 'native', 'media control should use native/app-specific tier first');
+	assert.strictEqual(result.resolverId, 'browser.media_control', 'media control should annotate resolver id');
+	assert.strictEqual(result.domain, 'media', 'media control should annotate media domain');
+}
+
+async function testFinderSelectionUsesNativeResolver() {
+	const service = new UITaskService();
+	service.worldState.getFrontmostApp = async () => ({ ok: true, name: 'Finder' });
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+
+	const filesModule = require('../src/main/tools/files');
+	const originalSelect = filesModule.finder_select_item;
+	filesModule.finder_select_item = async ({ name }) => ({ ok: true, result: `Selected Finder item "${name}"`, path: `/tmp/${name}` });
+
+	try {
+		const result = await service._executeClickByText({
+			type: 'selectItemByText',
+			appHint: 'Finder',
+			selector: { text: 'Documents', exact: false },
+		}, null);
+		assert.strictEqual(result.ok, true, 'finder selection should succeed');
+		assert.strictEqual(result.tier, 'native', 'finder selection should use native tier');
+		assert.strictEqual(result.domain, 'finder', 'finder selection should annotate finder domain');
+		assert.strictEqual(result.resolverId, 'finder.selection', 'finder selection should annotate finder resolver id');
+	} finally {
+		filesModule.finder_select_item = originalSelect;
+	}
+}
+
+async function testEditorCommandUsesEditorResolver() {
+	const service = new UITaskService();
+	service.worldState.getFrontmostApp = async () => ({ ok: true, name: 'Visual Studio Code' });
+	const result = await service._executeEditorCommand({
+		type: 'editorCommand',
+		action: 'save',
+		key: 'cmd+s',
+		appHint: 'Visual Studio Code',
+	}, null);
+	assert.strictEqual(result.ok, true, 'editor command should succeed');
+	assert.strictEqual(result.domain, 'editor', 'editor command should annotate editor domain');
+	assert.strictEqual(result.resolverId, 'editor.command', 'editor command should annotate editor command resolver id');
+}
+
+async function testOpenUrlAnnotatesResolverMetadata() {
+	const service = new UITaskService();
+	service.worldState.getFrontmostApp = async () => ({ ok: true, name: 'Arc' });
+	service.browserAdapter.openUrl = ({ appName, url }) => ({
+		ok: true,
+		result: `Opened ${url} in ${appName}`,
+		url,
+	});
+
+	const result = await service._executeOpenUrl({ type: 'openUrl', appHint: 'Arc', url: 'https://youtube.com' }, null);
+
+	assert.strictEqual(result.ok, true, 'openUrl should succeed');
+	assert.strictEqual(result.tier, 'native', 'openUrl should annotate native tier');
+	assert.strictEqual(result.domain, 'browser', 'openUrl should annotate browser domain');
+	assert.strictEqual(result.resolverId, 'browser.open_url', 'openUrl should annotate browser resolver id');
+}
+
 Promise.resolve()
 	.then(testRecentDuplicateDedupes)
 	.then(testInFlightDuplicateDedupes)
@@ -221,6 +294,10 @@ Promise.resolve()
 	.then(testBuiltinFallbackReplacesFailingLearnedSkill)
 	.then(testNativeEligibleFailureAuthorizesPointerFallback)
 	.then(testFalsePositiveLearnedSkillIsDemotedAndBypassed)
+	.then(testMediaControlStepExecutesViaResolver)
+	.then(testFinderSelectionUsesNativeResolver)
+	.then(testEditorCommandUsesEditorResolver)
+	.then(testOpenUrlAnnotatesResolverMetadata)
 	.then(() => {
 		console.log('UI task service tests passed.');
 	})

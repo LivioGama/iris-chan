@@ -17,6 +17,11 @@ function inferGoalCapabilities(goal = '') {
 	if (/\bback\b/.test(text)) caps.add('back');
 	if (/\bforward\b/.test(text)) caps.add('forward');
 	if (/\bscroll\b/.test(text)) caps.add('scroll');
+	if (/\bsave\b/.test(text)) caps.add('save');
+	if (/\bundo\b/.test(text)) caps.add('undo');
+	if (/\bredo\b/.test(text)) caps.add('redo');
+	if (/\bfind\b|\bsearch in file\b/.test(text)) caps.add('find');
+	if (/\bnew file\b/.test(text)) caps.add('newfile');
 	return caps;
 }
 
@@ -51,6 +56,13 @@ function inferPlanCapabilities(plan = {}) {
 			case 'scrollUntilVisible':
 				caps.add('scroll');
 				break;
+			case 'editorCommand':
+				if (step.action === 'save') caps.add('save');
+				if (step.action === 'undo') caps.add('undo');
+				if (step.action === 'redo') caps.add('redo');
+				if (step.action === 'find') caps.add('find');
+				if (step.action === 'newFile') caps.add('newfile');
+				break;
 			default:
 				break;
 		}
@@ -72,8 +84,9 @@ function inferDomain(text = '') {
 	const normalized = normalizeText(text);
 	if (/\bbrowser\b|\byoutube\b|\barc\b|\bsafari\b|\bchrome\b|\bedge\b/.test(normalized)) return 'browser';
 	if (/\bfinder\b|\bfile\b|\bfolder\b|\bdesktop\b|\bdownloads\b/.test(normalized)) return 'finder';
+	if (/\bvisual studio code\b|\bcode\b|\bcursor\b|\bzed\b|\bsublime text\b|\bnova\b|\btextedit\b|\btext edit\b|\beditor\b/.test(normalized)) return 'editor';
 	if (/\bvideo\b|\bmusic\b|\bpause\b|\bplay\b/.test(normalized)) return 'media';
-	if (/\bdefault\b|\bsettings\b|\bsystem\b/.test(normalized)) return 'system';
+	if (/\bdefault\b|\bsettings\b|\bsystem\b|\bactivity monitor\b|\bconsole\b|\bdisk utility\b|\bsystem information\b/.test(normalized)) return 'system';
 	return 'general';
 }
 
