@@ -19,8 +19,11 @@ const SCREEN_REFRESH_TOOLS = new Set([
 	'window_manage',
 	'activate_app',
 ]);
+const POINTER_TOOLS = new Set(['click_at', 'double_click', 'mouse_move', 'drag']);
 const FOREGROUND_UI_STABILIZE_MS = 350;
 const SAME_TURN_UI_TASK_MESSAGE = 'Ignored repeated UI task in the same spoken turn';
+const SAME_TURN_POINTER_RETRY_MESSAGE = 'Ignored repeated pointer retries in the same spoken turn';
+const MAX_POINTER_ONLY_BATCHES_PER_SPEECH = 2;
 
 function isSearchTool(name, args) {
 	if (name === 'web_search' || name === 'ask_chatgpt' || name === 'research') return true;
@@ -67,6 +70,7 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 	let pendingUiFlushTimer = null;
 	let speechGeneration = 0;
 	let lastUiTaskSpeechGeneration = null;
+	let pointerOnlyBatchesThisSpeech = 0;
 	let toolCallChain = Promise.resolve();
 
 	function updateToolPresence(name, args, index, total) {
@@ -106,20 +110,40 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		gemini.sendToolResponse(call.id, call.name, message);
 	}
 
-	const _executeOne = async (name, args, id, index, total) => {
-		activeToolCount++;
-		updateToolPresence(name, args, index, total);
-		showToolStart(name, args, index, total);
-		logInfo('Tool', `Executing: ${name}(${JSON.stringify(args || {})})`.slice(0, 500));
+	function rejectPointerRetryBatch(calls, message = SAME_TURN_POINTER_RETRY_MESSAGE) {
+		logInfo('Tool', `Suppressing repeated pointer retry batch for speech turn ${speechGeneration}`);
+		for (const call of calls) {
+			gemini.sendToolResponse(call.id, call.name, message);
+		}
+	}
 
-		const isSearch = isSearchTool(name, args);
+	function attachPointerCaptureId(name, args) {
+		if (!POINTER_TOOLS.has(name)) return args || {};
+		const existingCaptureId = String(args?.capture_id || '').trim();
+		if (existingCaptureId) return args || {};
+		const fallbackCaptureId = String(screen?.lastInteractiveCaptureId || screen?.lastCaptureId || '').trim();
+		if (!fallbackCaptureId) return args || {};
+		return {
+			...(args || {}),
+			capture_id: fallbackCaptureId,
+		};
+	}
+
+	const _executeOne = async (name, args, id, index, total) => {
+		const toolArgs = attachPointerCaptureId(name, args);
+		activeToolCount++;
+		updateToolPresence(name, toolArgs, index, total);
+		showToolStart(name, toolArgs, index, total);
+		logInfo('Tool', `Executing: ${name}(${JSON.stringify(toolArgs || {})})`.slice(0, 500));
+
+		const isSearch = isSearchTool(name, toolArgs);
 		if (isSearch) {
-			window.electronAPI.searchSpinner(searchLabel(name, args));
+			window.electronAPI.searchSpinner(searchLabel(name, toolArgs));
 		}
 
 		const toolStart = Date.now();
 		try {
-			const result = await window.electronAPI.executeTool(name, args);
+			const result = await window.electronAPI.executeTool(name, toolArgs);
 			const toolResponseText = formatToolResponseText(result);
 			if (screen && shouldRefreshScreenAfterTool(name, result)) {
 				await screen.capture({ passive: false, force: true });
@@ -128,18 +152,18 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 			updateIfWorkspaceTool(name);
 			logInfo('Tool', `Result: ${name} → ${result.ok !== false ? 'OK' : 'FAIL'}: ${toolResponseText.slice(0, 300)}`);
 			gemini.sendToolResponse(id, name, toolResponseText);
-			window.electronAPI.saveToolExecution(name, args, toolResponseText, result.ok !== false, Date.now() - toolStart);
+			window.electronAPI.saveToolExecution(name, toolArgs, toolResponseText, result.ok !== false, Date.now() - toolStart);
 
 			if (isSearch) {
-				window.electronAPI.searchResult(searchLabel(name, args), result.ok ? toolResponseText : toolResponseText);
+				window.electronAPI.searchResult(searchLabel(name, toolArgs), result.ok ? toolResponseText : toolResponseText);
 			}
 		} catch (err) {
 			showToolDone(name, index, false);
 			logError('Tool', `Error: ${name} → ${err.message}`);
 			gemini.sendToolResponse(id, name, 'Error: ' + err.message);
-			window.electronAPI.saveToolExecution(name, args, err.message, false, Date.now() - toolStart);
+			window.electronAPI.saveToolExecution(name, toolArgs, err.message, false, Date.now() - toolStart);
 			if (isSearch) {
-				window.electronAPI.searchResult(searchLabel(name, args), 'Error: ' + err.message);
+				window.electronAPI.searchResult(searchLabel(name, toolArgs), 'Error: ' + err.message);
 			}
 		} finally {
 			activeToolCount = Math.max(0, activeToolCount - 1);
@@ -221,6 +245,15 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 			return;
 		}
 
+		const pointerOnlyBatch = executableCalls.every((call) => POINTER_TOOLS.has(call.name));
+		if (pointerOnlyBatch && pointerOnlyBatchesThisSpeech >= MAX_POINTER_ONLY_BATCHES_PER_SPEECH) {
+			rejectPointerRetryBatch(executableCalls);
+			return;
+		}
+		if (pointerOnlyBatch) {
+			pointerOnlyBatchesThisSpeech += 1;
+		}
+
 		// Split calls into background (fire-and-forget) and blocking (synchronous) groups
 		const bgCalls = [];
 		const blockingCalls = [];
@@ -288,6 +321,7 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		if (userSpeaking) {
 			speechGeneration += 1;
 			lastUiTaskSpeechGeneration = null;
+			pointerOnlyBatchesThisSpeech = 0;
 			supersedePendingUiCall('Deferred UI task cancelled because the user kept speaking');
 			return;
 		}

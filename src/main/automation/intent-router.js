@@ -49,7 +49,21 @@ function cleanupTargetText(text = '') {
 	return collapseWhitespace(
 		String(text || '')
 			.replace(/^(?:the|to)\s+/i, '')
-			.replace(/\b(?:tab|button|link|page|item|entry|folder|file)\b$/i, '')
+			.replace(/\s+(?:on|in)\s+the\s+current\s+.+$/i, '')
+			.replace(/\s+(?:on|in)\s+this\s+.+$/i, '')
+			.replace(/\s+from\s+the\s+search\s+result(?:s)?$/i, '')
+			.replace(/\b(?:tab|button|link|page|item|entry|folder|file|channel|profile)\b$/i, '')
+	);
+}
+
+function normalizeSearchQuery(text = '') {
+	return collapseWhitespace(
+		String(text || '')
+			.replace(/^(?:on|in)\s+youtube\s+/i, '')
+			.replace(/^youtube\s+(?:channel|channels|video|videos|short|shorts)\s+/i, '')
+			.replace(/^youtube\s+(?:search\s+)?(?:for\s+)?/i, '')
+			.replace(/^for\s+/i, '')
+			.replace(/\s+(?:on|in)\s+youtube$/i, '')
 	);
 }
 
@@ -69,7 +83,7 @@ function parseTypeClause(clause, appHint) {
 function parseSearchClause(clause, appHint) {
 	const searchMatch = clause.match(/^(?:search(?:\s+for)?|find)\s+["“]?(.+?)["”]?$/i);
 	if (!searchMatch) return null;
-	const query = collapseWhitespace(searchMatch[1]);
+	const query = normalizeSearchQuery(searchMatch[1]);
 	if (!query) return null;
 	return {
 		type: 'searchInCurrentContext',
@@ -226,6 +240,7 @@ module.exports = {
 	parseHistoryNavigationClause,
 	parseSearchClause,
 	parseSearchResultClause,
+	normalizeSearchQuery,
 	routeGoal,
 	splitClauses,
 };

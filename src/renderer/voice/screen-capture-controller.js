@@ -10,6 +10,8 @@ export function createScreenCaptureController({ gemini }) {
 	let autonomousMode = false;
 	let lastCaptureAt = 0;
 	let inFlightCapture = null;
+	let lastCaptureId = '';
+	let lastInteractiveCaptureId = '';
 
 	const sendFrame = async ({ passive = false, force = false } = {}) => {
 		const now = Date.now();
@@ -23,10 +25,14 @@ export function createScreenCaptureController({ gemini }) {
 			try {
 				const capture = await window.electronAPI.captureScreen();
 				if (capture?.ok && capture.data) {
+					if (capture.context?.captureId) {
+						lastCaptureId = capture.context.captureId;
+						if (!passive) lastInteractiveCaptureId = capture.context.captureId;
+					}
 					if (!passive && capture.context) {
 						const ctx = capture.context;
 						gemini.sendRealtimeText(
-							`[SCREEN CONTEXT] Image: ${ctx.imageWidth}x${ctx.imageHeight}px, Display: ${ctx.displayWidth}x${ctx.displayHeight}, Scale: ${ctx.scaleFactor}x, Cursor: (${ctx.cursorX}, ${ctx.cursorY}). IMPORTANT: Use the IMAGE pixel coordinates (from ${ctx.imageWidth}x${ctx.imageHeight} image) directly for mouse_move, click_at, and drag. The image shows exactly what is at each pixel location.`
+							`[SCREEN CONTEXT] Capture ID: ${ctx.captureId}. Image: ${ctx.imageWidth}x${ctx.imageHeight}px, Display: ${ctx.displayWidth}x${ctx.displayHeight}, Scale: ${ctx.scaleFactor}x, Cursor: (${ctx.cursorX}, ${ctx.cursorY}). IMPORTANT: Use the IMAGE pixel coordinates (from ${ctx.imageWidth}x${ctx.imageHeight} image) directly for mouse_move, click_at, double_click, and drag, and pass capture_id="${ctx.captureId}" with those pointer tools. Never reuse coordinates across different captures.`
 						);
 					}
 					gemini.sendImage(capture.data);
@@ -74,6 +80,8 @@ export function createScreenCaptureController({ gemini }) {
 		},
 		get isRunning() { return interval !== null; },
 		get lastCaptureAt() { return lastCaptureAt; },
+		get lastCaptureId() { return lastCaptureId; },
+		get lastInteractiveCaptureId() { return lastInteractiveCaptureId || lastCaptureId; },
 		setLastUserSpeechTime(t) { lastUserSpeechTime = t; },
 		setIdleGateClosed(closed) { idleGateClosed = closed; },
 		setAutonomousMode(mode) { autonomousMode = mode; },

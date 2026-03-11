@@ -70,11 +70,10 @@ export const getByProject = query({
   },
   handler: async (ctx, args) => {
     if (args.status) {
+      const { projectPath, status } = args;
       return await ctx.db
         .query("task_queue")
-        .withIndex("by_project", (q) =>
-          q.eq("projectPath", args.projectPath).eq("status", args.status)
-        )
+        .withIndex("by_project", (q) => q.eq("projectPath", projectPath).eq("status", status))
         .order("asc")
         .collect();
     }

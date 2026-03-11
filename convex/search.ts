@@ -9,12 +9,14 @@ export const semanticSearch = action({
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 5;
-    const filter = args.roleFilter ? { role: args.roleFilter } : {};
+    const { roleFilter } = args;
 
     const results = await ctx.vectorSearch("conversations", "by_embedding", {
       vector: args.embedding,
       limit,
-      filter,
+      filter: roleFilter
+        ? (q) => q.eq("role", roleFilter)
+        : undefined,
     });
 
     return results;

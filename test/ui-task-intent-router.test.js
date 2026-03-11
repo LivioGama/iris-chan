@@ -1,6 +1,6 @@
 const assert = require('node:assert');
 
-const { routeGoal } = require('../src/main/automation/intent-router');
+const { normalizeSearchQuery, routeGoal } = require('../src/main/automation/intent-router');
 const { createExecutionPlan } = require('../src/main/automation/planner');
 
 console.log('Running UI task intent router tests...');
@@ -47,6 +47,18 @@ assert.strictEqual(
 	'router should preserve the search query'
 );
 
+assert.strictEqual(
+	normalizeSearchQuery('YouTube for TheoGG'),
+	'TheoGG',
+	'search normalization should drop YouTube context prefixes from the actual query'
+);
+
+assert.strictEqual(
+	normalizeSearchQuery('YouTube channel Theo.gg'),
+	'Theo.gg',
+	'search normalization should keep the channel name and drop YouTube/channel boilerplate'
+);
+
 const browserBackPlan = routeGoal('go back in browser history', 'Safari');
 assert.deepStrictEqual(
 	browserBackPlan.steps.map((step) => step.type),
@@ -69,6 +81,37 @@ assert.strictEqual(
 	clickChannelPlan.steps[1].resultKind,
 	'channel',
 	'router should mark the first-result click as a channel action'
+);
+
+const youtubeSearchPlan = routeGoal('search YouTube for TheoGG');
+assert.deepStrictEqual(
+	youtubeSearchPlan.steps.map((step) => step.type),
+	['searchInCurrentContext'],
+	'router should keep YouTube searches semantic instead of embedding page-context words in the query'
+);
+assert.strictEqual(
+	youtubeSearchPlan.steps[0].query,
+	'TheoGG',
+	'router should extract the actual YouTube search query'
+);
+
+const youtubeChannelSearchPlan = routeGoal('find YouTube channel Theo.gg');
+assert.strictEqual(
+	youtubeChannelSearchPlan.steps[0].query,
+	'Theo.gg',
+	'router should extract the channel name from YouTube channel search phrasing'
+);
+
+const videosTabPlan = routeGoal('go to the Videos tab on the current YouTube channel');
+assert.deepStrictEqual(
+	videosTabPlan.steps.map((step) => step.type),
+	['clickElement'],
+	'router should keep channel-tab navigation semantic'
+);
+assert.strictEqual(
+	videosTabPlan.steps[0].selector.text,
+	'Videos',
+	'router should strip current-page context from tab clicks and preserve the actual tab label'
 );
 
 const executionPlan = createExecutionPlan({

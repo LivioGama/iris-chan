@@ -40,23 +40,23 @@ export const toolDeclarations = [
 	},
 	{
 		name: 'click_at',
-		description: 'Click at image pixel coordinates from the screenshot. Use button "right" for right-click, default is left-click. x and y are pixel positions in the screenshot image.',
-		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, button: { type: 'STRING' } }, required: ['x', 'y'] },
+		description: 'Click at image pixel coordinates from a specific screenshot. Use button "right" for right-click, default is left-click. x and y are pixel positions in the screenshot image. Always pass the capture_id from the latest [SCREEN CONTEXT] message.',
+		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, button: { type: 'STRING' }, capture_id: { type: 'STRING', description: 'The capture ID from the [SCREEN CONTEXT] message that supplied these coordinates.' } }, required: ['x', 'y'] },
 	},
 	{
 		name: 'double_click',
-		description: 'Double-click at image pixel coordinates from the screenshot (e.g. to select a word or open a file).',
-		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' } }, required: ['x', 'y'] },
+		description: 'Double-click at image pixel coordinates from a specific screenshot (e.g. to select a word or open a file). Always pass the capture_id from the latest [SCREEN CONTEXT] message.',
+		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, capture_id: { type: 'STRING', description: 'The capture ID from the [SCREEN CONTEXT] message that supplied these coordinates.' } }, required: ['x', 'y'] },
 	},
 	{
 		name: 'mouse_move',
-		description: 'Move the mouse cursor to image pixel coordinates from the screenshot, without clicking.',
-		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' } }, required: ['x', 'y'] },
+		description: 'Move the mouse cursor to image pixel coordinates from a specific screenshot, without clicking. Always pass the capture_id from the latest [SCREEN CONTEXT] message.',
+		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, capture_id: { type: 'STRING', description: 'The capture ID from the [SCREEN CONTEXT] message that supplied these coordinates.' } }, required: ['x', 'y'] },
 	},
 	{
 		name: 'drag',
-		description: 'Drag from one point to another using image pixel coordinates from the screenshot (e.g. to move a window, select text, or drag files).',
-		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, x2: { type: 'NUMBER' }, y2: { type: 'NUMBER' } }, required: ['x', 'y', 'x2', 'y2'] },
+		description: 'Drag from one point to another using image pixel coordinates from a specific screenshot (e.g. to move a window, select text, or drag files). Always pass the capture_id from the latest [SCREEN CONTEXT] message.',
+		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, x2: { type: 'NUMBER' }, y2: { type: 'NUMBER' }, capture_id: { type: 'STRING', description: 'The capture ID from the [SCREEN CONTEXT] message that supplied these coordinates.' } }, required: ['x', 'y', 'x2', 'y2'] },
 	},
 	{
 		name: 'get_mouse_position',

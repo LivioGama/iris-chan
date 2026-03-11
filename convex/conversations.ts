@@ -108,9 +108,8 @@ export const getSessionTurns = query({
   handler: async (ctx, args) => {
     return await ctx.db
       .query("conversations")
-      .withIndex("by_session", (q) =>
-        q.eq("sessionId", args.sessionId).sortByTimestamp("asc")
-      )
+      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+      .order("asc")
       .collect();
   },
 });

@@ -17,6 +17,7 @@ export default defineSchema({
     .vectorIndex("by_embedding", {
       vectorField: "embedding",
       dimensions: 1024,
+      filterFields: ["role"],
     }),
 
   tool_executions: defineTable({

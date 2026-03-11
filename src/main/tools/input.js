@@ -5,8 +5,9 @@ const { isCaptureUsable, formatCaptureBlockReason } = require('../screen-capture
 
 // Convert image-pixel coordinates (from Gemini) → logical screen coordinates (for CGEvent).
 // Image (0,0) = top-left of the captured display, which lives at (offsetX, offsetY) in global screen space.
-function toScreen(imgX, imgY) {
-	const m = getMapping();
+function toScreen(imgX, imgY, captureId = '') {
+	const m = getMapping(captureId);
+	if (!m) return null;
 	return {
 		x: Math.round(imgX * m.scaleX + (m.offsetX || 0)),
 		y: Math.round(imgY * m.scaleY + (m.offsetY || 0)),
@@ -14,20 +15,44 @@ function toScreen(imgX, imgY) {
 }
 
 // Inverse: convert logical screen coordinates (CGEvent) → image-pixel coordinates.
-function fromScreen(screenX, screenY) {
-	const m = getMapping();
+function fromScreen(screenX, screenY, captureId = '') {
+	const m = getMapping(captureId) || getMapping();
+	if (!m) {
+		return {
+			x: Math.round(screenX),
+			y: Math.round(screenY),
+		};
+	}
 	return {
 		x: Math.round((screenX - (m.offsetX || 0)) / m.scaleX),
 		y: Math.round((screenY - (m.offsetY || 0)) / m.scaleY),
 	};
 }
 
-function requireFreshCapture(actionLabel) {
-	const health = getCaptureHealth();
+function requireFreshCapture(actionLabel, captureId = '') {
+	const health = getCaptureHealth(captureId);
 	if (!isCaptureUsable(health)) {
 		return { ok: false, result: formatCaptureBlockReason(actionLabel, health) };
 	}
 	return null;
+}
+
+function resolvePointerTarget(args, actionLabel) {
+	const captureId = String(args?.capture_id || '').trim();
+	const blocked = requireFreshCapture(actionLabel, captureId);
+	if (blocked) return blocked;
+	const point = toScreen(parseFloat(args?.x || 0), parseFloat(args?.y || 0), captureId);
+	if (!point) {
+		return {
+			ok: false,
+			result: `Cannot ${actionLabel} because capture_id "${captureId}" is no longer available.`,
+		};
+	}
+	return {
+		ok: true,
+		point,
+		captureId,
+	};
 }
 
 async function type_text(args) {
@@ -39,23 +64,21 @@ async function press_key(args) {
 }
 
 async function click_at(args) {
-	const blocked = requireFreshCapture('click');
-	if (blocked) return blocked;
-	const { x, y } = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
-	return runHelper({ action: 'click_at', x, y, button: args.button || 'left' });
+	const resolved = resolvePointerTarget(args, 'click');
+	if (!resolved.ok) return resolved;
+	return runHelper({ action: 'click_at', x: resolved.point.x, y: resolved.point.y, button: args.button || 'left' });
 }
 
 async function double_click(args) {
-	const blocked = requireFreshCapture('double-click');
-	if (blocked) return blocked;
-	const { x, y } = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
-	return runHelper({ action: 'double_click', x, y });
+	const resolved = resolvePointerTarget(args, 'double-click');
+	if (!resolved.ok) return resolved;
+	return runHelper({ action: 'double_click', x: resolved.point.x, y: resolved.point.y });
 }
 
 async function mouse_move(args) {
-	const blocked = requireFreshCapture('move the mouse');
-	if (blocked) return blocked;
-	const { x, y } = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
+	const resolved = resolvePointerTarget(args, 'move the mouse');
+	if (!resolved.ok) return resolved;
+	const { x, y } = resolved.point;
 	const result = await runHelper({ action: 'mouse_move', x, y });
 	if (!result.ok && result.result?.includes('off by')) {
 		await new Promise(r => setTimeout(r, 50));
@@ -65,10 +88,17 @@ async function mouse_move(args) {
 }
 
 async function drag(args) {
-	const blocked = requireFreshCapture('drag');
+	const captureId = String(args?.capture_id || '').trim();
+	const blocked = requireFreshCapture('drag', captureId);
 	if (blocked) return blocked;
-	const from = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0));
-	const to = toScreen(parseFloat(args.x2 || 0), parseFloat(args.y2 || 0));
+	const from = toScreen(parseFloat(args.x || 0), parseFloat(args.y || 0), captureId);
+	const to = toScreen(parseFloat(args.x2 || 0), parseFloat(args.y2 || 0), captureId);
+	if (!from || !to) {
+		return {
+			ok: false,
+			result: `Cannot drag because capture_id "${captureId}" is no longer available.`,
+		};
+	}
 	return runHelper({ action: 'drag', x: from.x, y: from.y, x2: to.x, y2: to.y });
 }
 

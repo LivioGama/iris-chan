@@ -244,10 +244,97 @@ async function testSameTurnUiTaskExecutesOnlyOnce() {
 	global.window = originalWindow;
 }
 
+async function testPointerToolsUseLatestInteractiveCaptureId() {
+	const originalWindow = global.window;
+	const executed = [];
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				executed.push({ name, args });
+				return { ok: true, result: `Executed ${name}` };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse() {},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: {
+			capture: async () => {},
+			lastCaptureId: 'cap_passive',
+			lastInteractiveCaptureId: 'cap_active',
+		},
+	});
+
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 10, y: 20 }, id: 'call-1' }]);
+
+	assert.strictEqual(executed.length, 1, 'pointer tool should execute once');
+	assert.strictEqual(executed[0].args.capture_id, 'cap_active', 'pointer tool should inherit the latest interactive capture id');
+
+	global.window = originalWindow;
+}
+
+async function testPointerRetryBudgetSuppressesClickCycling() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				executed.push({ name, args });
+				return { ok: true, result: `Executed ${name}` };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: {
+			capture: async () => {},
+			lastInteractiveCaptureId: 'cap_active',
+		},
+	});
+
+	handler.setUserSpeechActive(true);
+	handler.setUserSpeechActive(false);
+
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 10, y: 20 }, id: 'call-1' }]);
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 12, y: 22 }, id: 'call-2' }]);
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 14, y: 24 }, id: 'call-3' }]);
+
+	assert.strictEqual(executed.length, 2, 'pointer retries should stop after the same-turn budget is exhausted');
+	assert.strictEqual(
+		responses.some((entry) => entry.id === 'call-3' && /ignored repeated pointer retries/i.test(entry.result)),
+		true,
+		'third same-turn pointer retry should be suppressed'
+	);
+
+	handler.setUserSpeechActive(true);
+	handler.setUserSpeechActive(false);
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 16, y: 26 }, id: 'call-4' }]);
+
+	assert.strictEqual(executed.length, 3, 'a new spoken turn should reset the pointer retry budget');
+
+	global.window = originalWindow;
+}
+
 Promise.resolve()
 	.then(testDeferredUiTaskFlushesOnce)
 	.then(testDeferredUiTaskSupersedesOlderTranscript)
 	.then(testSameTurnUiTaskExecutesOnlyOnce)
+	.then(testPointerToolsUseLatestInteractiveCaptureId)
+	.then(testPointerRetryBudgetSuppressesClickCycling)
 	.then(() => {
 		console.log('Tool call handler tests passed.');
 	})

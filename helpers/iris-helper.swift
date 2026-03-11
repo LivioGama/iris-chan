@@ -313,6 +313,44 @@ func elementArrayAttribute(_ element: AXUIElement, _ attribute: String) -> [AXUI
 	copyAttribute(element, attribute) as? [AXUIElement] ?? []
 }
 
+func pointAttribute(_ element: AXUIElement, _ attribute: String) -> CGPoint? {
+	guard let value = copyAttribute(element, attribute) else { return nil }
+	guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+	let axValue = unsafeBitCast(value, to: AXValue.self)
+	guard AXValueGetType(axValue) == .cgPoint else { return nil }
+	var point = CGPoint.zero
+	return AXValueGetValue(axValue, .cgPoint, &point) ? point : nil
+}
+
+func sizeAttribute(_ element: AXUIElement, _ attribute: String) -> CGSize? {
+	guard let value = copyAttribute(element, attribute) else { return nil }
+	guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+	let axValue = unsafeBitCast(value, to: AXValue.self)
+	guard AXValueGetType(axValue) == .cgSize else { return nil }
+	var size = CGSize.zero
+	return AXValueGetValue(axValue, .cgSize, &size) ? size : nil
+}
+
+func parentElement(of element: AXUIElement) -> AXUIElement? {
+	uiElementAttribute(element, kAXParentAttribute as String)
+}
+
+func elementFrame(_ element: AXUIElement) -> CGRect? {
+	guard let origin = pointAttribute(element, kAXPositionAttribute as String),
+		  let size = sizeAttribute(element, kAXSizeAttribute as String),
+		  size.width > 0,
+		  size.height > 0 else {
+		return nil
+	}
+	return CGRect(origin: origin, size: size)
+}
+
+func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+	let dx = a.x - b.x
+	let dy = a.y - b.y
+	return sqrt(dx * dx + dy * dy)
+}
+
 func actionNames(_ element: AXUIElement) -> [String] {
 	var names: CFArray?
 	let error = AXUIElementCopyActionNames(element, &names)
@@ -325,6 +363,18 @@ func actionNames(_ element: AXUIElement) -> [String] {
 func canPerformPress(_ element: AXUIElement) -> Bool {
 	let names = actionNames(element)
 	return names.contains(kAXPressAction as String) || names.contains(kAXConfirmAction as String)
+}
+
+func isActionableRole(_ element: AXUIElement) -> Bool {
+	let role = normalizedText(elementRole(element))
+	let subrole = normalizedText(elementSubrole(element))
+	return role.contains("button")
+		|| role.contains("link")
+		|| role.contains("tab")
+		|| role.contains("menu item")
+		|| role.contains("radio button")
+		|| role.contains("check box")
+		|| subrole.contains("tab")
 }
 
 func performPress(_ element: AXUIElement) -> Bool {
@@ -547,6 +597,100 @@ func resolveActionTarget(for candidate: AXCandidate) -> AXUIElement {
 	return candidate.element
 }
 
+func resolvePointActionTarget(_ element: AXUIElement?) -> AXUIElement? {
+	var current = element
+	for _ in 0..<8 {
+		guard let element = current else { return nil }
+		if canPerformPress(element) || isActionableRole(element) {
+			return element
+		}
+		current = parentElement(of: element)
+	}
+	return nil
+}
+
+func labelForElement(_ element: AXUIElement) -> String {
+	for candidate in searchableTexts(for: element) {
+		let label = collapseWhitespace(candidate)
+		if !label.isEmpty {
+			return label
+		}
+	}
+	return collapseWhitespace("\(elementRole(element)) \(elementSubrole(element))")
+}
+
+func collapseWhitespace(_ value: String) -> String {
+	value.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+		.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+struct AXPointActionTarget {
+	let element: AXUIElement
+	let label: String
+	let center: CGPoint?
+	let sample: CGPoint
+	let distance: CGFloat
+}
+
+func actionableElement(near point: CGPoint, radius: CGFloat = 10) -> AXPointActionTarget? {
+	let systemWide = AXUIElementCreateSystemWide()
+	let offsets: [CGPoint] = [
+		.zero,
+		CGPoint(x: 0, y: -4),
+		CGPoint(x: 0, y: 4),
+		CGPoint(x: -4, y: 0),
+		CGPoint(x: 4, y: 0),
+		CGPoint(x: -8, y: -8),
+		CGPoint(x: 8, y: -8),
+		CGPoint(x: -8, y: 8),
+		CGPoint(x: 8, y: 8),
+		CGPoint(x: 0, y: -radius),
+		CGPoint(x: 0, y: radius),
+		CGPoint(x: -radius, y: 0),
+		CGPoint(x: radius, y: 0),
+	]
+	var best: AXPointActionTarget?
+	var seen = Set<Int>()
+
+	for offset in offsets {
+		let sample = CGPoint(x: point.x + offset.x, y: point.y + offset.y)
+		var rawElement: AXUIElement?
+		let error = AXUIElementCopyElementAtPosition(systemWide, Float(sample.x), Float(sample.y), &rawElement)
+		if error != .success {
+			continue
+		}
+		guard let target = resolvePointActionTarget(rawElement) else {
+			continue
+		}
+		let identifier = Int(bitPattern: Unmanaged.passUnretained(target).toOpaque())
+		if seen.contains(identifier) {
+			continue
+		}
+		seen.insert(identifier)
+
+		let frame = elementFrame(target)
+		let center = frame.map { CGPoint(x: $0.midX, y: $0.midY) }
+		let elementDistance = center.map { distance(point, $0) } ?? distance(point, sample)
+		if elementDistance > max(radius * 2.5, 30) {
+			continue
+		}
+
+		let candidate = AXPointActionTarget(
+			element: target,
+			label: labelForElement(target),
+			center: center,
+			sample: sample,
+			distance: elementDistance
+		)
+		if let bestCandidate = best, bestCandidate.distance <= candidate.distance {
+			continue
+		}
+		best = candidate
+	}
+
+	return best
+}
+
 func resolveValueTarget(for candidate: AXCandidate?) -> AXUIElement? {
 	if let candidate, isSettableValue(candidate.element) {
 		return candidate.element
@@ -687,9 +831,23 @@ case "click_at":
 		respond(false, "Missing x or y coordinates")
 	}
 	requireAccessibility("mouse input")
-	let point = CGPoint(x: x, y: y)
+	let requestedPoint = CGPoint(x: x, y: y)
 	let src = CGEventSource(stateID: .hidSystemState)
 	let isRight = cmd.button?.lowercased() == "right"
+	var point = requestedPoint
+	var snapLabel = ""
+
+	if !isRight, let target = actionableElement(near: requestedPoint) {
+		_ = setFocused(target.element)
+		if performPress(target.element) {
+			let targetLabel = target.label.isEmpty ? elementRole(target.element) : target.label
+			respond(true, "Clicked accessibility target \"\(targetLabel)\" near \(describe(point: requestedPoint))")
+		}
+		if let center = target.center {
+			point = center
+			snapLabel = target.label
+		}
+	}
 
 	let preMove = CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!
 	markSynthetic(preMove)
@@ -716,7 +874,10 @@ case "click_at":
 	}
 	usleep(20_000)
 	let clickLabel = isRight ? "Right-clicked" : "Clicked"
-	respond(true, "\(clickLabel) at \(describe(point: point)) — cursor verified at \(describe(point: movedActual))")
+	let snapSuffix = (!snapLabel.isEmpty && point != requestedPoint)
+		? " — snapped from \(describe(point: requestedPoint)) onto \"\(snapLabel)\""
+		: ""
+	respond(true, "\(clickLabel) at \(describe(point: point)) — cursor verified at \(describe(point: movedActual))\(snapSuffix)")
 
 case "double_click":
 	guard let x = cmd.x, let y = cmd.y else {
