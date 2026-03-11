@@ -24,6 +24,14 @@ export interface Config {
 		replyCooldownMs: number;
 		speechReleaseMs: number;
 		echoSuppressionGain: number;
+		recentSeen: {
+			ttlMs: number;
+			maxTerms: number;
+			extractIntervalMs: number;
+			minConfidence: number;
+			rewriteDistance: number;
+			persistEnabled: boolean;
+		};
 		listeningGate: {
 			minSpeechMs: number;
 			candidateGapMs: number;
@@ -115,6 +123,14 @@ const config: Config = {
 		replyCooldownMs: 45000,
 		speechReleaseMs: 160,
 		echoSuppressionGain: 0.8,
+		recentSeen: {
+			ttlMs: 30000,
+			maxTerms: 24,
+			extractIntervalMs: 10000,
+			minConfidence: 0.6,
+			rewriteDistance: 3,
+			persistEnabled: true,
+		},
 		listeningGate: {
 			minSpeechMs: 180,
 			candidateGapMs: 90,

@@ -208,6 +208,9 @@ function createVoiceHarness(VoiceEngine) {
 		noteIdleResponseSent() {},
 		resetIdleGate() {},
 		setMode() {},
+		sanitize(text) { return text; },
+		canSpeakProactively() { return true; },
+		noteAssistantSpoke() {},
 	};
 	const screen = {
 		captureCount: 0,
@@ -292,6 +295,21 @@ console.log('Running autonomous loop timer tests...');
 
 			voice._stopAutonomousLoop();
 			assert.strictEqual(timers.activeCount(), 0, 'stopping after a sent prompt should clear the re-armed timer');
+		}
+
+		{
+			const { voice, gemini } = createVoiceHarness(VoiceEngine);
+			voice._active = true;
+			voice.state = 'LISTENING';
+			voice.gemini.sessionReady = true;
+
+			const sent = voice.speakProactiveSuggestion('Review the visible error before editing another file.', { kind: 'warning' });
+
+			assert.strictEqual(sent, true, 'proactive suggestion should be accepted while listening');
+			assert.strictEqual(voice._proactiveResponseExpected, true, 'proactive turn should mark response expected');
+			assert.strictEqual(voice._shouldAcceptModelToolCalls(), false, 'proactive turns should block tool calls');
+			assert.strictEqual(gemini.sentTexts.length, 1, 'proactive turn should send exactly one text prompt');
+			assert.match(gemini.sentTexts[0], /\[PROACTIVE SUGGESTION\]/, 'proactive prompt should use the dedicated system message');
 		}
 
 		{

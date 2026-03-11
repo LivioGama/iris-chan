@@ -56,6 +56,12 @@ export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 		return;
 	}
 
+	if (evt.type === 'PROACTIVE_SUGGESTION') {
+		const kind = evt.payload?.kind ? `${evt.payload.kind}: ` : '';
+		showBubble('context', `${kind}${evt.payload?.suggestion || 'Suggested next step.'}`);
+		return;
+	}
+
 	if (evt.type === 'TASK_MILESTONE' || evt.type === 'TASK_DONE') {
 		const summarized = summarizeMilestoneLine(evt.payload?.message || '');
 		if (summarized && shouldNarrateMilestone(summarized, { askedProgress })) {

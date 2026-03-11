@@ -3,7 +3,7 @@ import { error as logError } from '../logger.js';
 const PASSIVE_CAPTURE_INTERVAL_MS = 10000;
 const ACTIVE_CAPTURE_COOLDOWN_MS = 1500;
 
-export function createScreenCaptureController({ gemini }) {
+export function createScreenCaptureController({ gemini, onCapture = null }) {
 	let interval = null;
 	let lastUserSpeechTime = Date.now();
 	let idleGateClosed = false;
@@ -12,6 +12,12 @@ export function createScreenCaptureController({ gemini }) {
 	let inFlightCapture = null;
 	let lastCaptureId = '';
 	let lastInteractiveCaptureId = '';
+	let latestCapture = null;
+	const captureListeners = new Set();
+
+	if (typeof onCapture === 'function') {
+		captureListeners.add(onCapture);
+	}
 
 	const sendFrame = async ({ passive = false, force = false } = {}) => {
 		const now = Date.now();
@@ -25,6 +31,7 @@ export function createScreenCaptureController({ gemini }) {
 			try {
 				const capture = await window.electronAPI.captureScreen();
 				if (capture?.ok && capture.data) {
+					latestCapture = { ...capture, capturedAt: Date.now(), passive };
 					if (capture.context?.captureId) {
 						lastCaptureId = capture.context.captureId;
 						if (!passive) lastInteractiveCaptureId = capture.context.captureId;
@@ -36,6 +43,13 @@ export function createScreenCaptureController({ gemini }) {
 						);
 					}
 					gemini.sendImage(capture.data);
+					for (const listener of captureListeners) {
+						try {
+							listener(latestCapture);
+						} catch (err) {
+							logError('Screen', 'Capture listener error:', err);
+						}
+					}
 				}
 				return capture;
 			} catch (err) {
@@ -82,6 +96,12 @@ export function createScreenCaptureController({ gemini }) {
 		get lastCaptureAt() { return lastCaptureAt; },
 		get lastCaptureId() { return lastCaptureId; },
 		get lastInteractiveCaptureId() { return lastInteractiveCaptureId || lastCaptureId; },
+		get latestCapture() { return latestCapture; },
+		onCapture(listener) {
+			if (typeof listener !== 'function') return () => {};
+			captureListeners.add(listener);
+			return () => captureListeners.delete(listener);
+		},
 		setLastUserSpeechTime(t) { lastUserSpeechTime = t; },
 		setIdleGateClosed(closed) { idleGateClosed = closed; },
 		setAutonomousMode(mode) { autonomousMode = mode; },

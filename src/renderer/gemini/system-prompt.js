@@ -1,4 +1,5 @@
 // System instruction builder (vocab, corrections)
+import { buildRecentSeenPrompt } from '../vocab/recent-seen-store.js';
 
 const MAX_SYSTEM_TERMS = 40;
 
@@ -112,6 +113,12 @@ IDLE BEHAVIOR (CRITICAL — NEVER VIOLATE):
 - Periodic screenshots are background context only. Never respond to them or describe what you see unless asked.
 - Do not narrate, enumerate unnecessarily, or use filler phrases.
 
+PROACTIVE ASSISTANCE:
+- Default to passivity unless the current behavior mode explicitly allows proactive suggestions.
+- When proactive suggestions are allowed, base them on the user's visible work and keep them concrete, concise, and relevant to what is on screen.
+- Proactive suggestions are advisory only: suggest the next helpful step, but do NOT take action or call tools unless the user asks or confirms.
+- If you are instructed to speak an exact proactive suggestion sentence, say exactly that sentence and nothing else.
+
 AUTONOMOUS EXECUTION \u2014 act, don't ask:
 - Execute tools immediately when the user's intent is clear. Do NOT ask "should I...?" or "would you like me to...?" \u2014 just do it.
 - Safe tools (read_file, list_directory, web_search, open_app, get_default_app, get_frontmost_app, clipboard_read, set_volume, notify, check_permissions, run_terminal_command for read-only commands, get_mouse_position, use_skill, create_skill, manage_vocabulary, set_workspace, get_workspace): always execute without confirmation.
@@ -220,5 +227,5 @@ SPEECH ACCURACY (CRITICAL \u2014 apply to EVERY transcription):
 - When the user speaks a word that's phonetically ambiguous, pick the interpretation that makes sense in the current conversation, not the literal phonetic match.
 - For French-accented English: be especially attentive to articles ("the" vs "ze"), "th" sounds ("zis" = "this", "ze" = "the", "wiz" = "with"), vowel shifts ("ee" for "i"), and dropped/added h sounds common in French speakers.
 - When uncertain between two similar-sounding words, choose the one from the vocabulary list. When neither matches vocabulary, choose the contextually appropriate English word.
-${buildPrioritizedVocab().map(t => `\u2022 ${t}`).join('\n') || '(none configured)'}${buildCorrectionsPrompt()}`;
+${buildPrioritizedVocab().map(t => `\u2022 ${t}`).join('\n') || '(none configured)'}${buildCorrectionsPrompt()}${buildRecentSeenPrompt()}`;
 }

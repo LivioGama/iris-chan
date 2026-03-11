@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	getRuntimeHealth: () => ipcRenderer.invoke(RUNTIME_CHANNELS.RUNTIME_GET_HEALTH),
 	getBehaviorMode: () => ipcRenderer.invoke(RUNTIME_CHANNELS.BEHAVIOR_GET_MODE),
 	setBehaviorMode: (mode) => ipcRenderer.invoke(RUNTIME_CHANNELS.BEHAVIOR_SET_MODE, mode),
+	onBehaviorModeChanged: (cb) => ipcRenderer.on('mode-changed', (_, mode) => cb(mode)),
 	subscribeEvents: () => ipcRenderer.invoke(RUNTIME_CHANNELS.EVENTS_SUBSCRIBE),
 	unsubscribeEvents: () => ipcRenderer.invoke(RUNTIME_CHANNELS.EVENTS_UNSUBSCRIBE),
 	onEvent: (cb) => ipcRenderer.on(RUNTIME_CHANNELS.EVENTS_STREAM, (_, data) => cb(data)),

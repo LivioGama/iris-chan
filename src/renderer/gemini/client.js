@@ -2,6 +2,7 @@
 import { Emitter } from '../../shared/emitter.js';
 import { toolDeclarations } from './tool-declarations.js';
 import { refreshVocabulary, buildPrioritizedVocab, buildCorrectionsPrompt, buildSystemInstruction } from './system-prompt.js';
+import { buildRecentSeenPrompt } from '../vocab/recent-seen-store.js';
 import { info as logInfo, error as logError } from '../logger.js';
 
 const ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -249,7 +250,15 @@ export class GeminiClient extends Emitter {
 		await refreshVocabulary();
 		const terms = buildPrioritizedVocab();
 		const corrections = buildCorrectionsPrompt();
-		this.sendText(`[SYSTEM: VOCABULARY UPDATE \u2014 do not read this aloud, just acknowledge internally]\nUpdated vocabulary:\n${terms.map(t => `\u2022 ${t}`).join('\n')}${corrections}`);
+		const recentSeen = buildRecentSeenPrompt();
+		this.sendText(`[SYSTEM: VOCABULARY UPDATE \u2014 do not read this aloud, just acknowledge internally]\nUpdated vocabulary:\n${terms.map(t => `\u2022 ${t}`).join('\n')}${corrections}${recentSeen}`);
+	}
+
+	sendRecentSeenUpdate() {
+		if (!this.sessionReady) return;
+		const recentSeen = buildRecentSeenPrompt();
+		if (!recentSeen) return;
+		this.sendText(`[SYSTEM: RECENT SCREEN TERMS \u2014 do not read this aloud, just use these as short-lived speech hints]${recentSeen}`);
 	}
 
 	sendImage(base64Jpeg) {

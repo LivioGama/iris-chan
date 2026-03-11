@@ -118,7 +118,7 @@ Status: In Progress
 - [x] Behavior gate test (no repeated idle chatter).
 - [x] Action verification retry test.
 - [x] Task lifecycle/restart-classifier test.
-- [ ] V2 end-to-end UI + voice smoke test.
+- [ ] V2 end-to-end UI + voice smoke test. Manual gold-path checklist: `planning/manual-e2e-verification.md`
 - [ ] Convex schema deployment + integration smoke test.
 
 ## Rollback Plan

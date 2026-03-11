@@ -8,6 +8,12 @@ import { BargeInDetector } from './barge-in-detector.js';
 import { ListeningGate } from './listening-gate.js';
 import { VocabMatcher } from '../vocab/matcher.js';
 import { findBestNgram } from '../vocab/learner.js';
+import {
+	addRecentSeenTerms,
+	configureRecentSeenStore,
+	findRecentSeenRewrite,
+	setRecentSeenKnownTerms,
+} from '../vocab/recent-seen-store.js';
 import { showBubble, clearBubbles, showStreamingBubble, finalizeStreamingBubble } from '../ui/bubbles.js';
 import { setPresence, clearPresence, clearAllPresence } from '../ui/presence-indicator.js';
 import { updateIndicator } from '../ui/status-indicators.js';
@@ -25,6 +31,7 @@ const STATES = {
 };
 
 const AUTONOMOUS_LOOP_INTERVAL_MS = 600000;
+const FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent';
 
 const DEFAULT_VOICE_CONFIG = Object.freeze({
 	volumeThreshold: 0.015,
@@ -33,6 +40,14 @@ const DEFAULT_VOICE_CONFIG = Object.freeze({
 	replyCooldownMs: 45000,
 	speechReleaseMs: 160,
 	echoSuppressionGain: 0.8,
+	recentSeen: {
+		ttlMs: 30000,
+		maxTerms: 24,
+		extractIntervalMs: 10000,
+		minConfidence: 0.6,
+		rewriteDistance: 3,
+		persistEnabled: true,
+	},
 	listeningGate: {
 		minSpeechMs: 180,
 		candidateGapMs: 90,
@@ -70,6 +85,10 @@ function buildVoiceConfig(voiceConfig = {}) {
 		bargeIn: {
 			...DEFAULT_VOICE_CONFIG.bargeIn,
 			...(overrides.bargeIn || {}),
+		},
+		recentSeen: {
+			...DEFAULT_VOICE_CONFIG.recentSeen,
+			...(overrides.recentSeen || {}),
 		},
 	};
 }
@@ -119,15 +138,23 @@ export class VoiceEngine extends Emitter {
 		this._consecutiveAutoTurns = 0;
 		this._lastAutonomousPromptTime = 0;
 		this._autonomousResponseExpected = false;
+		this._proactiveResponseExpected = false;
+		this._proactivePromptedAt = 0;
 
 		this._matcher = vocab || new VocabMatcher();
 		this._correctionCandidates = new Map();
 		this._vocabRefreshInterval = null;
+		this._recentSeenExtractInFlight = null;
+		this._lastRecentSeenExtractAt = 0;
 
 		this._screen = screen || createScreenCaptureController({
 			gemini,
 			onEvent: (type, payload) => this.eventBus?.emitEvent?.(type, payload, 'voice-engine'),
 		});
+		this._unsubscribeScreenCapture = this._screen?.onCapture?.((captureFrame) => {
+			this._handleScreenCapture(captureFrame);
+		}) || null;
+		configureRecentSeenStore(this.voiceConfig.recentSeen);
 
 		this._batcher = claudeCodeBatcher || createClaudeCodeBatcher({ gemini, screen: this._screen });
 
@@ -208,8 +235,9 @@ export class VoiceEngine extends Emitter {
 			if (!this._shouldAcceptModelOutput()) return;
 			if (this.state !== STATES.RESPONDING) {
 				if (this._accum.user) {
-					logInfo('Conversation', `[USER] ${this._accum.user}`);
-					this._lastUserTurn = this._accum.user;
+					const correctedUser = this._correctTranscript(this._accum.user);
+					logInfo('Conversation', `[USER] ${correctedUser}`);
+					this._lastUserTurn = correctedUser;
 				}
 				this._accum.user = '';
 			}
@@ -243,6 +271,7 @@ export class VoiceEngine extends Emitter {
 			if (this._accum.model) {
 				logInfo('Conversation', `[IRIS] ${this._accum.model}`);
 				this._scanVocabulary(this._accum.model);
+				this.behavior.noteAssistantSpoke(this._accum.model);
 			}
 			if (this._lastUserTurn) {
 				this._saveConversationTurn('user', this._lastUserTurn);
@@ -258,19 +287,24 @@ export class VoiceEngine extends Emitter {
 			this._resetTurnLatency();
 
 			if (!this._autonomousMode) {
-				const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
-				if (timeSinceUserSpoke > 3000) {
-					this._unpromptedTurnCount++;
-					logInfo('Voice', `Unprompted turn #${this._unpromptedTurnCount}`);
-					if (this._unpromptedTurnCount >= 1) {
-						this._idleMessageSent = true;
-						this.behavior.noteIdleResponseSent();
-						logInfo('Voice', 'Idle gate closed — blocking further idle output');
-						this._screen.stop();
-						this._screen.setIdleGateClosed(true);
-					}
+				if (this._proactiveResponseExpected) {
+					this._proactiveResponseExpected = false;
+					this._proactivePromptedAt = Date.now();
 				} else {
-					this._unpromptedTurnCount = 0;
+					const timeSinceUserSpoke = Date.now() - this._lastUserSpeechTime;
+					if (timeSinceUserSpoke > 3000) {
+						this._unpromptedTurnCount++;
+						logInfo('Voice', `Unprompted turn #${this._unpromptedTurnCount}`);
+						if (this._unpromptedTurnCount >= 1) {
+							this._idleMessageSent = true;
+							this.behavior.noteIdleResponseSent();
+							logInfo('Voice', 'Idle gate closed — blocking further idle output');
+							this._screen.stop();
+							this._screen.setIdleGateClosed(true);
+						}
+					} else {
+						this._unpromptedTurnCount = 0;
+					}
 				}
 			} else {
 				this._autonomousResponseExpected = false;
@@ -386,6 +420,7 @@ export class VoiceEngine extends Emitter {
 	}
 
 	_shouldAcceptModelOutput() {
+		if (this._proactiveResponseExpected) return true;
 		if (!this._autonomousMode) {
 			if (this._idleMessageSent) return false;
 			if (this._unpromptedTurnCount >= 1) return false;
@@ -399,6 +434,7 @@ export class VoiceEngine extends Emitter {
 
 	_shouldAcceptModelToolCalls() {
 		if (this._dropModelOutputUntilTurnComplete) return false;
+		if (this._proactiveResponseExpected) return false;
 		return this._shouldAcceptModelOutput();
 	}
 
@@ -436,6 +472,7 @@ export class VoiceEngine extends Emitter {
 			this._unpromptedTurnCount = 0;
 			this._consecutiveAutoTurns = 0;
 			this._autonomousResponseExpected = true;
+			this._proactiveResponseExpected = false;
 			this.behavior.noteUserActivity();
 			if (this._idleMessageSent) {
 				logInfo('Voice', 'User speaking — resetting idle gate');
@@ -592,11 +629,13 @@ export class VoiceEngine extends Emitter {
 		try {
 			const allTerms = await window.electronAPI.getVocabulary() || [];
 			const hotTerms = await window.electronAPI.getHotVocabulary() || [];
+			const coreTerms = await window.electronAPI.getVocabularyCore() || [];
 			for (const t of hotTerms) {
 				if (!allTerms.includes(t)) allTerms.push(t);
 			}
 			const corrections = await window.electronAPI.getVocabularyCorrections() || {};
 			this._matcher.build(corrections, allTerms);
+			setRecentSeenKnownTerms({ vocabTerms: allTerms, hotTerms, coreTerms, corrections });
 			logInfo('Vocab', `Matcher built: ${allTerms.length} terms, ${Object.keys(corrections).length} corrections`);
 		} catch (err) {
 			logError('Vocab', 'Failed to load vocabulary:', err);
@@ -611,11 +650,102 @@ export class VoiceEngine extends Emitter {
 	}
 
 	_correctTranscript(text) {
-		const result = this._matcher.correct(text);
+		const cleaned = cleanTranscript(text);
+		let result = this._matcher.correct(cleaned);
+		const recentSeenRewrite = findRecentSeenRewrite(result);
+		if (recentSeenRewrite?.text) {
+			result = recentSeenRewrite.text;
+			this._persistRecentSeenRewrite(recentSeenRewrite);
+		}
 		if (result !== text) {
 			logInfo('Vocab', `FIXED: ${JSON.stringify(text)} → ${JSON.stringify(result)}`);
 		}
 		return result;
+	}
+
+	_persistRecentSeenRewrite(rewrite) {
+		if (!rewrite?.shouldPersist) return;
+		const wrong = String(rewrite.wrong || '').trim().toLowerCase();
+		const right = String(rewrite.right || '').trim();
+		if (!wrong || !right) return;
+		if (this._matcher.hasCorrection(wrong)) return;
+		this._matcher.addCorrection(wrong, right);
+		window.electronAPI.addCorrection(wrong, right);
+		this.gemini.sendRecentSeenUpdate?.();
+		logInfo('Vocab', `RECENT-SCREEN LEARNED: "${wrong}" → "${right}"`);
+	}
+
+	_handleScreenCapture(captureFrame) {
+		if (!captureFrame?.data || !this._apiKey) return;
+		if (this._recentSeenExtractInFlight) return;
+
+		const now = Date.now();
+		if (now - this._lastRecentSeenExtractAt < this.voiceConfig.recentSeen.extractIntervalMs) return;
+		this._lastRecentSeenExtractAt = now;
+		this._recentSeenExtractInFlight = this._extractRecentSeenTerms(captureFrame)
+			.catch((err) => {
+				logError('RecentSeen', `Extraction failed: ${err?.message || err}`);
+			})
+			.finally(() => {
+				this._recentSeenExtractInFlight = null;
+			});
+	}
+
+	async _extractRecentSeenTerms(captureFrame) {
+		const prompt = [
+			'Extract unique visible UI terms from this screenshot that would help correct speech recognition.',
+			'Return ONLY JSON. No markdown.',
+			'Rules:',
+			'- Include only unusual terms, product names, app names, usernames, channel names, workspace names, branded labels, and other distinctive visible text.',
+			'- Exclude common English words, generic buttons, navigation words, dates, long sentences, URLs, and anything already likely to be in the vocabulary.',
+			'- Prefer terms that are short and likely to be spoken aloud.',
+			'- Preserve exact casing.',
+			'JSON schema:',
+			'{"terms":[{"term":"Discord","confidence":0.92}]}',
+		].join('\n');
+
+		const body = {
+			contents: [{
+				parts: [
+					{ text: prompt },
+					{
+						inlineData: {
+							mimeType: 'image/jpeg',
+							data: captureFrame.data,
+						},
+					},
+				],
+			}],
+			generationConfig: {
+				temperature: 0,
+				maxOutputTokens: 180,
+				responseMimeType: 'application/json',
+			},
+		};
+
+		const resp = await fetch(`${FLASH_ENDPOINT}?key=${this._apiKey}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(12000),
+		});
+		if (!resp.ok) {
+			throw new Error(`HTTP ${resp.status}`);
+		}
+
+		const data = await resp.json();
+		const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+		const parsed = parseJsonEnvelope(text);
+		const terms = Array.isArray(parsed?.terms) ? parsed.terms : [];
+		const added = addRecentSeenTerms(terms, {
+			source: 'screen',
+			captureId: captureFrame.context?.captureId,
+			appHint: captureFrame.context?.app,
+		});
+		if (added.length) {
+			this.gemini.sendRecentSeenUpdate?.();
+			logInfo('RecentSeen', `Added ${added.length} recent screen term(s): ${added.map((item) => item.term).join(', ')}`);
+		}
 	}
 
 	_learnCorrections(userText, modelText) {
@@ -749,6 +879,11 @@ export class VoiceEngine extends Emitter {
 
 		await this.loadVocabulary();
 		this._vocabRefreshInterval = setInterval(() => this.loadVocabulary(), 60000);
+		if (!this._unsubscribeScreenCapture && this._screen?.onCapture) {
+			this._unsubscribeScreenCapture = this._screen.onCapture((captureFrame) => {
+				this._handleScreenCapture(captureFrame);
+			});
+		}
 		refreshWorkspace();
 
 		window.electronAPI.onToggleVoice(() => this.toggle());
@@ -761,6 +896,19 @@ export class VoiceEngine extends Emitter {
 		window.electronAPI.getDirectMode().then((enabled) => {
 			this.gemini.setDirectMode(!!enabled);
 		}).catch(() => {});
+		window.electronAPI.getBehaviorMode().then((mode) => {
+			if (typeof mode === 'string') this.behavior.setMode(mode);
+		}).catch(() => {});
+		window.electronAPI.onBehaviorModeChanged((mode) => {
+			if (typeof mode === 'string') {
+				this.behavior.setMode(mode);
+				this._autonomousMode = mode === 'autonomous';
+				this._screen.setAutonomousMode(this._autonomousMode);
+				updateIndicator('auto', this._autonomousMode);
+				const badge = document.getElementById('auto-badge');
+				if (badge) badge.classList.toggle('visible', this._autonomousMode);
+			}
+		});
 		window.electronAPI.onDirectModeChanged((enabled) => {
 			this.gemini.setDirectMode(!!enabled);
 			logInfo('Voice', `Direct mode ${enabled ? 'ENABLED' : 'DISABLED'}`);
@@ -779,6 +927,7 @@ export class VoiceEngine extends Emitter {
 		this._lastUserSpeechTime = Date.now();
 		this._unpromptedTurnCount = 0;
 		this._idleMessageSent = false;
+		this._proactiveResponseExpected = false;
 		await this.gemini.connect(this._apiKey);
 	}
 
@@ -790,6 +939,7 @@ export class VoiceEngine extends Emitter {
 		this._stopAutonomousLoop();
 		this._autonomousMode = false;
 		this._consecutiveAutoTurns = 0;
+		this._proactiveResponseExpected = false;
 		const autoBadge = document.getElementById('auto-badge');
 		if (autoBadge) autoBadge.classList.remove('visible');
 		updateIndicator('auto', false);
@@ -809,6 +959,8 @@ export class VoiceEngine extends Emitter {
 		clearAllPresence();
 		clearBubbles();
 		hideToolsPanel();
+		this._unsubscribeScreenCapture?.();
+		this._unsubscribeScreenCapture = null;
 		window.electronAPI.searchHide();
 		window.electronAPI.endSession?.();
 	}
@@ -820,6 +972,7 @@ export class VoiceEngine extends Emitter {
 		this._lastUserSpeechTime = Date.now();
 		this._unpromptedTurnCount = 0;
 		this._idleMessageSent = false;
+		this._proactiveResponseExpected = false;
 		const wasAutonomous = this._autonomousMode;
 		this.capture.stop();
 		this.playback.stop();
@@ -860,6 +1013,36 @@ export class VoiceEngine extends Emitter {
 		return this.playback.getVolume();
 	}
 
+	get active() {
+		return this._active;
+	}
+
+	canEvaluateProactively() {
+		return this._active
+			&& !this._muted
+			&& !this._toolExecuting
+			&& !this._proactiveResponseExpected
+			&& this.state === STATES.LISTENING
+			&& this.gemini?.sessionReady;
+	}
+
+	speakProactiveSuggestion(text, meta = {}) {
+		const clean = this.behavior.sanitize(text);
+		if (!clean) return false;
+		if (!this.canEvaluateProactively()) return false;
+		if (!this.behavior.canSpeakProactively()) return false;
+		const kind = String(meta?.kind || 'next-step').trim() || 'next-step';
+		this._proactiveResponseExpected = true;
+		this._proactivePromptedAt = Date.now();
+		this.gemini.sendText(
+			`[PROACTIVE SUGGESTION]\n` +
+			`Do NOT use tools. Speak EXACTLY the sentence below, naturally, once, and add nothing before or after.\n` +
+			`Kind: ${kind}\n` +
+			`Sentence: ${clean}`
+		);
+		return true;
+	}
+
 	_newConvexSession() {
 		window.electronAPI.newConvexSession();
 	}
@@ -870,5 +1053,21 @@ export class VoiceEngine extends Emitter {
 
 	_saveToolExecution(toolName, args, result) {
 		window.electronAPI.saveToolExecution(toolName, args, result);
+	}
+}
+
+function parseJsonEnvelope(text) {
+	const trimmed = String(text || '').trim();
+	if (!trimmed) return null;
+	try {
+		return JSON.parse(trimmed);
+	} catch {
+		const match = trimmed.match(/\{[\s\S]*\}/);
+		if (!match) return null;
+		try {
+			return JSON.parse(match[0]);
+		} catch {
+			return null;
+		}
 	}
 }

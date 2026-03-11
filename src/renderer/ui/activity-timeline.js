@@ -77,7 +77,11 @@ function formatMessage(evt) {
 		return `DB ${ok} (${evt.payload?.latencyMs ?? -1} ms)`;
 	}
 	if (evt.type === 'INTERRUPT') return evt.payload?.reason || 'User interruption';
-	if (evt.type === 'PROACTIVE_SUGGESTION') return evt.payload?.suggestion || 'High-confidence suggestion';
+	if (evt.type === 'PROACTIVE_SUGGESTION') {
+		const kind = evt.payload?.kind ? `[${evt.payload.kind}] ` : '';
+		const app = evt.payload?.context?.app ? ` (${evt.payload.context.app})` : '';
+		return `${kind}${evt.payload?.suggestion || 'High-confidence suggestion'}${app}`;
+	}
 	if (evt.type === 'ACTION_VERIFY_FAIL') return 'Visual check failed, retrying.';
 	if (evt.type === 'ACTION_VERIFY_OK') return 'Visual check passed.';
 	return JSON.stringify(evt.payload || {});

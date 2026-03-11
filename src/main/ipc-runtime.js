@@ -10,7 +10,14 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTa
 	ipcMain.handle(RUNTIME_CHANNELS.RUNTIME_GET_HEALTH, async () => healthService.getHealth());
 
 	ipcMain.handle(RUNTIME_CHANNELS.BEHAVIOR_GET_MODE, () => behaviorEngine.getMode());
-	ipcMain.handle(RUNTIME_CHANNELS.BEHAVIOR_SET_MODE, (_, mode) => behaviorEngine.setMode(mode));
+	ipcMain.handle(RUNTIME_CHANNELS.BEHAVIOR_SET_MODE, (_, mode) => {
+		const result = behaviorEngine.setMode(mode);
+		const win = avatarWindow.get();
+		if (result?.ok && win && !win.isDestroyed()) {
+			win.webContents.send('mode-changed', result.mode);
+		}
+		return result;
+	});
 
 	ipcMain.handle(RUNTIME_CHANNELS.EVENTS_SUBSCRIBE, (evt) => {
 		const webContentsId = evt.sender.id;

@@ -9,6 +9,26 @@ export class BehaviorEngine {
 		this.idleAckSent = false;
 		this.proactiveLastAt = 0;
 		this.proactiveCooldownMs = 90_000;
+		this.proactiveMinConfidence = {
+			silent: 1,
+			attentive: 0.9,
+			autonomous: 0.82,
+		};
+		this.proactiveModeCooldownMs = {
+			silent: Number.MAX_SAFE_INTEGER,
+			attentive: 30_000,
+			autonomous: 12_000,
+		};
+		this.proactiveEvalCooldownMs = {
+			silent: Number.MAX_SAFE_INTEGER,
+			attentive: 10_000,
+			autonomous: 4_000,
+		};
+		this.proactiveUserActiveWindowMs = 60_000;
+		this.lastProactiveEvalAt = 0;
+		this.lastProactiveEvalFingerprint = '';
+		this.lastProactiveFingerprint = '';
+		this.lastProactiveKind = '';
 		this.lastAssistantText = '';
 		this.lastAssistantTextAt = 0;
 		this.repeatCooldownMs = 20_000;
@@ -89,10 +109,34 @@ export class BehaviorEngine {
 		return true;
 	}
 
-	canSuggest({ confidence = 0, now = Date.now() } = {}) {
-		if (confidence < 0.92) return false;
-		if (now - this.proactiveLastAt < this.proactiveCooldownMs) return false;
+	shouldEvaluateProactively({ frontmostApp = '', contextFingerprint = '', captureAgeMs = 0, now = Date.now() } = {}) {
+		if (this.mode === 'silent') return false;
+		if (!String(frontmostApp || '').trim()) return false;
+		if (!String(contextFingerprint || '').trim()) return false;
+		if (this.mode === 'attentive' && now - this.lastUserActivityAt > this.proactiveUserActiveWindowMs) return false;
+		if (!Number.isFinite(captureAgeMs) || captureAgeMs > 20_000) return false;
+		const evalCooldownMs = this.proactiveEvalCooldownMs[this.mode] ?? 10_000;
+		if (contextFingerprint === this.lastProactiveEvalFingerprint && now - this.lastProactiveEvalAt < evalCooldownMs) {
+			return false;
+		}
+		if (contextFingerprint === this.lastProactiveFingerprint && now - this.proactiveLastAt < evalCooldownMs) {
+			return false;
+		}
+		this.lastProactiveEvalAt = now;
+		this.lastProactiveEvalFingerprint = contextFingerprint;
+		return true;
+	}
+
+	canSuggest({ confidence = 0, contextFingerprint = '', now = Date.now() } = {}) {
+		if (this.mode === 'silent') return false;
+		const threshold = this.proactiveMinConfidence[this.mode] ?? 0.92;
+		if (confidence < threshold) return false;
+		const cooldownMs = this.proactiveModeCooldownMs[this.mode] ?? this.proactiveCooldownMs;
+		if (now - this.proactiveLastAt < cooldownMs) return false;
+		if (this.mode === 'attentive' && now - this.lastUserActivityAt > this.proactiveUserActiveWindowMs) return false;
+		if (contextFingerprint && contextFingerprint === this.lastProactiveFingerprint) return false;
 		this.proactiveLastAt = now;
+		this.lastProactiveFingerprint = String(contextFingerprint || '');
 		return true;
 	}
 
@@ -109,6 +153,12 @@ export class BehaviorEngine {
 		if (this.idleResponseSent) return false;
 		if (this.mode === 'silent') return false;
 		if (timeSinceUserMs > 60000) return false;
+		return true;
+	}
+
+	canSpeakProactively(now = Date.now()) {
+		if (this.mode === 'silent') return false;
+		if (this.mode === 'attentive' && now - this.lastUserActivityAt > this.proactiveUserActiveWindowMs) return false;
 		return true;
 	}
 }

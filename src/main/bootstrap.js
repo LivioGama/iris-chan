@@ -77,7 +77,10 @@ function startRuntime({ apiKey }) {
 			convexClient.saveProactiveSuggestion({
 				text: evt.payload?.suggestion || evt.payload?.text || '',
 				confidence: Number(evt.payload?.confidence || 0),
-				context: evt.payload?.context ? JSON.stringify(evt.payload.context) : undefined,
+				context: JSON.stringify({
+					kind: evt.payload?.kind || 'next-step',
+					...(evt.payload?.context || {}),
+				}),
 				accepted: evt.payload?.accepted,
 				timestamp: evt.timestamp,
 			}, `proactive_${evt.timestamp}`).catch(() => {});

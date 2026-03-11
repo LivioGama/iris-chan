@@ -5,14 +5,38 @@ function simulateBehavior() {
 	let userSpokeSinceAssistant = true;
 	let idleAckSent = false;
 	let proactiveLastAt = 0;
-	const proactiveCooldownMs = 90000;
+	let lastUserActivityAt = Date.now();
+	let lastProactiveFingerprint = '';
+	let lastProactiveEvalFingerprint = '';
+	let lastProactiveEvalAt = 0;
+	const proactiveUserActiveWindowMs = 60000;
+	const proactiveModeCooldownMs = {
+		silent: Number.MAX_SAFE_INTEGER,
+		attentive: 30000,
+		autonomous: 12000,
+	};
+	const proactiveEvalCooldownMs = {
+		silent: Number.MAX_SAFE_INTEGER,
+		attentive: 10000,
+		autonomous: 4000,
+	};
+	const proactiveMinConfidence = {
+		silent: 1,
+		attentive: 0.9,
+		autonomous: 0.82,
+	};
+	let mode = 'silent';
 	return {
 		noteUserActivity() {
 			userSpokeSinceAssistant = true;
 			idleAckSent = false;
+			lastUserActivityAt = Date.now();
 		},
 		noteAssistantSpoke() {
 			userSpokeSinceAssistant = false;
+		},
+		setMode(nextMode) {
+			mode = nextMode;
 		},
 		canSpeak({ directReply = false, majorMilestone = false, selfFixAck = false } = {}) {
 			if (selfFixAck) return !idleAckSent;
@@ -23,10 +47,25 @@ function simulateBehavior() {
 		markSelfFixAckSent() {
 			idleAckSent = true;
 		},
-		canSuggest(confidence, now) {
-			if (confidence < 0.85) return false;
-			if (now - proactiveLastAt < proactiveCooldownMs) return false;
+		shouldEvaluateProactively({ contextFingerprint, captureAgeMs = 0, now = Date.now() } = {}) {
+			if (mode === 'silent') return false;
+			if (!contextFingerprint) return false;
+			if (mode === 'attentive' && now - lastUserActivityAt > proactiveUserActiveWindowMs) return false;
+			if (captureAgeMs > 20000) return false;
+			if (contextFingerprint === lastProactiveEvalFingerprint && now - lastProactiveEvalAt < proactiveEvalCooldownMs[mode]) return false;
+			if (contextFingerprint === lastProactiveFingerprint && now - proactiveLastAt < proactiveEvalCooldownMs[mode]) return false;
+			lastProactiveEvalFingerprint = contextFingerprint;
+			lastProactiveEvalAt = now;
+			return true;
+		},
+		canSuggest({ confidence, contextFingerprint, now }) {
+			if (mode === 'silent') return false;
+			if (confidence < proactiveMinConfidence[mode]) return false;
+			if (mode === 'attentive' && now - lastUserActivityAt > proactiveUserActiveWindowMs) return false;
+			if (now - proactiveLastAt < proactiveModeCooldownMs[mode]) return false;
+			if (contextFingerprint === lastProactiveFingerprint) return false;
 			proactiveLastAt = now;
+			lastProactiveFingerprint = contextFingerprint;
 			return true;
 		},
 	};
@@ -53,9 +92,22 @@ console.log('Running V2 behavior rules tests...');
 {
 	const b = simulateBehavior();
 	const t0 = Date.now();
-	assert.strictEqual(b.canSuggest(0.93, t0), true, 'high confidence suggestion allowed');
-	assert.strictEqual(b.canSuggest(0.95, t0 + 1000), false, 'suggestion throttled during cooldown');
-	assert.strictEqual(b.canSuggest(0.95, t0 + 91000), true, 'suggestion allowed after cooldown');
+	b.setMode('attentive');
+	assert.strictEqual(b.canSuggest({ confidence: 0.93, contextFingerprint: 'ctx-a', now: t0 }), true, 'high confidence suggestion allowed');
+	assert.strictEqual(b.canSuggest({ confidence: 0.95, contextFingerprint: 'ctx-a', now: t0 + 1000 }), false, 'same-context suggestion blocked');
+	assert.strictEqual(b.canSuggest({ confidence: 0.95, contextFingerprint: 'ctx-b', now: t0 + 1000 }), false, 'different context still throttled during cooldown');
+	assert.strictEqual(b.canSuggest({ confidence: 0.95, contextFingerprint: 'ctx-b', now: t0 + 31000 }), true, 'suggestion allowed after attentive cooldown');
+}
+
+{
+	const b = simulateBehavior();
+	const t0 = Date.now();
+	b.setMode('silent');
+	assert.strictEqual(b.shouldEvaluateProactively({ contextFingerprint: 'ctx-a', captureAgeMs: 1000, now: t0 }), false, 'silent mode blocks proactive evaluation');
+	b.setMode('attentive');
+	assert.strictEqual(b.shouldEvaluateProactively({ contextFingerprint: 'ctx-a', captureAgeMs: 1000, now: t0 }), true, 'attentive mode allows proactive evaluation');
+	assert.strictEqual(b.shouldEvaluateProactively({ contextFingerprint: 'ctx-a', captureAgeMs: 1000, now: t0 + 1000 }), false, 'duplicate proactive evaluation is suppressed');
+	assert.strictEqual(b.shouldEvaluateProactively({ contextFingerprint: 'ctx-b', captureAgeMs: 25000, now: t0 + 11000 }), false, 'stale capture blocks proactive evaluation');
 }
 
 {

@@ -3,6 +3,7 @@ import { createScene } from './avatar/scene.js';
 import { loadAvatar } from './avatar/loader.js';
 import { applyOverlays } from './avatar/overlays.js';
 import { GeminiClient } from './gemini/client.js';
+import { ProactiveEngine } from './behavior/proactive-engine.js';
 import { AudioCapture } from './voice/capture.js';
 import { AudioPlayback } from './voice/playback.js';
 import { BehaviorEngine } from './voice/behavior-engine.js';
@@ -38,8 +39,15 @@ const voice = new VoiceEngine({
 	gemini, capture, playback, behavior,
 	eventBus, screen, claudeCodeBatcher, voiceConfig,
 });
+const proactive = new ProactiveEngine({
+	behavior,
+	eventBus,
+	voice,
+	screen,
+});
 window._voicePipeline = voice;
-voice.start();
+await voice.start();
+await proactive.start();
 
 const muteBadge = document.getElementById('mute-badge');
 const raycaster = new THREE.Raycaster();
@@ -93,6 +101,7 @@ window.electronAPI.onTaskStream?.((data) => {
 	}, { askedProgress: false });
 });
 window.addEventListener('beforeunload', () => {
+	proactive.stop();
 	window.electronAPI.unsubscribeEvents?.().catch(() => {});
 });
 
