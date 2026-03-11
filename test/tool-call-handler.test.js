@@ -329,12 +329,51 @@ async function testPointerRetryBudgetSuppressesClickCycling() {
 	global.window = originalWindow;
 }
 
+async function testSuppressedTurnBlocksRawToolCalls() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				executed.push({ name, args });
+				return { ok: true, result: `Executed ${name}` };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: { capture: async () => {} },
+	});
+
+	handler.setShouldAcceptToolCalls(() => false);
+	await handler.handleToolCalls([{ name: 'open_app', args: { name: 'Safari' }, id: 'call-1' }]);
+
+	assert.strictEqual(executed.length, 0, 'suppressed model turns should not execute side-effecting raw tools');
+	assert.strictEqual(
+		responses.some((entry) => entry.id === 'call-1' && /ignored tool call from a suppressed model turn/i.test(entry.result)),
+		true,
+		'suppressed raw tools should receive a no-op response'
+	);
+
+	global.window = originalWindow;
+}
+
 Promise.resolve()
 	.then(testDeferredUiTaskFlushesOnce)
 	.then(testDeferredUiTaskSupersedesOlderTranscript)
 	.then(testSameTurnUiTaskExecutesOnlyOnce)
 	.then(testPointerToolsUseLatestInteractiveCaptureId)
 	.then(testPointerRetryBudgetSuppressesClickCycling)
+	.then(testSuppressedTurnBlocksRawToolCalls)
 	.then(() => {
 		console.log('Tool call handler tests passed.');
 	})

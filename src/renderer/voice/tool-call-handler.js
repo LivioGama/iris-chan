@@ -72,6 +72,7 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 	let lastUiTaskSpeechGeneration = null;
 	let pointerOnlyBatchesThisSpeech = 0;
 	let toolCallChain = Promise.resolve();
+	let shouldAcceptToolCalls = () => true;
 
 	function updateToolPresence(name, args, index, total) {
 		const { label, detail } = getToolDisplay(name, args);
@@ -219,7 +220,19 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		logInfo('Tool', `Deferring ${call.name} while user is still speaking`);
 	}
 
+	function rejectSuppressedToolCalls(calls, message = 'Ignored tool call from a suppressed model turn') {
+		logInfo('Tool', `Suppressing ${calls.length} tool call(s) because the current model turn is not actionable`);
+		for (const call of calls) {
+			gemini.sendToolResponse(call.id, call.name, message);
+		}
+	}
+
 	const _processToolCalls = async (calls) => {
+		if (!shouldAcceptToolCalls(calls)) {
+			rejectSuppressedToolCalls(calls);
+			return;
+		}
+
 		const deferredCalls = [];
 		const executableCalls = [];
 		for (const call of calls) {
@@ -328,5 +341,9 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		schedulePendingUiFlush();
 	}
 
-	return { handleToolCalls, setUserSpeechActive };
+	function setShouldAcceptToolCalls(check) {
+		shouldAcceptToolCalls = typeof check === 'function' ? check : () => true;
+	}
+
+	return { handleToolCalls, setUserSpeechActive, setShouldAcceptToolCalls };
 }

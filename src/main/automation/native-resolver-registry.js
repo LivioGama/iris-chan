@@ -4,6 +4,7 @@ function isBrowserApp(appName = '') {
 
 const RESOLVER_IDS = {
 	SYSTEM_DEFAULT_APP: 'system.default_app',
+	SYSTEM_QUERY: 'system.query',
 	APP_ACTIVATE: 'app.activate',
 	BROWSER_OPEN_URL: 'browser.open_url',
 	BROWSER_SEARCH: 'browser.search',
@@ -46,6 +47,7 @@ function resolverIdForStep(step = {}, appName = '') {
 		if (isEditorApp(step.appName || step.appHint || appName)) return RESOLVER_IDS.EDITOR_ACTIVATE;
 		return RESOLVER_IDS.APP_ACTIVATE;
 	}
+	if (step.type === 'resolveSystemDefault') return RESOLVER_IDS.SYSTEM_QUERY;
 	if (step.type === 'openUrl') return RESOLVER_IDS.BROWSER_OPEN_URL;
 	if (step.type === 'searchInCurrentContext') return RESOLVER_IDS.BROWSER_SEARCH;
 	if (step.type === 'navigateHistory') return RESOLVER_IDS.BROWSER_HISTORY;
@@ -63,6 +65,7 @@ function resolverIdForStep(step = {}, appName = '') {
 function getResolverCatalog() {
 	return [
 		{ id: RESOLVER_IDS.SYSTEM_DEFAULT_APP, domain: 'system', learnability: 'stable', stabilizationCandidate: true },
+		{ id: RESOLVER_IDS.SYSTEM_QUERY, domain: 'system', learnability: 'stable', stabilizationCandidate: true },
 		{ id: RESOLVER_IDS.APP_ACTIVATE, domain: 'general', learnability: 'stable', stabilizationCandidate: true },
 		{ id: RESOLVER_IDS.BROWSER_OPEN_URL, domain: 'browser', learnability: 'stable', stabilizationCandidate: true },
 		{ id: RESOLVER_IDS.BROWSER_SEARCH, domain: 'browser', learnability: 'stable', stabilizationCandidate: true },

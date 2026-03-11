@@ -152,6 +152,7 @@ export class VoiceEngine extends Emitter {
 			},
 			screen: this._screen,
 		});
+		this._toolHandler.setShouldAcceptToolCalls(() => this._shouldAcceptModelToolCalls());
 
 		this.playback.setReferenceCallback((float32Samples) => {
 			this.capture.sendReferenceSignal(float32Samples);
@@ -394,6 +395,11 @@ export class VoiceEngine extends Emitter {
 			if (!this._autonomousResponseExpected && this.state !== STATES.RESPONDING) return false;
 		}
 		return true;
+	}
+
+	_shouldAcceptModelToolCalls() {
+		if (this._dropModelOutputUntilTurnComplete) return false;
+		return this._shouldAcceptModelOutput();
 	}
 
 	_setState(state) {

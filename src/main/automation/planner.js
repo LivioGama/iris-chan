@@ -8,6 +8,7 @@ function createCheckpoint(step, index, total) {
 	if (step.type === 'clickSearchResult') return { kind: 'final', reason: 'result-opened' };
 	if (step.type === 'mediaControl') return { kind: 'final', reason: 'media-control' };
 	if (step.type === 'editorCommand') return { kind: 'final', reason: 'editor-command' };
+	if (step.type === 'resolveSystemDefault') return { kind: 'final', reason: 'system-query' };
 	return null;
 }
 
@@ -23,6 +24,7 @@ function toExecutionStep(step, index, total) {
 		query: step.query || '',
 		resultKind: step.resultKind || '',
 		action: step.action || '',
+		kind: step.kind || '',
 		key: step.key || '',
 		position: step.position || 0,
 		selector: step.selector || null,

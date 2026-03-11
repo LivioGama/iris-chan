@@ -2,7 +2,7 @@ const { EventEmitter } = require('node:events');
 const { URL } = require('node:url');
 const { EVENT_TYPES } = require('../../shared/event-types.js');
 const { runHelper } = require('../native-helper');
-const { open_app } = require('../tools/apps');
+const { open_app, resolveDefaultApp } = require('../tools/apps');
 const filesTools = require('../tools/files');
 const log = require('../logger');
 const { BrowserAdapter } = require('./browser-adapter');
@@ -454,6 +454,8 @@ class UITaskService extends EventEmitter {
 		switch (step.type) {
 			case 'openApp':
 				return this._executeOpenApp(step, signal);
+			case 'resolveSystemDefault':
+				return this._executeResolveSystemDefault(step, signal);
 			case 'openUrl':
 				return this._executeOpenUrl(step, signal);
 			case 'clickElement':
@@ -496,6 +498,27 @@ class UITaskService extends EventEmitter {
 			resolutionMethod: 'input',
 			result: result.result || `Opened ${appName}`,
 			resolvedAppName: result.resolved_name || appName,
+		};
+	}
+
+	async _executeResolveSystemDefault(step, signal) {
+		throwIfAborted(signal);
+		const queryName = step.kind === 'mail' ? 'default mail' : 'default browser';
+		const resolved = resolveDefaultApp(queryName);
+		if (!resolved.ok) {
+			throw makeTaskError(resolved.error || `Could not resolve ${queryName}`, 'system_query_failed');
+		}
+		await wait(80, signal);
+		return {
+			ok: true,
+			tier: 'native',
+			domain: 'system',
+			resolverId: resolverIdForStep(step),
+			verificationMode: 'system-default-query',
+			successType: 'true_success',
+			resolutionMethod: resolved.source,
+			result: `Resolved default ${resolved.kind} app to ${resolved.appName}`,
+			resolvedAppName: resolved.appName,
 		};
 	}
 

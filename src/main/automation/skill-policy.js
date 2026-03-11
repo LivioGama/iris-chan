@@ -22,6 +22,11 @@ function inferGoalCapabilities(goal = '') {
 	if (/\bredo\b/.test(text)) caps.add('redo');
 	if (/\bfind\b|\bsearch in file\b/.test(text)) caps.add('find');
 	if (/\bnew file\b/.test(text)) caps.add('newfile');
+	if (/\bcopy\b/.test(text)) caps.add('copy');
+	if (/\bcut\b/.test(text)) caps.add('cut');
+	if (/\bpaste\b/.test(text)) caps.add('paste');
+	if (/\bselect all\b/.test(text)) caps.add('selectall');
+	if (/\bclose file\b|\bclose tab\b/.test(text)) caps.add('closefile');
 	return caps;
 }
 
@@ -62,6 +67,11 @@ function inferPlanCapabilities(plan = {}) {
 				if (step.action === 'redo') caps.add('redo');
 				if (step.action === 'find') caps.add('find');
 				if (step.action === 'newFile') caps.add('newfile');
+				if (step.action === 'copy') caps.add('copy');
+				if (step.action === 'cut') caps.add('cut');
+				if (step.action === 'paste') caps.add('paste');
+				if (step.action === 'selectAll') caps.add('selectall');
+				if (step.action === 'closeFile') caps.add('closefile');
 				break;
 			default:
 				break;

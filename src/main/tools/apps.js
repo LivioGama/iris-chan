@@ -62,14 +62,25 @@ function resolveDefaultApp(name = '') {
 	const normalized = normalizeText(name);
 	const kind = normalized.includes('mail') ? 'mail' : 'browser';
 	const memoryStore = getMemoryStore();
-	const key = kind === 'browser' ? 'environment.default_browser.bundle_id' : 'environment.default_mail.bundle_id';
-	const cachedBundleId = memoryStore?.getValue?.(key, '') || '';
+	const bundleKey = kind === 'browser' ? 'environment.default_browser.bundle_id' : 'environment.default_mail.bundle_id';
+	const appNameKey = kind === 'browser' ? 'environment.default_browser.app_name' : 'environment.default_mail.app_name';
+	const cachedBundleId = memoryStore?.getValue?.(bundleKey, '') || '';
+	const cachedAppName = memoryStore?.getValue?.(appNameKey, '') || '';
 	if (cachedBundleId) {
 		return {
 			ok: true,
 			kind,
 			bundleId: cachedBundleId,
-			appName: appNameForBundleId(cachedBundleId) || name,
+			appName: appNameForBundleId(cachedBundleId) || cachedAppName || name,
+			source: 'memory',
+		};
+	}
+	if (cachedAppName) {
+		return {
+			ok: true,
+			kind,
+			bundleId: '',
+			appName: cachedAppName,
 			source: 'memory',
 		};
 	}
@@ -79,7 +90,7 @@ function resolveDefaultApp(name = '') {
 	memoryStore?.upsert?.({
 		kind: 'environment_fact',
 		scope: 'machine',
-		key,
+		key: bundleKey,
 		value: bundleId,
 		source: 'observed_success',
 		confidence: 0.95,
@@ -88,7 +99,7 @@ function resolveDefaultApp(name = '') {
 	memoryStore?.upsert?.({
 		kind: 'environment_fact',
 		scope: 'machine',
-		key: kind === 'browser' ? 'environment.default_browser.app_name' : 'environment.default_mail.app_name',
+		key: appNameKey,
 		value: appName,
 		source: 'observed_success',
 		confidence: 0.9,
@@ -117,6 +128,25 @@ async function open_app(args) {
 	return runHelper({ action: 'open_app', name });
 }
 
+async function get_default_app(args) {
+	const requested = String(args?.kind || '').trim().toLowerCase() || 'browser';
+	const name = requested === 'mail' ? 'default mail' : 'default browser';
+	try {
+		const resolved = resolveDefaultApp(name);
+		if (!resolved.ok) return { ok: false, result: resolved.error || `Could not resolve ${name}` };
+		return {
+			ok: true,
+			result: `Default ${resolved.kind} app is ${resolved.appName}`,
+			kind: resolved.kind,
+			app_name: resolved.appName,
+			bundle_id: resolved.bundleId,
+			source: resolved.source,
+		};
+	} catch (err) {
+		return { ok: false, result: `Error: ${err.message}` };
+	}
+}
+
 async function get_frontmost_app() {
 	return runHelper({ action: 'get_frontmost_app' });
 }
@@ -127,6 +157,7 @@ async function window_manage(args) {
 
 module.exports = {
 	open_app,
+	get_default_app,
 	get_frontmost_app,
 	window_manage,
 	resolveDefaultApp,

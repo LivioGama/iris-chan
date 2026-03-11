@@ -34,6 +34,11 @@ export const toolDeclarations = [
 		parameters: { type: 'OBJECT', properties: { name: { type: 'STRING' } }, required: ['name'] },
 	},
 	{
+		name: 'get_default_app',
+		description: 'Resolve the current macOS default app for a capability such as browser or mail. Use this before guessing when the user asks for their default browser or default mail app.',
+		parameters: { type: 'OBJECT', properties: { kind: { type: 'STRING', description: '"browser" (default) or "mail"' } } },
+	},
+	{
 		name: 'scroll',
 		description: 'Scroll the current page or view up or down',
 		parameters: { type: 'OBJECT', properties: { direction: { type: 'STRING' }, amount: { type: 'NUMBER' } }, required: ['direction'] },

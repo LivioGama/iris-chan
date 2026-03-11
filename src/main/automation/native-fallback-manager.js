@@ -47,7 +47,11 @@ class NativeFallbackManager {
 			return { ok: true };
 		}
 		if (this.activeContext.pointerAuthorizedUntil > now()) {
-			return { ok: true, reason: this.activeContext.pointerReason };
+			return {
+				ok: true,
+				reason: this.activeContext.pointerReason,
+				pointerAuthorizedUntil: this.activeContext.pointerAuthorizedUntil,
+			};
 		}
 		return {
 			ok: false,

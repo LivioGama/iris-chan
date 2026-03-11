@@ -155,6 +155,11 @@ function parseEditorCommandClause(clause, appHint) {
 		{ pattern: /^(?:redo)$/i, action: 'redo', key: 'cmd+shift+z' },
 		{ pattern: /^(?:find|search in file)$/i, action: 'find', key: 'cmd+f' },
 		{ pattern: /^(?:new file)$/i, action: 'newFile', key: 'cmd+n' },
+		{ pattern: /^(?:copy)$/i, action: 'copy', key: 'cmd+c' },
+		{ pattern: /^(?:cut)$/i, action: 'cut', key: 'cmd+x' },
+		{ pattern: /^(?:paste)$/i, action: 'paste', key: 'cmd+v' },
+		{ pattern: /^(?:select all)$/i, action: 'selectAll', key: 'cmd+a' },
+		{ pattern: /^(?:close file|close tab)$/i, action: 'closeFile', key: 'cmd+w' },
 	];
 	for (const command of commands) {
 		if (command.pattern.test(normalized)) {
@@ -165,6 +170,25 @@ function parseEditorCommandClause(clause, appHint) {
 				key: command.key,
 			};
 		}
+	}
+	return null;
+}
+
+function parseSystemQueryClause(clause, appHint) {
+	const normalized = collapseWhitespace(clause);
+	if (/^(?:check|show|what is|whats|what's)\s+(?:my\s+)?default\s+browser(?:\s+app)?$/i.test(normalized)) {
+		return {
+			type: 'resolveSystemDefault',
+			appHint: appHint || 'System Settings',
+			kind: 'browser',
+		};
+	}
+	if (/^(?:check|show|what is|whats|what's)\s+(?:my\s+)?default\s+mail(?:\s+app)?$/i.test(normalized)) {
+		return {
+			type: 'resolveSystemDefault',
+			appHint: appHint || 'System Settings',
+			kind: 'mail',
+		};
 	}
 	return null;
 }
@@ -262,6 +286,12 @@ function routeGoal(goal, explicitAppHint = '') {
 			continue;
 		}
 
+		const systemQueryStep = parseSystemQueryClause(clause, appHint);
+		if (systemQueryStep) {
+			steps.push(systemQueryStep);
+			continue;
+		}
+
 		const searchStep = parseSearchClause(clause, appHint);
 		if (searchStep) {
 			steps.push(searchStep);
@@ -302,6 +332,7 @@ module.exports = {
 	parseHistoryNavigationClause,
 	parseMediaControlClause,
 	parseEditorCommandClause,
+	parseSystemQueryClause,
 	parseSearchClause,
 	parseSearchResultClause,
 	normalizeSearchQuery,

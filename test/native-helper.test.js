@@ -16,6 +16,8 @@ assert.ok(!helperSource.includes('tell application "System Events" to key code')
 assert.ok(helperSource.includes('--monitor-input'), 'helper should support persistent user-input monitoring mode');
 assert.ok(helperSource.includes('ax_snapshot'), 'helper should expose accessibility snapshots');
 assert.ok(helperSource.includes('ax_press'), 'helper should expose semantic accessibility presses');
+assert.ok(helperSource.includes('struct AXActionResponse: Encodable'), 'helper should encode accessibility action responses via typed payloads');
+assert.ok(!helperSource.includes('JSONSerialization.data(withJSONObject: response)'), 'helper should not JSON-serialize ambiguous accessibility matches through [String: Any]');
 assert.ok(helperSource.includes('eventSourceUserData'), 'helper should tag synthetic events so the input monitor can ignore them');
 
 assert.deepStrictEqual(

@@ -1,9 +1,9 @@
 const MAX_CAPTURE_AGE_MS = 5000;
 
-function isCaptureUsable(health, now = Date.now()) {
+function isCaptureUsable(health, now = Date.now(), maxAgeMs = MAX_CAPTURE_AGE_MS) {
 	if (!health || health.lastError) return false;
 	if (!health.lastCaptureAt) return false;
-	return now - health.lastCaptureAt <= MAX_CAPTURE_AGE_MS;
+	return now - health.lastCaptureAt <= maxAgeMs;
 }
 
 function formatCaptureBlockReason(actionLabel, health, now = Date.now()) {

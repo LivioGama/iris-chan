@@ -1,3 +1,6 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
 function formatTodoItems(items = []) {
 	return items.map((item) => `${item.completed ? '[x]' : '[ ]'} ${item.text}`).join('\n');
 }
@@ -65,6 +68,36 @@ function emitItemEvent(onLog, cache, event) {
 	}
 }
 
+const TARGET_TRIPLE_BY_PLATFORM = {
+	'darwin:arm64': 'aarch64-apple-darwin',
+	'darwin:x64': 'x86_64-apple-darwin',
+	'linux:arm64': 'aarch64-unknown-linux-musl',
+	'linux:x64': 'x86_64-unknown-linux-musl',
+	'win32:arm64': 'aarch64-pc-windows-msvc',
+	'win32:x64': 'x86_64-pc-windows-msvc',
+};
+
+function resolveCodexBinaryPath({ platform = process.platform, arch = process.arch } = {}) {
+	const targetTriple = TARGET_TRIPLE_BY_PLATFORM[`${platform}:${arch}`];
+	if (!targetTriple) return null;
+
+	let codexPackageJsonPath = null;
+	try {
+		codexPackageJsonPath = require.resolve('@openai/codex/package.json');
+	} catch {
+		return null;
+	}
+
+	const codexPackageDir = path.dirname(codexPackageJsonPath);
+	const openaiPackagesDir = path.dirname(codexPackageDir);
+	const targetSuffix = platform === 'win32' ? `win32-${arch}` : `${platform}-${arch}`;
+	const platformPackageDir = path.join(openaiPackagesDir, `codex-${targetSuffix}`);
+	const binaryName = platform === 'win32' ? 'codex.exe' : 'codex';
+	const binaryPath = path.join(platformPackageDir, 'vendor', targetTriple, 'codex', binaryName);
+
+	return fs.existsSync(binaryPath) ? binaryPath : null;
+}
+
 function createCodexCodingAdapter() {
 	return {
 		name: 'codex',
@@ -82,6 +115,7 @@ function createCodexCodingAdapter() {
 
 			const codex = new Codex({
 				apiKey: cleanEnv.CODEX_API_KEY || cleanEnv.OPENAI_API_KEY || undefined,
+				codexPathOverride: resolveCodexBinaryPath(),
 				env: cleanEnv,
 			});
 			const thread = codex.startThread({
@@ -113,4 +147,4 @@ function createCodexCodingAdapter() {
 	};
 }
 
-module.exports = { createCodexCodingAdapter };
+module.exports = { createCodexCodingAdapter, resolveCodexBinaryPath };

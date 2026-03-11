@@ -13,6 +13,7 @@ const TOOL_LABELS = {
 	drag: 'Dragging',
 	scroll: 'Scrolling',
 	open_app: 'Opening app',
+	get_default_app: 'Resolving default app',
 	get_frontmost_app: 'Checking active app',
 	window_manage: 'Managing window',
 	read_file: 'Reading file',
@@ -49,6 +50,7 @@ function getContainer() {
 function formatArgs(name, args) {
 	if (!args) return '';
 	if (name === 'open_app' && args.name) return args.name;
+	if (name === 'get_default_app' && args.kind) return args.kind;
 	if (name === 'run_ui_task' && args.goal) return args.goal.length > 60 ? args.goal.slice(0, 60) + '…' : args.goal;
 	if (name === 'read_file' && args.path) return args.path.split('/').pop();
 	if (name === 'write_file' && args.path) return args.path.split('/').pop();

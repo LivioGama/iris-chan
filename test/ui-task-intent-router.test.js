@@ -107,6 +107,18 @@ assert.strictEqual(
 	'router should map save to the native editor shortcut'
 );
 
+const editorPastePlan = routeGoal('Paste', 'Visual Studio Code');
+assert.deepStrictEqual(
+	editorPastePlan.steps.map((step) => step.type),
+	['editorCommand'],
+	'router should recognize additional editor commands semantically'
+);
+assert.strictEqual(
+	editorPastePlan.steps[0].key,
+	'cmd+v',
+	'router should map paste to the native editor shortcut'
+);
+
 const settingsOpenPlan = routeGoal('Open system settings');
 assert.deepStrictEqual(
 	settingsOpenPlan.steps.map((step) => step.type),
@@ -129,6 +141,18 @@ assert.strictEqual(
 	utilityOpenPlan.steps[0].appName,
 	'Activity Monitor',
 	'router should preserve the utility app target'
+);
+
+const systemQueryPlan = routeGoal('What is my default browser');
+assert.deepStrictEqual(
+	systemQueryPlan.steps.map((step) => step.type),
+	['resolveSystemDefault'],
+	'router should recognize default-app queries as semantic system queries'
+);
+assert.strictEqual(
+	systemQueryPlan.steps[0].kind,
+	'browser',
+	'router should preserve the queried default-app kind'
 );
 
 const defaultBrowserPlan = routeGoal('open my default browser');

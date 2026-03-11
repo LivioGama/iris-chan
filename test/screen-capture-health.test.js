@@ -23,6 +23,12 @@ assert.strictEqual(
 );
 
 assert.strictEqual(
+	isCaptureUsable({ lastCaptureAt: now - 7000, lastError: null }, now, 30000),
+	true,
+	'explicit fallback windows should allow moderately stale captures'
+);
+
+assert.strictEqual(
 	isCaptureUsable({ lastCaptureAt: now - 1000, lastError: 'Screen capture unavailable' }, now),
 	false,
 	'capture errors should block pointer actions'

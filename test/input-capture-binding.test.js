@@ -6,12 +6,18 @@ console.log('Running input capture binding tests...');
 const inputPath = path.join(process.cwd(), 'src/main/tools/input.js');
 const nativeHelperPath = path.join(process.cwd(), 'src/main/native-helper.js');
 const screenCapturePath = path.join(process.cwd(), 'src/main/screen-capture.js');
+const serviceRefPath = path.join(process.cwd(), 'src/main/automation/service-ref.js');
 
 delete require.cache[require.resolve(inputPath)];
 delete require.cache[require.resolve(nativeHelperPath)];
 delete require.cache[require.resolve(screenCapturePath)];
+delete require.cache[require.resolve(serviceRefPath)];
 
 const helperCalls = [];
+const pointerGateState = {
+	ok: true,
+	pointerAuthorizedUntil: 0,
+};
 
 require.cache[require.resolve(nativeHelperPath)] = {
 	exports: {
@@ -28,6 +34,9 @@ require.cache[require.resolve(screenCapturePath)] = {
 			if (captureId === 'cap_active') {
 				return { scaleX: 2, scaleY: 3, offsetX: 100, offsetY: 200 };
 			}
+			if (captureId === 'cap_stale') {
+				return { scaleX: 2, scaleY: 3, offsetX: 0, offsetY: 0 };
+			}
 			if (captureId === 'cap_missing') return null;
 			return { scaleX: 1, scaleY: 1, offsetX: 0, offsetY: 0 };
 		},
@@ -39,12 +48,27 @@ require.cache[require.resolve(screenCapturePath)] = {
 					permissionStatus: 'granted',
 				};
 			}
+			if (captureId === 'cap_stale') {
+				return {
+					lastCaptureAt: Date.now() - 7000,
+					lastError: null,
+					permissionStatus: 'granted',
+				};
+			}
 			return {
 				lastCaptureAt: Date.now() - 1000,
 				lastError: null,
 				permissionStatus: 'granted',
 			};
 		},
+	},
+};
+
+require.cache[require.resolve(serviceRefPath)] = {
+	exports: {
+		getNativeFallbackManager: () => ({
+			canUsePointerTools: () => ({ ...pointerGateState }),
+		}),
 	},
 };
 
@@ -71,6 +95,15 @@ Promise.resolve()
 		const missing = await click_at({ x: 10, y: 20, capture_id: 'cap_missing' });
 		assert.strictEqual(missing.ok, false, 'unknown capture ids should block the click');
 		assert.match(missing.result, /Unknown capture_id "cap_missing"/, 'unknown capture ids should surface a clear error');
+
+		pointerGateState.pointerAuthorizedUntil = Date.now() + 30_000;
+		const staleButAuthorized = await click_at({ x: 10, y: 20, capture_id: 'cap_stale' });
+		assert.strictEqual(staleButAuthorized.ok, true, 'authorized pointer fallback should allow moderately stale captures');
+		assert.deepStrictEqual(
+			helperCalls[2],
+			{ action: 'click_at', x: 20, y: 60, button: 'left' },
+			'authorized stale captures should still use their capture-specific mapping'
+		);
 	})
 	.then(() => {
 		console.log('Input capture binding tests passed.');

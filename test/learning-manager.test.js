@@ -8,6 +8,7 @@ require('ts-node').register({ transpileOnly: true });
 const { MemoryStore } = require('../src/main/automation/memory-store');
 const { LearningManager } = require('../src/main/automation/learning-manager');
 const { SelfImprovementManager } = require('../src/main/automation/self-improvement-manager');
+const appsTools = require('../src/main/tools/apps');
 
 console.log('Running learning manager tests...');
 
@@ -52,6 +53,47 @@ async function testLearningManagerWritesDefaultBrowserMemory() {
 		'Safari',
 		'resolved default browser should be stored as environment memory'
 	);
+}
+
+async function testGetDefaultAppUsesStoredMemory() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const serviceRef = require('../src/main/automation/service-ref');
+	const previous = serviceRef.getMemoryStore();
+	serviceRef.setMemoryStore(memoryStore);
+	memoryStore.upsert({
+		kind: 'environment_fact',
+		scope: 'machine',
+		key: 'environment.default_browser.bundle_id',
+		value: '',
+		source: 'observed_success',
+		confidence: 1,
+	});
+	memoryStore.upsert({
+		kind: 'environment_fact',
+		scope: 'machine',
+		key: 'environment.default_browser.app_name',
+		value: 'Arc',
+		source: 'observed_success',
+		confidence: 1,
+	});
+	const originalResolve = appsTools.resolveDefaultApp;
+	appsTools.resolveDefaultApp = () => ({
+		ok: true,
+		kind: 'browser',
+		bundleId: '',
+		appName: 'Arc',
+		source: 'memory',
+	});
+	try {
+		const result = await appsTools.get_default_app({ kind: 'browser' });
+		assert.strictEqual(result.ok, true, 'get_default_app should succeed');
+		assert.strictEqual(result.app_name, 'Arc', 'get_default_app should expose the resolved app name');
+		assert.strictEqual(result.source, 'memory', 'get_default_app should expose the resolution source');
+	} finally {
+		appsTools.resolveDefaultApp = originalResolve;
+		serviceRef.setMemoryStore(previous);
+	}
 }
 
 async function testLearningManagerCreatesReusableToolSkill() {
@@ -272,6 +314,7 @@ async function testDeferredSelfFixIssuesAreRetried() {
 
 Promise.resolve()
 	.then(testMemoryStoreSeedsDefaultPolicy)
+	.then(testGetDefaultAppUsesStoredMemory)
 	.then(testLearningManagerWritesDefaultBrowserMemory)
 	.then(testLearningManagerCreatesReusableToolSkill)
 	.then(testLearningManagerDedupesAutonomousSelfFix)

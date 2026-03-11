@@ -270,6 +270,23 @@ async function testEditorCommandUsesEditorResolver() {
 	assert.strictEqual(result.resolverId, 'editor.command', 'editor command should annotate editor command resolver id');
 }
 
+async function testEditorCommandCheckpointRequiresExpectedApp() {
+	const service = new UITaskService();
+	service.worldState.getFrontmostApp = async () => ({ ok: true, name: 'Notes' });
+	let failed = false;
+	try {
+		await service._verifyCheckpoint(
+			{ appHint: 'Visual Studio Code', successSignal: '' },
+			{ type: 'editorCommand', appHint: 'Visual Studio Code', checkpoint: { kind: 'final' } },
+			{ ok: true },
+			null
+		);
+	} catch (err) {
+		failed = err.code === 'checkpoint_failed';
+	}
+	assert.strictEqual(failed, true, 'editor command checkpoint should fail if the expected editor is not frontmost');
+}
+
 async function testOpenUrlAnnotatesResolverMetadata() {
 	const service = new UITaskService();
 	service.worldState.getFrontmostApp = async () => ({ ok: true, name: 'Arc' });
@@ -287,6 +304,17 @@ async function testOpenUrlAnnotatesResolverMetadata() {
 	assert.strictEqual(result.resolverId, 'browser.open_url', 'openUrl should annotate browser resolver id');
 }
 
+async function testSystemDefaultQueryUsesNativeResolver() {
+	const service = new UITaskService();
+	const result = await service._executeResolveSystemDefault({
+		type: 'resolveSystemDefault',
+		kind: 'browser',
+	}, null);
+	assert.strictEqual(result.ok, true, 'system default query should succeed');
+	assert.strictEqual(result.domain, 'system', 'system default query should annotate system domain');
+	assert.strictEqual(result.resolverId, 'system.query', 'system default query should annotate system query resolver');
+}
+
 Promise.resolve()
 	.then(testRecentDuplicateDedupes)
 	.then(testInFlightDuplicateDedupes)
@@ -297,7 +325,9 @@ Promise.resolve()
 	.then(testMediaControlStepExecutesViaResolver)
 	.then(testFinderSelectionUsesNativeResolver)
 	.then(testEditorCommandUsesEditorResolver)
+	.then(testEditorCommandCheckpointRequiresExpectedApp)
 	.then(testOpenUrlAnnotatesResolverMetadata)
+	.then(testSystemDefaultQueryUsesNativeResolver)
 	.then(() => {
 		console.log('UI task service tests passed.');
 	})

@@ -1,7 +1,7 @@
 // Tool handlers: type_text, press_key, click_at, double_click, mouse_move, drag, scroll
 const { runHelper } = require('../native-helper');
 const { getMapping, getCaptureHealth } = require('../screen-capture');
-const { isCaptureUsable, formatCaptureBlockReason } = require('../screen-capture-health');
+const { MAX_CAPTURE_AGE_MS, isCaptureUsable, formatCaptureBlockReason } = require('../screen-capture-health');
 const { getNativeFallbackManager } = require('../automation/service-ref');
 
 // Convert image-pixel coordinates (from Gemini) → logical screen coordinates (for CGEvent).
@@ -36,7 +36,12 @@ function requireFreshCapture(actionLabel, captureId = '') {
 		return { ok: false, result: pointerGate.reason };
 	}
 	const health = getCaptureHealth(captureId);
-	if (!isCaptureUsable(health)) {
+	const now = Date.now();
+	const authorizedStaleWindowMs = Number(pointerGate?.pointerAuthorizedUntil || 0) - now;
+	const maxCaptureAgeMs = authorizedStaleWindowMs > 0
+		? Math.max(MAX_CAPTURE_AGE_MS, authorizedStaleWindowMs)
+		: MAX_CAPTURE_AGE_MS;
+	if (!isCaptureUsable(health, now, maxCaptureAgeMs)) {
 		return { ok: false, result: formatCaptureBlockReason(actionLabel, health) };
 	}
 	return null;

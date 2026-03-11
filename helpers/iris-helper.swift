@@ -48,6 +48,12 @@ struct AXFindResponse: Encodable {
 	let matches: [AXMatchSummary]
 }
 
+struct AXActionResponse: Encodable {
+	let message: String?
+	let ambiguous: Bool?
+	let matches: [AXMatchSummary]?
+}
+
 struct AXSnapshotNode: Encodable {
 	let role: String
 	let subrole: String
@@ -1233,20 +1239,14 @@ case "ax_press":
 		respond(false, "No accessibility element matched \"\(query)\"")
 	}
 	if candidates.count > 1 && candidates[0].score == candidates[1].score {
-		let response = ["ambiguous": true, "matches": candidateSummaries(candidates)] as [String: Any]
-		if let data = try? JSONSerialization.data(withJSONObject: response),
-		   let json = String(data: data, encoding: .utf8) {
-			respond(true, json)
-		}
+		let response = AXActionResponse(message: nil, ambiguous: true, matches: candidateSummaries(candidates))
+		respond(true, encodeJSONString(response))
 	}
 	let target = resolveActionTarget(for: candidates[0])
 	_ = setFocused(target)
 	if performPress(target) {
-		let message = ["message": "Activated \"\(candidates[0].text)\""] as [String: Any]
-		if let data = try? JSONSerialization.data(withJSONObject: message),
-		   let json = String(data: data, encoding: .utf8) {
-			respond(true, json)
-		}
+		let response = AXActionResponse(message: "Activated \"\(candidates[0].text)\"", ambiguous: nil, matches: nil)
+		respond(true, encodeJSONString(response))
 	}
 	respond(false, "Matched \"\(candidates[0].text)\" but could not perform an accessibility action")
 
@@ -1260,11 +1260,8 @@ case "ax_focus":
 		respond(false, "No accessibility element matched \"\(query)\"")
 	}
 	if setFocused(candidate.element) || (candidate.parent != nil && setFocused(candidate.parent!)) {
-		let message = ["message": "Focused \"\(candidate.text)\""] as [String: Any]
-		if let data = try? JSONSerialization.data(withJSONObject: message),
-		   let json = String(data: data, encoding: .utf8) {
-			respond(true, json)
-		}
+		let response = AXActionResponse(message: "Focused \"\(candidate.text)\"", ambiguous: nil, matches: nil)
+		respond(true, encodeJSONString(response))
 	}
 	respond(false, "Matched \"\(candidate.text)\" but could not focus it")
 
@@ -1283,11 +1280,8 @@ case "ax_set_value":
 	_ = setFocused(target)
 	if setValue(target, value) {
 		let detail = candidate?.text.isEmpty == false ? candidate!.text : "focused field"
-		let message = ["message": "Set value on \(detail)"] as [String: Any]
-		if let data = try? JSONSerialization.data(withJSONObject: message),
-		   let json = String(data: data, encoding: .utf8) {
-			respond(true, json)
-		}
+		let response = AXActionResponse(message: "Set value on \(detail)", ambiguous: nil, matches: nil)
+		respond(true, encodeJSONString(response))
 	}
 	respond(false, "Matched an accessibility element but could not set its value")
 
