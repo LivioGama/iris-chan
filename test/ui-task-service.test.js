@@ -315,6 +315,134 @@ async function testSystemDefaultQueryUsesNativeResolver() {
 	assert.strictEqual(result.resolverId, 'system.query', 'system default query should annotate system query resolver');
 }
 
+async function testTarsPointerRescueExecutesWhenValidated() {
+	const service = new UITaskService({
+		deps: {
+			screenCapture: {
+				capture: async () => ({
+					ok: true,
+					data: 'base64-image',
+					context: { captureId: 'cap_1', imageWidth: 1000, imageHeight: 800 },
+				}),
+				getMapping: () => ({ scaleX: 1, scaleY: 1, offsetX: 0, offsetY: 0 }),
+			},
+			requestTarsAction: async () => ({
+				ok: true,
+				actionType: 'click',
+				x: 120,
+				y: 220,
+				thought: 'Click target',
+				latencyMs: 1234,
+				raw: { action_type: 'click', x: 120, y: 220 },
+			}),
+			validateTarsImagePoint: (response) => response,
+			mapRescuePoint: (x, y) => ({ x, y }),
+			performRescueClick: async () => ({ ok: true, result: 'clicked' }),
+			getTarsConfig: () => ({ enabled: true, endpoint: 'https://example.com', apiKey: 'secret' }),
+		},
+	});
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	let verifyCount = 0;
+	service._executeStep = async () => {
+		const err = new Error('Need screenshot rescue');
+		err.code = 'ax_press_failed';
+		err.pointerFallbackEligible = true;
+		throw err;
+	};
+	service._verifyCheckpoint = async () => { verifyCount += 1; };
+
+	const result = await service.runTask({
+		goal: 'Open the ambiguous button',
+		app_hint: 'Safari',
+		success_signal: '',
+	});
+
+	assert.strictEqual(result.ok, true, 'validated TARS rescue should allow the task to complete');
+	assert.strictEqual(verifyCount, 1, 'rescue should still run the normal checkpoint verification');
+	assert.strictEqual(service.lastCompletedTask.ok, true, 'successful rescue should mark the task as completed');
+}
+
+async function testTarsOutOfBoundsDoesNotAuthorizePointerFallback() {
+	const fallbackManager = new NativeFallbackManager();
+	const service = new UITaskService({
+		nativeFallbackManager: fallbackManager,
+		deps: {
+			screenCapture: {
+				capture: async () => ({
+					ok: true,
+					data: 'base64-image',
+					context: { captureId: 'cap_1', imageWidth: 1000, imageHeight: 800 },
+				}),
+			},
+			requestTarsAction: async () => ({
+				ok: true,
+				actionType: 'click',
+				x: 3000,
+				y: 220,
+				thought: 'Bad point',
+				latencyMs: 10,
+				raw: { action_type: 'click', x: 3000, y: 220 },
+			}),
+			validateTarsImagePoint: () => ({
+				ok: false,
+				code: 'tars_out_of_bounds',
+				error: 'outside image bounds',
+			}),
+			getTarsConfig: () => ({ enabled: true, endpoint: 'https://example.com', apiKey: 'secret' }),
+		},
+	});
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	service._executeStep = async () => {
+		const err = new Error('Need screenshot rescue');
+		err.code = 'ax_press_failed';
+		err.pointerFallbackEligible = true;
+		throw err;
+	};
+
+	const result = await service.runTask({
+		goal: 'Open the ambiguous button',
+		app_hint: 'Safari',
+		success_signal: '',
+	});
+
+	assert.strictEqual(result.ok, false, 'invalid TARS response should still fail the task');
+	assert.strictEqual(
+		Boolean(fallbackManager.activeContext?.pointerAuthorizedUntil),
+		false,
+		'invalid TARS rescue should not authorize raw pointer fallback'
+	);
+}
+
+async function testDisabledTarsPreservesPointerFallbackAuthorization() {
+	const fallbackManager = new NativeFallbackManager();
+	const service = new UITaskService({
+		nativeFallbackManager: fallbackManager,
+		deps: {
+			getTarsConfig: () => ({ enabled: false, endpoint: '', apiKey: '' }),
+		},
+	});
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	service._executeStep = async () => {
+		const err = new Error('Need screenshot rescue');
+		err.code = 'ax_press_failed';
+		err.pointerFallbackEligible = true;
+		err.pointerFallbackReason = 'native and accessibility exhausted';
+		throw err;
+	};
+
+	const result = await service.runTask({
+		goal: 'Open the ambiguous button',
+		app_hint: 'Safari',
+		success_signal: '',
+	});
+
+	assert.strictEqual(result.ok, false, 'task should still fail when TARS is disabled');
+	assert.strictEqual(fallbackManager.canUsePointerTools().ok, true, 'disabled TARS should preserve existing pointer fallback authorization');
+}
+
 Promise.resolve()
 	.then(testRecentDuplicateDedupes)
 	.then(testInFlightDuplicateDedupes)
@@ -328,6 +456,9 @@ Promise.resolve()
 	.then(testEditorCommandCheckpointRequiresExpectedApp)
 	.then(testOpenUrlAnnotatesResolverMetadata)
 	.then(testSystemDefaultQueryUsesNativeResolver)
+	.then(testTarsPointerRescueExecutesWhenValidated)
+	.then(testTarsOutOfBoundsDoesNotAuthorizePointerFallback)
+	.then(testDisabledTarsPreservesPointerFallbackAuthorization)
 	.then(() => {
 		console.log('UI task service tests passed.');
 	})

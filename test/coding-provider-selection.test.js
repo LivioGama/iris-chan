@@ -5,7 +5,7 @@ const path = require('node:path');
 console.log('Running coding provider selection tests...');
 
 const { resolveCodingProviderName, createCodingAdapter } = require('../src/main/coding/providers');
-const { resolveCodexBinaryPath } = require('../src/main/coding/providers/codex');
+const { resolveCodexBinaryPath, loadCodexSdk } = require('../src/main/coding/providers/codex');
 
 assert.strictEqual(resolveCodingProviderName({}), 'claude', 'missing env should default to claude');
 assert.strictEqual(resolveCodingProviderName({ CODING_PROVIDER: 'claude' }), 'claude', 'claude env should resolve to claude');
@@ -21,4 +21,11 @@ assert.strictEqual(typeof resolvedBinaryPath, 'string', 'codex binary should res
 assert.ok(fs.existsSync(resolvedBinaryPath), 'resolved codex binary path should exist on disk');
 assert.strictEqual(path.basename(resolvedBinaryPath), process.platform === 'win32' ? 'codex.exe' : 'codex');
 
-console.log('Coding provider selection tests passed.');
+(async () => {
+	const sdkModule = await loadCodexSdk();
+	assert.strictEqual(typeof sdkModule.Codex, 'function', 'Codex SDK should load through native ESM import');
+	console.log('Coding provider selection tests passed.');
+})().catch((err) => {
+	console.error(err);
+	process.exitCode = 1;
+});

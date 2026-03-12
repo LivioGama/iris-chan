@@ -11,6 +11,8 @@ const { isNativeEligiblePlan, isNativeEligibleStep, resolverIdForStep } = requir
 const { createExecutionPlan } = require('./planner');
 const { planLikelySatisfiesGoal } = require('./skill-policy');
 const { WorldState } = require('./world-state');
+const screenCapture = require('../screen-capture');
+const { requestTarsAction, validateTarsImagePoint, getTarsConfig } = require('./tars-client');
 
 function createTaskId() {
 	return `ui_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -128,6 +130,15 @@ function stepLabel(step) {
 	}
 }
 
+function toScreenPoint(x, y, captureId) {
+	const mapping = screenCapture.getMapping(captureId);
+	if (!mapping) return null;
+	return {
+		x: Math.round(x * mapping.scaleX + (mapping.offsetX || 0)),
+		y: Math.round(y * mapping.scaleY + (mapping.offsetY || 0)),
+	};
+}
+
 function classifyOpenAppDomain(appName = '', resolverId = '') {
 	if (resolverId === 'editor.activate') return 'editor';
 	if (resolverId === 'system.default_app') return 'system';
@@ -138,12 +149,23 @@ function classifyOpenAppDomain(appName = '', resolverId = '') {
 }
 
 class UITaskService extends EventEmitter {
-	constructor({ eventBus, selfImprovementManager = null, nativeFallbackManager = null, episodeRecorder = null } = {}) {
+	constructor({ eventBus, selfImprovementManager = null, nativeFallbackManager = null, episodeRecorder = null, deps = {} } = {}) {
 		super();
 		this.eventBus = eventBus;
 		this.selfImprovementManager = selfImprovementManager;
 		this.nativeFallbackManager = nativeFallbackManager;
 		this.episodeRecorder = episodeRecorder;
+		this._screenCapture = deps.screenCapture || screenCapture;
+		this._requestTarsAction = deps.requestTarsAction || requestTarsAction;
+		this._validateTarsImagePoint = deps.validateTarsImagePoint || validateTarsImagePoint;
+		this._performRescueClick = deps.performRescueClick || ((point) => runHelper({
+			action: 'click_at',
+			x: point.x,
+			y: point.y,
+			button: 'left',
+		}));
+		this._mapRescuePoint = deps.mapRescuePoint || ((x, y, captureId) => toScreenPoint(x, y, captureId));
+		this._getTarsConfig = deps.getTarsConfig || getTarsConfig;
 		this.browserAdapter = new BrowserAdapter();
 		this.worldState = new WorldState();
 		this.activeTask = null;
@@ -413,7 +435,23 @@ class UITaskService extends EventEmitter {
 				step,
 				stepIndex: i,
 			});
-			const outcome = await this._executeStep(step, controller.signal);
+			let outcome;
+			try {
+				outcome = await this._executeStep(step, controller.signal);
+				if (step.checkpoint) {
+					await this._verifyCheckpoint(plan, step, outcome, controller.signal);
+				}
+			} catch (err) {
+				const rescued = await this._attemptTarsRescue({
+					taskId,
+					plan,
+					step,
+					error: err,
+					signal: controller.signal,
+				});
+				if (!rescued.ok) throw rescued.error;
+				outcome = rescued.outcome;
+			}
 			log.info('Learning', `Step outcome: task=${taskId} step=${step.type} tier=${outcome.tier || 'unknown'} domain=${outcome.domain || 'general'} resolver=${outcome.resolverId || 'n/a'} successType=${outcome.successType || 'true_success'}`);
 			activeTask.trace.push({
 				stepId: step.id,
@@ -425,6 +463,7 @@ class UITaskService extends EventEmitter {
 				successType: outcome.successType || 'true_success',
 				resolutionMethod: outcome.resolutionMethod || 'input',
 				result: outcome.result,
+				tarsRescue: outcome.tarsRescue || null,
 			});
 			this.episodeRecorder?.recordAttempt?.(taskId, {
 				stepId: step.id,
@@ -435,10 +474,8 @@ class UITaskService extends EventEmitter {
 				verificationMode: outcome.verificationMode || '',
 				successType: outcome.successType || 'true_success',
 				result: outcome.result,
+				tarsRescue: outcome.tarsRescue || null,
 			});
-			if (step.checkpoint) {
-				await this._verifyCheckpoint(plan, step, outcome, controller.signal);
-			}
 			this.worldState.invalidate();
 		}
 
@@ -888,6 +925,154 @@ class UITaskService extends EventEmitter {
 		err.pointerFallbackEligible = true;
 		err.pointerFallbackReason = message;
 		return err;
+	}
+
+	_isTarsRescueEnabled() {
+		const tars = this._getTarsConfig();
+		return tars.enabled && Boolean(tars.endpoint) && Boolean(tars.apiKey);
+	}
+
+	_buildTarsInstruction({ plan, step, error, attempt }) {
+		const parts = [
+			`Task goal: ${plan.goal}`,
+			`Current UI step: ${stepLabel(step)}`,
+		];
+		if (step.selector?.text) {
+			parts.push(`Target text: ${step.selector.text}`);
+		}
+		if (step.appHint || plan.appHint) {
+			parts.push(`App context: ${step.appHint || plan.appHint}`);
+		}
+		if (plan.successSignal) {
+			parts.push(`Success signal to preserve after click: ${plan.successSignal}`);
+		}
+		if (error?.message) {
+			parts.push(`Previous semantic attempt failed because: ${error.message}`);
+		}
+		if (attempt > 1) {
+			parts.push('Retry after the previous TARS click did not verify. Return a better click target within the screenshot image bounds.');
+		}
+		parts.push('Return the single best click target for this screenshot. Coordinates must be inside the screenshot image.');
+		return parts.join('\n');
+	}
+
+	async _attemptTarsRescue({ taskId, plan, step, error, signal }) {
+		if (!error?.pointerFallbackEligible) {
+			return { ok: false, error };
+		}
+		if (!this._isTarsRescueEnabled()) {
+			return { ok: false, error };
+		}
+
+		const attempts = [];
+		const maxAttempts = 2;
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			throwIfAborted(signal);
+			const captureResult = await this._screenCapture.capture();
+			if (!captureResult?.ok || !captureResult.data || !captureResult.context?.captureId) {
+				attempts.push({
+					attempt,
+					status: 'capture_failed',
+					error: captureResult?.error || 'Screen capture failed before TARS rescue',
+				});
+				break;
+			}
+
+			const instruction = this._buildTarsInstruction({ plan, step, error, attempt });
+			const tarsResponse = await this._requestTarsAction({
+				screenshotBase64: captureResult.data,
+				instruction,
+			});
+			const normalized = this._validateTarsImagePoint(tarsResponse, captureResult.context);
+			const attemptRecord = {
+				attempt,
+				instruction,
+				captureId: captureResult.context.captureId,
+				captureImageWidth: captureResult.context.imageWidth,
+				captureImageHeight: captureResult.context.imageHeight,
+				rawResponse: tarsResponse.raw || tarsResponse.rawText || null,
+				status: normalized.ok ? 'validated' : 'rejected',
+				rejectionCode: normalized.ok ? '' : normalized.code || '',
+				rejectionError: normalized.ok ? '' : normalized.error || '',
+			};
+
+			if (!normalized.ok) {
+				attempts.push(attemptRecord);
+				log.warn('TARS', `Rejected TARS rescue response for task=${taskId} step=${step.type}: ${normalized.error}`);
+				continue;
+			}
+
+			const point = this._mapRescuePoint(normalized.x, normalized.y, captureResult.context.captureId);
+			if (!point) {
+				attemptRecord.status = 'mapping_failed';
+				attemptRecord.rejectionCode = 'tars_mapping_missing';
+				attemptRecord.rejectionError = `Missing capture mapping for ${captureResult.context.captureId}`;
+				attempts.push(attemptRecord);
+				continue;
+			}
+
+			const clickResult = await this._performRescueClick(point);
+			if (clickResult.ok === false) {
+				attemptRecord.status = 'click_failed';
+				attemptRecord.rejectionCode = 'tars_click_failed';
+				attemptRecord.rejectionError = clickResult.result || 'TARS click failed';
+				attempts.push(attemptRecord);
+				continue;
+			}
+			await wait(180, signal);
+
+			const outcome = {
+				ok: true,
+				tier: 'pointer_rescue',
+				domain: 'general',
+				resolverId: `tars.${step.type || 'click'}`,
+				verificationMode: 'tars-rescue',
+				successType: 'technical_success',
+				resolutionMethod: 'tars_rescue',
+				result: `TARS rescue clicked for ${stepLabel(step)}`,
+				tarsRescue: {
+					attempts: [...attempts, {
+						...attemptRecord,
+						status: 'clicked',
+						normalizedX: normalized.x,
+						normalizedY: normalized.y,
+						screenX: point.x,
+						screenY: point.y,
+						thought: normalized.thought || '',
+						latencyMs: normalized.latencyMs,
+					}],
+				},
+			};
+
+			try {
+				if (step.checkpoint) {
+					await this._verifyCheckpoint(plan, step, outcome, signal);
+				}
+				outcome.successType = 'true_success';
+				outcome.result = `Completed ${stepLabel(step)} via TARS rescue`;
+				return { ok: true, outcome };
+			} catch (verifyErr) {
+				attemptRecord.status = 'verification_failed';
+				attemptRecord.rejectionCode = verifyErr.code || 'tars_verification_failed';
+				attemptRecord.rejectionError = verifyErr.message || 'TARS rescue verification failed';
+				attemptRecord.normalizedX = normalized.x;
+				attemptRecord.normalizedY = normalized.y;
+				attemptRecord.screenX = point.x;
+				attemptRecord.screenY = point.y;
+				attemptRecord.thought = normalized.thought || '';
+				attemptRecord.latencyMs = normalized.latencyMs;
+				attempts.push(attemptRecord);
+				log.warn('TARS', `TARS rescue verification failed for task=${taskId} step=${step.type}: ${attemptRecord.rejectionError}`);
+			}
+		}
+
+		const reason = attempts.length
+			? attempts[attempts.length - 1].rejectionError || error.message
+			: error.message;
+		const finalError = makeTaskError(reason, attempts.some((item) => item.rejectionCode === 'tars_verification_failed') ? 'tars_verification_failed' : 'tars_unavailable', {
+			tarsRescue: { attempts },
+		});
+		return { ok: false, error: finalError };
 	}
 
 	async _verifyCheckpoint(plan, step, outcome, signal) {

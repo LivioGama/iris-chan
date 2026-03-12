@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const importModule = new Function('specifier', 'return import(specifier);');
 
 function formatTodoItems(items = []) {
 	return items.map((item) => `${item.completed ? '[x]' : '[ ]'} ${item.text}`).join('\n');
@@ -98,12 +99,16 @@ function resolveCodexBinaryPath({ platform = process.platform, arch = process.ar
 	return fs.existsSync(binaryPath) ? binaryPath : null;
 }
 
+async function loadCodexSdk() {
+	return importModule('@openai/codex-sdk');
+}
+
 function createCodexCodingAdapter() {
 	return {
 		name: 'codex',
 		async run({ prompt, cwd, env = process.env, signal, onLog }) {
-			onLog?.('[status] Importing Claude Code SDK...');
-			const { Codex } = await import('@openai/codex-sdk');
+			onLog?.('[status] Importing Codex SDK...');
+			const { Codex } = await loadCodexSdk();
 			onLog?.('[status] SDK ready, starting execution...');
 
 			const cleanEnv = { ...env };
@@ -147,4 +152,4 @@ function createCodexCodingAdapter() {
 	};
 }
 
-module.exports = { createCodexCodingAdapter, resolveCodexBinaryPath };
+module.exports = { createCodexCodingAdapter, resolveCodexBinaryPath, loadCodexSdk };
