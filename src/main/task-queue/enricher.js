@@ -3,7 +3,7 @@ const path = require('node:path');
 const { execSync } = require('node:child_process');
 const log = require('../logger');
 
-const FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent';
+const FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
 
 function gatherProjectContext(projectPath) {
 	const ctx = [];

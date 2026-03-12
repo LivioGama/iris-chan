@@ -34,29 +34,15 @@ function getDefaultPosition(display) {
 	};
 }
 
-// On startup, reset orphaned IN_PROGRESS tasks to PENDING (they were interrupted by app restart)
-function resetOrphanedTasks() {
-	const tasksPath = path.join(process.cwd(), 'tasks.json');
+function resumeInterruptedTasks() {
 	try {
-		if (!fs.existsSync(tasksPath)) return;
-		const data = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
-		const tasks = data.tasks || [];
-		let resetCount = 0;
-		for (const task of tasks) {
-			if (task.status === 'IN_PROGRESS') {
-				task.status = 'PENDING';
-				task.logs = (task.logs || '') + '\n⚠️ Reset from IN_PROGRESS (app restarted during execution)';
-				task.updatedAt = new Date().toISOString();
-				resetCount++;
-			}
-		}
-		if (resetCount > 0) {
-			data.updatedAt = new Date().toISOString();
-			fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
-			log.info('Kanban', `Reset ${resetCount} orphaned IN_PROGRESS tasks to PENDING`);
+		const fixProject = require('../tools/fix-project');
+		const result = fixProject.resumeImmediateTasks({ cwd: process.cwd() });
+		if (result?.resumed) {
+			log.info('Kanban', `Resumed ${result.resumed} interrupted immediate task(s)`);
 		}
 	} catch (err) {
-		log.warn('Kanban', `Could not reset orphaned tasks: ${err.message}`);
+		log.warn('Kanban', `Could not resume interrupted tasks: ${err.message}`);
 	}
 }
 
@@ -125,8 +111,8 @@ function create() {
 		log[level]('Kanban', m);
 	});
 
-	// Reset orphaned IN_PROGRESS tasks from previous session, then watch for changes
-	resetOrphanedTasks();
+	// Resume immediate tasks from the previous session, then watch for changes
+	resumeInterruptedTasks();
 	watchTasksFile();
 
 	// Save geometry on resize/move (debounced)

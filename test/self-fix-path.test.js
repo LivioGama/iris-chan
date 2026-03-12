@@ -38,7 +38,7 @@ async function main() {
 			},
 		});
 
-		assert.strictEqual(result.ok, true, 'self_fix should queue successfully for the Iris repo');
+		assert.strictEqual(result.ok, true, 'self_fix should start successfully for the Iris repo');
 		assert.ok(observedRun, 'self_fix should invoke fix_project with the stubbed SDK runner');
 		assert.strictEqual(observedRun.cwd, repoRoot, 'self_fix should target the running iris-chan repository');
 		assert.strictEqual(observedRun.taskFile, tasksPath, 'self_fix should create tasks.json in the running repository');
@@ -46,8 +46,11 @@ async function main() {
 
 		assert.ok(fs.existsSync(tasksPath), 'self_fix should create tasks.json at the resolved Iris repo path');
 		const taskData = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
-		assert.strictEqual(taskData.tasks.length, 1, 'self_fix should queue exactly one task');
-		assert.strictEqual(taskData.tasks[0].status, 'IN_PROGRESS', 'queued self_fix task should start in progress');
+		assert.strictEqual(taskData.tasks.length, 1, 'self_fix should create exactly one task');
+		assert.strictEqual(taskData.tasks[0].status, 'running', 'self_fix task should start running immediately');
+		assert.strictEqual(taskData.tasks[0].origin, 'self_fix', 'self_fix task should be tagged with its origin');
+		assert.strictEqual(taskData.tasks[0].launchMode, 'immediate', 'self_fix task should use the immediate launch mode');
+		assert.strictEqual(taskData.tasks[0].resumable, true, 'self_fix task should be marked resumable');
 
 		global.window = { irisPaths: { sourceDirDisplay: expectedPromptPath } };
 		const systemPromptModuleUrl = pathToFileURL(path.join(repoRoot, 'src/renderer/gemini/system-prompt.js')).href;

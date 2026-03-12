@@ -114,6 +114,10 @@ class ConvexClient {
 		return this._run('taskQueue:updateTask', { id, updates });
 	}
 
+	async claimQueueTask(id, expectedStatuses, updates) {
+		return this._run('taskQueue:claimTask', { id, expectedStatuses, updates });
+	}
+
 	async getQueuedTasks() {
 		return this._run('taskQueue:getByStatus', { status: 'queued' });
 	}

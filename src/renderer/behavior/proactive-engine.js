@@ -1,7 +1,7 @@
 import { EVENT_TYPES } from '../../shared/event-types.web.js';
 import { info as logInfo, error as logError } from '../logger.js';
 
-const FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent';
+const FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
 const PROACTIVE_POLL_MS = 8000;
 const SCREEN_FRESH_MS = 20000;
 

@@ -6,6 +6,7 @@ import * as convexStore from '../convex-store';
 import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
+const taskState = require('../tasks/task-state');
 
 export interface Task {
     id: string;
@@ -18,6 +19,18 @@ export interface Task {
     verify: string;
     done: string;
     dependsOn: string[];
+    dependencies?: string[];
+    inferredDependencies?: string[];
+    dependencyState?: string;
+    origin?: string;
+    launchMode?: string;
+    resumable?: boolean;
+    resumeCount?: number;
+    startedAt?: string | null;
+    projectPath?: string | null;
+    schedulerSource?: string;
+    prompt?: string | null;
+    blockedBy?: string[];
     createdAt: string;
     updatedAt: string;
     logs?: any;
@@ -80,10 +93,8 @@ export function register() {
             if (!fs.existsSync(tasksPath)) {
                 return [];
             }
-            const content = fs.readFileSync(tasksPath, 'utf8');
-            const data = JSON.parse(content);
-            // Extract tasks array from the JSON structure
-            return (data.tasks || data) || [];
+            const data = taskState.loadTasksFile(tasksPath, { cwd: process.cwd() });
+            return data.tasks || [];
         } catch (err: any) {
             log.error('Kanban', `Failed to load tasks.json: ${err.message}`);
             return [];
@@ -94,12 +105,10 @@ export function register() {
         const tasksPath = path.join(process.cwd(), 'tasks.json');
 
         try {
-            const data: TasksData = {
+            taskState.writeTasksFile(tasksPath, {
                 version: 1,
-                updatedAt: new Date().toISOString(),
-                tasks: tasks
-            };
-            fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+                tasks: tasks.map((task: Task) => taskState.normalizeTaskRecord(task, { cwd: process.cwd() })),
+            });
             log.info('Kanban', 'Tasks saved successfully');
             return { ok: true };
         } catch (err: any) {
@@ -118,9 +127,8 @@ export function register() {
         }
 
         try {
-            const content = fs.readFileSync(tasksPath, 'utf8');
-            const data = JSON.parse(content);
-            const tasks = (data.tasks || data) as Task[];
+            const data = taskState.loadTasksFile(tasksPath, { cwd: process.cwd() });
+            const tasks = data.tasks as Task[];
             const task = tasks.find(t => t.id === taskId);
 
             if (!task) {
@@ -152,18 +160,14 @@ export function register() {
                 return { ok: true, removed: 0 };
             }
 
-            const content = fs.readFileSync(tasksPath, 'utf8');
-            const data = JSON.parse(content);
-            const tasks = (data.tasks || data) as Task[];
+            const data = taskState.loadTasksFile(tasksPath, { cwd: process.cwd() });
+            const tasks = data.tasks as Task[];
 
             // Keep only non-DONE tasks
-            const remaining = tasks.filter(t => t.status !== 'COMPLETED' && t.status !== 'DONE');
+            const remaining = tasks.filter((t) => !['completed', 'done'].includes(String(t.status || '').toLowerCase()));
             const removed = tasks.length - remaining.length;
 
-            data.tasks = remaining;
-            data.updatedAt = new Date().toISOString();
-
-            fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+            taskState.writeTasksFile(tasksPath, { ...data, tasks: remaining });
             log.info('Kanban', `Removed ${removed} completed tasks`);
 
             return { ok: true, removed };
@@ -266,16 +270,13 @@ export function register() {
                 return { ok: false, error: 'Tasks file not found' };
             }
 
-            const content = fs.readFileSync(tasksPath, 'utf8');
-            const data = JSON.parse(content);
-            const tasks = (data.tasks || data) as Task[];
+            const data = taskState.loadTasksFile(tasksPath, { cwd: process.cwd() });
+            const tasks = data.tasks as Task[];
             const task = tasks.find(t => t.id === taskId);
 
             if (task) {
                 task.logs = logs;
-                data.tasks = tasks;
-                data.updatedAt = new Date().toISOString();
-                fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+                taskState.writeTasksFile(tasksPath, data);
                 log.info('Kanban', `Updated logs for task ${taskId}`);
                 return { ok: true };
             }
@@ -412,13 +413,25 @@ export function register() {
                             id: `task-${taskId}`,
                             title: title.length > 70 ? `${title.substring(0, 67)}...` : title,
                             description: description.length > 500 ? `${description.substring(0, 497)}...` : description,
-                            status: 'PENDING',
+                            status: 'queued',
                             order: taskId,
                             files: [],
                             action: '',
                             verify: '',
                             done: '',
                             dependsOn: [],
+                            dependencies: [],
+                            inferredDependencies: [],
+                            dependencyState: 'ready',
+                            origin: 'kanban:spec',
+                            launchMode: 'manual',
+                            resumable: true,
+                            resumeCount: 0,
+                            startedAt: null,
+                            projectPath: process.cwd(),
+                            schedulerSource: 'tasks.json',
+                            prompt: null,
+                            blockedBy: [],
                             createdAt: new Date().toISOString(),
                             updatedAt: new Date().toISOString()
                         });
@@ -432,12 +445,10 @@ export function register() {
             log.info('Kanban', `[parse-spec-md] Parsed ${tasks.length} tasks from spec.md`);
 
             // Write tasks.json
-            const data: TasksData = {
+            taskState.writeTasksFile(tasksPath, {
                 version: 1,
-                updatedAt: new Date().toISOString(),
-                tasks: tasks
-            };
-            fs.writeFileSync(tasksPath, JSON.stringify(data, null, 2), 'utf8');
+                tasks,
+            });
             log.info('Kanban', `[parse-spec-md] Wrote ${tasks.length} tasks to ${tasksPath}`);
 
             return { ok: true, count: tasks.length };

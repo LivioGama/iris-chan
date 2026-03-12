@@ -31,7 +31,7 @@ const STATES = {
 };
 
 const AUTONOMOUS_LOOP_INTERVAL_MS = 600000;
-const FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent';
+const FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
 
 const DEFAULT_VOICE_CONFIG = Object.freeze({
 	volumeThreshold: 0.015,

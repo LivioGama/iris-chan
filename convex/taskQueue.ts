@@ -10,6 +10,16 @@ export const createTask = mutation({
       impactedFiles: v.optional(v.array(v.string())),
       complexity: v.optional(v.string()),
       status: v.string(),
+      origin: v.optional(v.string()),
+      launchMode: v.optional(v.string()),
+      resumable: v.optional(v.boolean()),
+      resumeCount: v.optional(v.number()),
+      dependencyState: v.optional(v.string()),
+      dependencies: v.optional(v.array(v.string())),
+      inferredDependencies: v.optional(v.array(v.string())),
+      blockedBy: v.optional(v.array(v.string())),
+      startedAt: v.optional(v.number()),
+      resumedAt: v.optional(v.number()),
       result: v.optional(v.string()),
       errorMessage: v.optional(v.string()),
       createdAt: v.number(),
@@ -40,6 +50,16 @@ export const updateTask = mutation({
       impactedFiles: v.optional(v.array(v.string())),
       complexity: v.optional(v.string()),
       status: v.optional(v.string()),
+      origin: v.optional(v.string()),
+      launchMode: v.optional(v.string()),
+      resumable: v.optional(v.boolean()),
+      resumeCount: v.optional(v.number()),
+      dependencyState: v.optional(v.string()),
+      dependencies: v.optional(v.array(v.string())),
+      inferredDependencies: v.optional(v.array(v.string())),
+      blockedBy: v.optional(v.array(v.string())),
+      startedAt: v.optional(v.number()),
+      resumedAt: v.optional(v.number()),
       result: v.optional(v.string()),
       errorMessage: v.optional(v.string()),
       updatedAt: v.optional(v.number()),
@@ -47,6 +67,28 @@ export const updateTask = mutation({
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.id, args.updates);
+  },
+});
+
+export const claimTask = mutation({
+  args: {
+    id: v.id("task_queue"),
+    expectedStatuses: v.array(v.string()),
+    updates: v.object({
+      status: v.string(),
+      startedAt: v.optional(v.number()),
+      resumedAt: v.optional(v.number()),
+      updatedAt: v.optional(v.number()),
+    }),
+  },
+  handler: async (ctx, args) => {
+    const current = await ctx.db.get(args.id);
+    if (!current) return { ok: false, reason: "not_found" };
+    if (!args.expectedStatuses.includes(current.status)) {
+      return { ok: false, reason: `status_mismatch:${current.status}` };
+    }
+    await ctx.db.patch(args.id, args.updates);
+    return { ok: true };
   },
 });
 

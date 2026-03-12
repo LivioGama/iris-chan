@@ -112,7 +112,7 @@ const config: Config = {
 	gemini: {
 		endpoint: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent',
 		model: 'models/gemini-2.5-flash-native-audio-preview-12-2025',
-		flashEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent',
+		flashEndpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent',
 		voice: 'Kore',
 		maxRetries: 5,
 		retryDelay: 2000,
