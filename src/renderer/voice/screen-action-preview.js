@@ -17,6 +17,7 @@ const SCREEN_ACTION_TOOLS = new Set([
 	'scroll',
 	'mouse_move',
 	'propose_reply',
+	'tars_action',
 ]);
 
 // Delay (ms) between showing the preview and executing the action,
@@ -64,6 +65,11 @@ export function generateExplanation(name, args) {
 			const preview = reply.length > 60 ? reply.slice(0, 60) + '…' : reply;
 			const reason = args?.explanation ? ` Reason: ${args.explanation}` : '';
 			return `About to type a proposed reply: "${preview}".${reason}`;
+		}
+		case 'tars_action': {
+			const instr = args?.instruction || '';
+			const extra = args?.text ? ` and type "${args.text.slice(0, 40)}"` : '';
+			return `About to use vision to: ${instr}${extra}.`;
 		}
 		default:
 			return `About to execute ${name.replace(/_/g, ' ')}.`;

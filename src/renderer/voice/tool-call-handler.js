@@ -20,6 +20,7 @@ const ACTION_TOOLS = new Set([
 	'write_file',
 	'move_file',
 	'propose_reply',
+	'tars_action',
 ]);
 
 function isSearchTool(name, args) {

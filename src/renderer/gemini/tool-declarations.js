@@ -26,8 +26,16 @@ export const toolDeclarations = [
 		parameters: { type: 'OBJECT', properties: { direction: { type: 'STRING' }, amount: { type: 'NUMBER' } }, required: ['direction'] },
 	},
 	{
+		name: 'tars_action',
+		description: 'Use a vision model to find and interact with UI elements precisely. Much more accurate than guessing coordinates. Call with a natural language instruction describing the target element. Optionally pass text to type after clicking the element. Use this for ALL UI interactions: clicking buttons, selecting items, opening menus, closing dialogs, typing into specific fields.',
+		parameters: { type: 'OBJECT', properties: {
+			instruction: { type: 'STRING', description: 'Natural language instruction. Be descriptive. Examples: "click the message input field", "click the Send button", "click the X button to close the popup".' },
+			text: { type: 'STRING', description: 'Optional: text to type AFTER finding and clicking the target element.' },
+		}, required: ['instruction'] },
+	},
+	{
 		name: 'click_at',
-		description: 'Click at image pixel coordinates from the screenshot. Use button "right" for right-click, default is left-click. x and y are pixel positions in the screenshot image.',
+		description: 'DEPRECATED — prefer tars_action for accurate clicks. Click at image pixel coordinates from the screenshot. Use button "right" for right-click, default is left-click. x and y are pixel positions in the screenshot image.',
 		parameters: { type: 'OBJECT', properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, button: { type: 'STRING' } }, required: ['x', 'y'] },
 	},
 	{
