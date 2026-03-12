@@ -215,6 +215,20 @@
 			line-height: 1.3;
 		}
 
+		.task-status {
+			display: inline-flex;
+			align-items: center;
+			margin-bottom: 5px;
+			padding: 2px 6px;
+			border-radius: 999px;
+			font-size: 9px;
+			font-weight: 700;
+			text-transform: uppercase;
+			letter-spacing: 0.4px;
+			background: rgba(255, 255, 255, 0.08);
+			color: rgba(255, 255, 255, 0.6);
+		}
+
 		.task .task-actions {
 			display: flex;
 			gap: 4px;
@@ -419,18 +433,170 @@
 		let renderTimeout = null;
 		let cleanDoneBtnAttached = false;
 
-		// Track tasks actively receiving SDK stream events — prevents file-watcher reloads from clobbering live logs
-		const activelyStreamingTasks = new Set();
-		// Track tasks that were started via SDK (vs manually moved to IN_PROGRESS)
-		const sdkRunningTasks = new Set();
-		// Track tasks recently completed via done event — prevents file-watcher reloads from regressing status
-		const recentlyCompletedTasks = new Map(); // taskId → {status, timestamp}
+			// Track tasks actively receiving SDK stream events — prevents file-watcher reloads from clobbering live logs
+			const activelyStreamingTasks = new Set();
+			// Track tasks that were started via SDK (vs manually moved to IN_PROGRESS)
+			const sdkRunningTasks = new Set();
+			// Track tasks recently completed via done event — prevents file-watcher reloads from regressing status
+			const recentlyCompletedTasks = new Map(); // taskId → {status, timestamp}
+			const dismissedQueueTaskIds = loadDismissedQueueTaskIds();
+
+			function loadDismissedQueueTaskIds() {
+				try {
+					const raw = window.localStorage.getItem('kanban.dismissedQueueTaskIds');
+					const parsed = JSON.parse(raw || '[]');
+					return new Set(Array.isArray(parsed) ? parsed.filter(Boolean) : []);
+				} catch {
+					return new Set();
+				}
+			}
+
+			function persistDismissedQueueTaskIds() {
+				try {
+					window.localStorage.setItem(
+						'kanban.dismissedQueueTaskIds',
+						JSON.stringify(Array.from(dismissedQueueTaskIds))
+					);
+				} catch (err) {
+					console.warn('[Kanban] Failed to persist dismissed queue tasks:', err.message);
+				}
+			}
+
+			function queueTaskIdOf(taskLike) {
+				return String(taskLike?.queueTaskId || taskLike?._id || taskLike?.taskId || '').trim();
+			}
+
+			function kanbanTaskIdForQueue(queueTaskId) {
+				return `queue-${queueTaskId}`;
+			}
+
+			function isQueueTask(task) {
+				return task?.origin === 'queue' || Boolean(task?.queueTaskId);
+			}
+
+			function inferQueueTaskTitle(queueTask = {}) {
+				const raw = String(
+					queueTask.title
+					|| queueTask.rawPrompt
+					|| queueTask.enrichedPrompt
+					|| queueTask.prompt
+					|| 'Queued task'
+				).trim();
+				return raw.split('\n')[0].slice(0, 140) || 'Queued task';
+			}
+
+			function normalizeQueueTask(queueTask = {}, existingTask = null) {
+				const queueTaskId = queueTaskIdOf(queueTask);
+				if (!queueTaskId) return null;
+				const status = String(queueTask.status || existingTask?.originalStatus || 'draft').toLowerCase();
+				const existingLogs = String(existingTask?.logs || '').trim();
+				const resultText = String(queueTask.result || queueTask.errorMessage || '').trim();
+				const logs = existingLogs && resultText && !existingLogs.includes(resultText)
+					? `${existingLogs}\n${resultText}`
+					: existingLogs || resultText;
+				return {
+					id: existingTask?.id || kanbanTaskIdForQueue(queueTaskId),
+					queueTaskId,
+					title: inferQueueTaskTitle(queueTask),
+					description: queueTask.enrichedPrompt || queueTask.rawPrompt || existingTask?.description || '',
+					status: mapTaskStatus(status),
+					originalStatus: status,
+					order: Number.isFinite(existingTask?.order) ? existingTask.order : tasks.length,
+					files: Array.isArray(queueTask.impactedFiles) ? queueTask.impactedFiles : (existingTask?.files || []),
+					action: existingTask?.action || '',
+					verify: existingTask?.verify || '',
+					done: existingTask?.done || '',
+					dependencies: Array.isArray(queueTask.dependencies) ? queueTask.dependencies : (existingTask?.dependencies || []),
+					inferredDependencies: Array.isArray(queueTask.inferredDependencies) ? queueTask.inferredDependencies : (existingTask?.inferredDependencies || []),
+					dependencyState: queueTask.dependencyState || existingTask?.dependencyState || 'pending',
+					blockedBy: Array.isArray(queueTask.blockedBy) ? queueTask.blockedBy : (existingTask?.blockedBy || []),
+					origin: 'queue',
+					launchMode: queueTask.launchMode || existingTask?.launchMode || 'queued',
+					resumable: queueTask.resumable !== false,
+					resumeCount: Number(queueTask.resumeCount || existingTask?.resumeCount || 0),
+					startedAt: queueTask.startedAt || existingTask?.startedAt || null,
+					projectPath: queueTask.projectPath || existingTask?.projectPath || null,
+					schedulerSource: 'queue',
+					prompt: queueTask.enrichedPrompt || queueTask.rawPrompt || existingTask?.prompt || null,
+					logs,
+					complexity: queueTask.complexity || existingTask?.complexity || null,
+					countdownRemaining: status === 'draft'
+						? (typeof queueTask.countdownRemaining === 'number'
+							? queueTask.countdownRemaining
+							: existingTask?.countdownRemaining)
+						: undefined,
+				};
+			}
+
+			function upsertQueueTask(queueTask) {
+				const queueTaskId = queueTaskIdOf(queueTask);
+				if (!queueTaskId || dismissedQueueTaskIds.has(queueTaskId)) return null;
+				const existingIndex = tasks.findIndex((task) => queueTaskIdOf(task) === queueTaskId);
+				const normalized = normalizeQueueTask(queueTask, existingIndex >= 0 ? tasks[existingIndex] : null);
+				if (!normalized) return null;
+				if (existingIndex >= 0) tasks[existingIndex] = normalized;
+				else tasks.push(normalized);
+				return normalized;
+			}
+
+			function removeQueueTask(queueTaskId, { dismiss = false } = {}) {
+				const normalizedId = String(queueTaskId || '').trim();
+				if (!normalizedId) return;
+				if (dismiss) {
+					dismissedQueueTaskIds.add(normalizedId);
+					persistDismissedQueueTaskIds();
+				}
+				tasks = tasks.filter((task) => queueTaskIdOf(task) !== normalizedId);
+			}
+
+			function mergeQueueTasks(fileTasks, liveQueueTasks = []) {
+				const merged = [...fileTasks];
+				liveQueueTasks.forEach((task) => {
+					if (!isQueueTask(task)) return;
+					const queueTaskId = queueTaskIdOf(task);
+					if (!queueTaskId || dismissedQueueTaskIds.has(queueTaskId)) return;
+					const existingIndex = merged.findIndex((candidate) => queueTaskIdOf(candidate) === queueTaskId);
+					const normalized = normalizeQueueTask(task, existingIndex >= 0 ? merged[existingIndex] : null);
+					if (!normalized) return;
+					if (existingIndex >= 0) merged[existingIndex] = normalized;
+					else merged.push(normalized);
+				});
+				return merged;
+			}
+
+			async function hydrateQueueTasks() {
+				try {
+					const result = await window.electronAPI?.tqGetAll();
+					if (!result?.ok || !Array.isArray(result.value)) return;
+					let changed = false;
+					result.value.forEach((queueTask) => {
+						const queueTaskId = queueTaskIdOf(queueTask);
+						const status = String(queueTask.status || '').toLowerCase();
+						if (!queueTaskId) return;
+						if (status === 'cancelled') {
+							const before = tasks.length;
+							removeQueueTask(queueTaskId);
+							if (tasks.length !== before) changed = true;
+							return;
+						}
+						const before = JSON.stringify(tasks.find((task) => queueTaskIdOf(task) === queueTaskId) || null);
+						const normalized = upsertQueueTask(queueTask);
+						if (JSON.stringify(normalized || null) !== before) changed = true;
+					});
+					if (changed) {
+						renderTasks();
+						saveTasksToFile();
+					}
+				} catch (err) {
+					console.warn('[Kanban] Failed to hydrate queue tasks:', err.message);
+				}
+			}
 
 		// Debounced reload to prevent rapid successive reloads
 		function scheduleReload() {
 			if (reloadTimeout) clearTimeout(reloadTimeout);
 			reloadTimeout = setTimeout(() => {
-				loadTasksFromFile();
+				loadTasksFromFile().then(() => hydrateQueueTasks());
 				reloadTimeout = null;
 			}, 500);
 		}
@@ -495,34 +661,76 @@
 		// Map task.status to kanban column status
 		function mapTaskStatus(status) {
 			if (!status) return 'TODO';
-			// Ship skill uses: PENDING, IN_PROGRESS, COMPLETED, FAILED
-			// Kanban uses: TODO, IN_PROGRESS, DONE
-			switch (status.toUpperCase()) {
-				case 'PENDING': return 'TODO';
-				case 'IN_PROGRESS': return 'IN_PROGRESS';
+			switch (String(status).toUpperCase()) {
+				case 'DRAFT':
+				case 'PENDING':
+				case 'QUEUED':
+				case 'BLOCKED':
+				case 'FAILED':
+				case 'CANCELLED':
+				case 'TODO':
+					return 'TODO';
+				case 'IN_PROGRESS':
+				case 'RUNNING':
+				case 'RESUMING':
+					return 'IN_PROGRESS';
 				case 'COMPLETED':
-				case 'DONE': return 'DONE';
-				case 'FAILED': return 'TODO';
-				default: return 'TODO';
+				case 'DONE':
+					return 'DONE';
+				default:
+					return 'TODO';
 			}
 		}
 
 		// Reverse map: kanban status back to ship status
-		function mapStatusToOriginal(status) {
-			switch (status) {
-				case 'TODO': return 'PENDING';
-				case 'IN_PROGRESS': return 'IN_PROGRESS';
-				case 'DONE': return 'COMPLETED';
-				default: return 'PENDING';
+		function mapStatusToOriginal(status, originalStatus) {
+			if (status === 'TODO') {
+				const raw = String(originalStatus || '').toLowerCase();
+				if (['queued', 'blocked', 'failed', 'cancelled', 'draft'].includes(raw)) return raw;
+				return 'queued';
+			}
+			if (status === 'IN_PROGRESS') {
+				const raw = String(originalStatus || '').toLowerCase();
+				return raw === 'resuming' ? 'resuming' : 'running';
+			}
+			if (status === 'DONE') return 'completed';
+			return 'queued';
+		}
+
+			function getStatusBadge(task) {
+				const raw = String(task.originalStatus || task.status || '').toLowerCase();
+				switch (raw) {
+					case 'queued':
+					case 'pending':
+						return 'queued';
+					case 'draft':
+						return typeof task.countdownRemaining === 'number'
+							? `draft ${task.countdownRemaining}s`
+							: 'draft';
+				case 'blocked':
+					return 'blocked';
+				case 'resuming':
+					return 'resuming';
+				case 'running':
+				case 'in_progress':
+					return 'running';
+				case 'completed':
+				case 'done':
+					return 'completed';
+				case 'failed':
+					return 'failed';
+				case 'cancelled':
+					return 'cancelled';
+				default:
+					return raw || 'queued';
 			}
 		}
 
-		// Load tasks from tasks.json via IPC
-		async function loadTasksFromFile() {
-			try {
-				const loaded = await window.electronAPI?.loadKanbanTasks() || [];
-
-				if (Array.isArray(loaded) && loaded.length > 0) {
+			// Load tasks from tasks.json via IPC
+			async function loadTasksFromFile() {
+				try {
+					const loaded = await window.electronAPI?.loadKanbanTasks() || [];
+					const prevQueueTasks = tasks.filter((task) => isQueueTask(task));
 					// Preserve in-memory logs for tasks that are actively streaming
 					// (file-watcher reloads can clobber live-streamed logs that haven't been flushed to disk yet)
 					const prevLogsByTaskId = {};
@@ -538,17 +746,14 @@
 						if (now - info.timestamp > 10000) recentlyCompletedTasks.delete(tid);
 					}
 
-					tasks = loaded.map((task, idx) => {
+					const fileTasks = Array.isArray(loaded) ? loaded.map((task, idx) => {
 						const id = task.id || `task-${idx + 1}`;
 						const diskLogs = task.logs || '';
-						// For actively streaming tasks, keep whichever logs are longer
-						// (in-memory always has the latest streamed content; disk may lag by up to 2s)
 						const preservedLogs = prevLogsByTaskId[id];
 						const finalLogs = preservedLogs && preservedLogs.length > diskLogs.length
 							? preservedLogs
 							: diskLogs;
 
-						// Determine status — prevent regression from DONE back to IN_PROGRESS
 						let finalStatus = mapTaskStatus(task.status);
 						const recentCompletion = recentlyCompletedTasks.get(id);
 						if (recentCompletion && finalStatus === 'IN_PROGRESS') {
@@ -558,6 +763,7 @@
 
 						return {
 							id,
+							queueTaskId: task.queueTaskId || null,
 							title: task.title || 'Untitled',
 							description: task.description || '',
 							status: finalStatus,
@@ -567,22 +773,37 @@
 							action: task.action || '',
 							verify: task.verify || '',
 							done: task.done || '',
+							dependencies: task.dependencies || task.dependsOn || [],
+							inferredDependencies: task.inferredDependencies || [],
+							dependencyState: task.dependencyState || 'ready',
+							blockedBy: task.blockedBy || [],
+							origin: task.origin || 'kanban',
+							launchMode: task.launchMode || 'manual',
+							resumable: task.resumable !== false,
+							resumeCount: Number(task.resumeCount || 0),
+							startedAt: task.startedAt || null,
+							projectPath: task.projectPath || null,
+							schedulerSource: task.schedulerSource || 'tasks.json',
+							prompt: task.prompt || null,
 							logs: finalLogs,
+							complexity: task.complexity || null,
+							countdownRemaining: typeof task.countdownRemaining === 'number' ? task.countdownRemaining : undefined,
 						};
-					});
+					}) : [];
+
+					tasks = mergeQueueTasks(fileTasks, prevQueueTasks);
 
 					const maxId = Math.max(...tasks.map(t => {
-						const match = t.id.match(/task-(\d+)/);
+						const match = String(t.id || '').match(/task-(\d+)/);
 						return match ? Number.parseInt(match[1]) : 0;
 					}), 0);
 					taskIdCounter = maxId + 1;
 					console.log('[Kanban] Loaded', tasks.length, 'tasks:', tasks.map(t => `${t.id}(${t.status})`).join(', '));
+				} catch (err) {
+					console.error('[Kanban] Error loading tasks:', err);
 				}
-			} catch (err) {
-				console.error('[Kanban] Error loading tasks:', err);
+				renderTasks();
 			}
-			renderTasks();
-		}
 
 		// Save tasks back to tasks.json
 		async function saveTasksToFile() {
@@ -591,13 +812,28 @@
 					id: t.id,
 					title: t.title,
 					description: t.description,
-					status: mapStatusToOriginal(t.status),
+					status: mapStatusToOriginal(t.status, t.originalStatus),
 					order: t.order,
 					files: t.files,
 					action: t.action,
 					verify: t.verify,
 					done: t.done,
-					logs: t.logs || ''
+					dependencies: t.dependencies || [],
+					inferredDependencies: t.inferredDependencies || [],
+					dependencyState: t.dependencyState || 'ready',
+					blockedBy: t.blockedBy || [],
+					origin: t.origin || 'kanban',
+					queueTaskId: t.queueTaskId || null,
+					launchMode: t.launchMode || 'manual',
+					resumable: t.resumable !== false,
+					resumeCount: t.resumeCount || 0,
+					startedAt: t.startedAt || null,
+					projectPath: t.projectPath || null,
+					schedulerSource: t.schedulerSource || 'tasks.json',
+					prompt: t.prompt || null,
+					logs: t.logs || '',
+					complexity: t.complexity || null,
+					countdownRemaining: typeof t.countdownRemaining === 'number' ? t.countdownRemaining : undefined
 				}));
 				
 				const result = await window.electronAPI?.saveKanbanTasks(toSave);
@@ -644,20 +880,24 @@
 			
 			// Attach clean button handler for DONE column
 			const cleanDoneBtn = document.getElementById('clean-done-btn');
-			if (cleanDoneBtn && !cleanDoneBtn.dataset.attached) {
-				cleanDoneBtn.dataset.attached = 'true';
-				cleanDoneBtn.onclick = (e) => {
-					e.stopPropagation();
-					const doneTasks = tasks.filter(t => t.status === 'DONE');
-					if (doneTasks.length === 0) {
-						alert('No done tasks to clean.');
-						return;
-					}
-					tasks = tasks.filter(t => t.status !== 'DONE');
-					renderTasks();
-					saveTasksToFile();
-					console.log(`[Kanban] Cleaned ${doneTasks.length} done tasks`);
-				};
+				if (cleanDoneBtn && !cleanDoneBtn.dataset.attached) {
+					cleanDoneBtn.dataset.attached = 'true';
+					cleanDoneBtn.onclick = (e) => {
+						e.stopPropagation();
+						const doneTasks = tasks.filter(t => t.status === 'DONE');
+						if (doneTasks.length === 0) {
+							alert('No done tasks to clean.');
+							return;
+						}
+						doneTasks
+							.filter((task) => isQueueTask(task))
+							.forEach((task) => dismissedQueueTaskIds.add(task.queueTaskId));
+						persistDismissedQueueTaskIds();
+						tasks = tasks.filter(t => t.status !== 'DONE');
+						renderTasks();
+						saveTasksToFile();
+						console.log(`[Kanban] Cleaned ${doneTasks.length} done tasks`);
+					};
 			}
 		}
 
@@ -687,7 +927,7 @@
 				statusTasks.forEach(task => {
 					const taskEl = document.createElement('div');
 					taskEl.className = 'task' + (task.status === 'DONE' ? ' task-done' : '');
-					taskEl.draggable = true;
+						taskEl.draggable = !isQueueTask(task);
 					taskEl.dataset.taskId = task.id;
 					taskEl.title = task.description;
 
@@ -707,11 +947,14 @@
 					const titleEl = document.createElement('div');
 					titleEl.className = 'title';
 					titleEl.textContent = task.title;
+					const statusEl = document.createElement('div');
+					statusEl.className = 'task-status';
+					statusEl.textContent = getStatusBadge(task);
 
 					const actionsEl = document.createElement('div');
 					actionsEl.className = 'task-actions';
 
-					if (task.status === 'TODO') {
+						if (task.status === 'TODO' && !isQueueTask(task)) {
 						// "▶ Run" — executes task autonomously via Claude Code SDK
 						const runBtn = document.createElement('button');
 						runBtn.textContent = '▶ Run';
@@ -721,6 +964,7 @@
 							runBtn.disabled = true;
 							runBtn.textContent = '⏳';
 							task.status = 'IN_PROGRESS';
+							task.originalStatus = 'running';
 							task.logs = '';
 							sdkRunningTasks.add(task.id);
 							activelyStreamingTasks.add(task.id);
@@ -746,13 +990,14 @@
 						startBtn.title = 'Mark as in-progress (manual work)';
 						startBtn.onclick = () => {
 							task.status = 'IN_PROGRESS';
+							task.originalStatus = 'running';
 							task.logs = '';
 							renderTasks();
 							saveTasksToFile();
 							syncTasksToConvex();
 						};
 						actionsEl.appendChild(startBtn);
-					} else if (task.status === 'IN_PROGRESS') {
+					} else if (task.status === 'IN_PROGRESS' && !isQueueTask(task)) {
 						const isRunningSDK = sdkRunningTasks.has(task.id);
 						if (isRunningSDK) {
 							// SDK is actively running — show pulsing indicator
@@ -771,6 +1016,7 @@
 						finishBtn.title = 'Mark task as completed';
 						finishBtn.onclick = () => {
 							task.status = 'DONE';
+							task.originalStatus = 'completed';
 							sdkRunningTasks.delete(task.id);
 							activelyStreamingTasks.delete(task.id);
 							renderTasks();
@@ -784,30 +1030,49 @@
 					const delBtn = document.createElement('button');
 					delBtn.innerHTML = '&times;';
 					delBtn.className = 'delete-btn';
-					delBtn.title = 'Delete task';
-					delBtn.onclick = () => {
-						sdkRunningTasks.delete(task.id);
-						activelyStreamingTasks.delete(task.id);
-						tasks = tasks.filter(t => t.id !== task.id);
-						renderTasks();
-						saveTasksToFile();
-						syncTasksToConvex();
-					};
+						delBtn.title = isQueueTask(task)
+							? (task.status === 'DONE' ? 'Hide task' : 'Cancel task')
+							: 'Delete task';
+						delBtn.onclick = async () => {
+							sdkRunningTasks.delete(task.id);
+							activelyStreamingTasks.delete(task.id);
+							if (isQueueTask(task)) {
+								if (task.status === 'DONE') {
+									removeQueueTask(task.queueTaskId, { dismiss: true });
+								} else {
+									const result = await window.electronAPI?.tqCancelTask(task.queueTaskId);
+									if (!result?.ok) {
+										alert(`Failed to cancel task: ${result?.error || 'Unknown error'}`);
+										return;
+									}
+									removeQueueTask(task.queueTaskId);
+								}
+							} else {
+								tasks = tasks.filter(t => t.id !== task.id);
+							}
+							renderTasks();
+							saveTasksToFile();
+							syncTasksToConvex();
+						};
 					actionsEl.appendChild(delBtn);
 
+					taskEl.appendChild(statusEl);
 					taskEl.appendChild(titleEl);
 					taskEl.appendChild(actionsEl);
 
 					// Logs display — always show for IN_PROGRESS tasks (with placeholder if empty)
-					if (task.status === 'IN_PROGRESS' || task.logs) {
+					if (task.status === 'IN_PROGRESS' || task.logs || task.originalStatus === 'blocked') {
 						const logsEl = document.createElement('div');
 						logsEl.className = 'task-logs';
 						if (task.logs) {
 							logsEl.textContent = task.logs;
+						} else if (task.originalStatus === 'blocked' && Array.isArray(task.blockedBy) && task.blockedBy.length) {
+							logsEl.textContent = `Blocked by: ${task.blockedBy.join(', ')}`;
+							logsEl.style.opacity = '0.55';
 						} else if (task.status === 'IN_PROGRESS' && sdkRunningTasks.has(task.id)) {
 							logsEl.textContent = 'Waiting for output...';
 							logsEl.style.opacity = '0.4';
-						} else if (task.status === 'IN_PROGRESS') {
+						} else if (task.status === 'IN_PROGRESS' && !isQueueTask(task)) {
 							logsEl.textContent = 'No logs yet';
 							logsEl.style.opacity = '0.3';
 						}
@@ -1041,18 +1306,25 @@
 		}
 	};
 
-		// Clean up completed tasks
-		document.getElementById('clean-tasks').onclick = async () => {
-			try {
-				const result = await window.electronAPI?.kanbanRemoveCompleted();
-				if (result?.ok) {
-					if (result.removed > 0) {
-						console.log(`[Kanban] Cleaned ${result.removed} completed tasks`);
-						await loadTasksFromFile();
-						syncTasksToConvex();
-					} else {
-						alert('No completed tasks to clean.');
+			// Clean up completed tasks
+			document.getElementById('clean-tasks').onclick = async () => {
+				try {
+					const doneQueueTasks = tasks.filter((task) => isQueueTask(task) && task.status === 'DONE');
+					doneQueueTasks.forEach((task) => dismissedQueueTaskIds.add(task.queueTaskId));
+					if (doneQueueTasks.length > 0) {
+						persistDismissedQueueTaskIds();
+						tasks = tasks.filter((task) => !(isQueueTask(task) && task.status === 'DONE'));
 					}
+					const result = await window.electronAPI?.kanbanRemoveCompleted();
+					if (result?.ok) {
+						if (result.removed > 0 || doneQueueTasks.length > 0) {
+							console.log(`[Kanban] Cleaned ${result.removed} completed tasks`);
+							await loadTasksFromFile();
+							await hydrateQueueTasks();
+							syncTasksToConvex();
+						} else {
+							alert('No completed tasks to clean.');
+						}
 				} else {
 					alert(`Error: ${result?.error || 'Unknown error'}`);
 				}
@@ -1150,18 +1422,58 @@
 			}
 		};
 
-		loadTasksFromFile();
+		loadTasksFromFile().then(() => hydrateQueueTasks());
 
 		// Listen for tasks.json updates from file watcher
-		if (window.electronAPI) {
-			window.electronAPI.onKanbanTasksUpdated(() => {
+			if (window.electronAPI) {
+				window.electronAPI.onKanbanTasksUpdated(() => {
 				// Skip file-watcher reloads while SDK is actively streaming
 				if (activelyStreamingTasks.size > 0) return;
-				console.log('[Kanban] Detected tasks.json change, scheduling reload...');
-				scheduleReload();
-			});
+					console.log('[Kanban] Detected tasks.json change, scheduling reload...');
+					scheduleReload();
+				});
 
-			// Live log streaming from Claude Code SDK
+				window.electronAPI.onTqTaskUpdate((data) => {
+					const queueTaskId = queueTaskIdOf(data);
+					if (!queueTaskId) return;
+					if (String(data.status || '').toLowerCase() === 'cancelled') {
+						removeQueueTask(queueTaskId);
+						renderTasks();
+						saveTasksToFile();
+						return;
+					}
+
+					const existingTask = tasks.find((task) => queueTaskIdOf(task) === queueTaskId);
+					const queueTask = {
+						...(existingTask || {}),
+						...(data.task || {}),
+						...data,
+						_id: queueTaskId,
+						status: data.status || data.task?.status || existingTask?.originalStatus || 'draft',
+						countdownRemaining: existingTask?.countdownRemaining,
+					};
+					const normalized = upsertQueueTask(queueTask);
+					if (!normalized) return;
+					if (['completed', 'done', 'failed'].includes(String(queueTask.status || '').toLowerCase())) {
+						recentlyCompletedTasks.set(normalized.id, { status: normalized.status, timestamp: Date.now() });
+					}
+					renderTasks();
+					saveTasksToFile();
+				});
+
+				window.electronAPI.onTqCountdownState((data) => {
+					const queueTaskId = queueTaskIdOf(data);
+					if (!queueTaskId) return;
+					const task = tasks.find((candidate) => queueTaskIdOf(candidate) === queueTaskId);
+					if (!task) return;
+					task.countdownRemaining = data.remaining;
+					task.originalStatus = 'draft';
+					task.status = 'TODO';
+					scheduleRender();
+					saveTasksToFile();
+				});
+
+				// Live log streaming from Claude Code SDK
 			window.electronAPI.onKanbanCodeStream((data) => {
 				if (data.type === 'log' && data.taskId) {
 					// Mark task as actively streaming (prevents file-reload clobbering)
@@ -1190,6 +1502,7 @@
 					const newStatus = data.status === 'COMPLETED' ? 'DONE' : 'TODO';
 					if (task) {
 						task.status = newStatus;
+						task.originalStatus = data.status === 'COMPLETED' ? 'completed' : 'failed';
 						if (data.summary) {
 							task.logs = (task.logs || '') + '\n' + (newStatus === 'DONE' ? '✅' : '❌') + ' ' + data.summary;
 							// Keep last 50 lines

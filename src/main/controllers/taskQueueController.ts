@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import * as log from '../logger';
 import * as avatarWindow from '../windows/avatar-window';
+import * as kanbanWindow from '../windows/kanban-window';
 
 const TQ_CHANNELS = {
 	CREATE_TASK: 'tq:create-task',
@@ -17,13 +18,25 @@ const TQ_CHANNELS = {
 const countdowns = new Map<string, { timer: ReturnType<typeof setInterval>; remaining: number }>();
 
 function broadcastCountdown(taskId: string, remaining: number) {
-	const win = avatarWindow.get();
-	if (win) win.webContents.send(TQ_CHANNELS.COUNTDOWN_STATE, { taskId, remaining });
+	const targets = [avatarWindow.get(), kanbanWindow.get()].filter((win, index, all) => {
+		return Boolean(win) && all.findIndex((candidate) => candidate?.webContents?.id === win?.webContents?.id) === index;
+	});
+	targets.forEach((win: any) => {
+		if (win && !win.isDestroyed()) {
+			win.webContents.send(TQ_CHANNELS.COUNTDOWN_STATE, { taskId, remaining });
+		}
+	});
 }
 
 function broadcastTaskUpdate(update: any) {
-	const win = avatarWindow.get();
-	if (win) win.webContents.send(TQ_CHANNELS.TASK_UPDATE, update);
+	const targets = [avatarWindow.get(), kanbanWindow.get()].filter((win, index, all) => {
+		return Boolean(win) && all.findIndex((candidate) => candidate?.webContents?.id === win?.webContents?.id) === index;
+	});
+	targets.forEach((win: any) => {
+		if (win && !win.isDestroyed()) {
+			win.webContents.send(TQ_CHANNELS.TASK_UPDATE, update);
+		}
+	});
 }
 
 let convexClient: any = null;
@@ -62,6 +75,14 @@ export function register() {
 				projectPath,
 				rawPrompt,
 				status: 'draft',
+				origin: 'ipc:create-task',
+				launchMode: 'queued',
+				resumable: true,
+				resumeCount: 0,
+				dependencyState: 'pending',
+				dependencies: [],
+				inferredDependencies: [],
+				blockedBy: [],
 				createdAt: Date.now(),
 				updatedAt: Date.now(),
 			}, idempotencyKey);
@@ -71,6 +92,27 @@ export function register() {
 			}
 
 			const taskId = result.value;
+			broadcastTaskUpdate({
+				taskId,
+				created: true,
+				status: 'draft',
+				task: {
+					_id: taskId,
+					projectPath,
+					rawPrompt,
+					status: 'draft',
+					origin: 'ipc:create-task',
+					launchMode: 'queued',
+					resumable: true,
+					resumeCount: 0,
+					dependencyState: 'pending',
+					dependencies: [],
+					inferredDependencies: [],
+					blockedBy: [],
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+				},
+			});
 
 			const isDirectMode = behaviorEngineRef?.getDirectMode?.() ?? false;
 
@@ -83,6 +125,7 @@ export function register() {
 						enrichedPrompt: enriched.enrichedPrompt,
 						impactedFiles: enriched.impactedFiles,
 						complexity: enriched.complexity,
+						dependencyState: 'ready',
 						updatedAt: Date.now(),
 					});
 					broadcastTaskUpdate({ taskId, enriched: true, ...enriched });
@@ -94,7 +137,7 @@ export function register() {
 				if (isDirectMode) {
 					// Direct mode: skip countdown, queue immediately
 					log.info('TaskQueue', `Direct mode: auto-queuing task ${taskId} (no countdown)`);
-					await convexClient.updateQueueTask(taskId, { status: 'queued', updatedAt: Date.now() });
+					await convexClient.updateQueueTask(taskId, { status: 'queued', dependencyState: 'ready', updatedAt: Date.now() });
 					broadcastTaskUpdate({ taskId, status: 'queued' });
 				} else {
 					// Normal mode: start countdown after enrichment (or enrichment failure)
@@ -113,7 +156,7 @@ export function register() {
 	ipcMain.handle(TQ_CHANNELS.APPROVE_TASK, async (_, taskId: string) => {
 		clearCountdown(taskId);
 		if (!convexClient) return { ok: false, error: 'No Convex client' };
-		const result = await convexClient.updateQueueTask(taskId, { status: 'queued', updatedAt: Date.now() });
+		const result = await convexClient.updateQueueTask(taskId, { status: 'queued', dependencyState: 'ready', updatedAt: Date.now() });
 		broadcastTaskUpdate({ taskId, status: 'queued' });
 		return { ok: result.ok };
 	});
@@ -122,8 +165,8 @@ export function register() {
 	ipcMain.handle(TQ_CHANNELS.CANCEL_TASK, async (_, taskId: string) => {
 		clearCountdown(taskId);
 		if (!convexClient) return { ok: false, error: 'No Convex client' };
-		const result = await convexClient.updateQueueTask(taskId, { status: 'failed', errorMessage: 'Cancelled by user', updatedAt: Date.now() });
-		broadcastTaskUpdate({ taskId, status: 'failed' });
+		const result = await convexClient.updateQueueTask(taskId, { status: 'cancelled', errorMessage: 'Cancelled by user', updatedAt: Date.now() });
+		broadcastTaskUpdate({ taskId, status: 'cancelled' });
 		return { ok: result.ok };
 	});
 
@@ -162,7 +205,7 @@ function startCountdown(taskId: string) {
 					const allTasks = await convexClient.getAllQueueTasks();
 					const current = allTasks.ok && allTasks.value?.find((t: any) => String(t._id) === String(taskId));
 					if (current && current.status === 'draft') {
-						await convexClient.updateQueueTask(taskId, { status: 'queued', updatedAt: Date.now() });
+						await convexClient.updateQueueTask(taskId, { status: 'queued', dependencyState: 'ready', updatedAt: Date.now() });
 						broadcastTaskUpdate({ taskId, status: 'queued' });
 						log.info('TaskQueue', `Auto-approved task ${taskId}`);
 					} else {
