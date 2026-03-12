@@ -6,8 +6,8 @@ const { capture } = require('../screen-capture');
 const { runHelper } = require('../native-helper');
 const log = require('../logger');
 
-const TARS_URL = process.env.TARS_URL || 'https://ts.onyxden.com/action';
-const TARS_API_KEY = process.env.TARS_API_KEY || '3a5130687c176c5fb3a26d09e407dfe7d178d9cf0e81ee4a867172f8223499d8';
+const TARS_URL = process.env.TARS_URL || 'http://localhost:8100/action';
+const TARS_API_KEY = process.env.TARS_API_KEY || '';
 const TARS_MAX_DIMENSION = 1280;
 
 function resizeScreenshot(jpegBase64) {
