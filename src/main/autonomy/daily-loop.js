@@ -2,6 +2,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { EVENT_TYPES } = require('../../shared/event-types.js');
 const { createJsonStore } = require('../../shared/json-store');
+const { buildDailyDraft } = require('./daily-draft-summary');
 
 const LOOP_STATE_PATH = path.join(os.homedir(), '.iris', 'daily-loop.json');
 const loopStore = createJsonStore(LOOP_STATE_PATH, { lastRunDate: null });
@@ -65,23 +66,23 @@ class DailyLoop {
 			}, 'daily-loop');
 		}
 
-		const title = `Iris Daily Note — ${today}`;
-		const html = `<p>Short daily learning note for ${today}. Key insight: iterate with evidence, then simplify.</p>`;
+		const draft = buildDailyDraft({ date: today });
 		const draftResult = await this.createGhostDraft({
 			apiUrl: process.env.GHOST_ADMIN_URL || '',
 			adminApiKey: process.env.GHOST_ADMIN_API_KEY || '',
-			title,
-			html,
+			title: draft.title,
+			html: draft.html,
 			tags: ['iris', 'daily'],
 		});
 
 		if (draftResult.ok) {
 			await loopStore.set('lastRunDate', today);
 			this.convexClient.saveDailyDraft({
-				title,
+				title: draft.title,
 				date: today,
 				ghostId: draftResult.draft?.id || null,
 				status: 'draft',
+				summary: draft.summary,
 			}, `daily_draft_${today}`).catch(() => {});
 		}
 	}

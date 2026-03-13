@@ -1,4 +1,5 @@
 const assert = require('node:assert');
+const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -50,6 +51,33 @@ async function main() {
 
 	const restoreDate = installMockDate(fixedNow);
 	try {
+		const irisDir = path.join(tempHome, '.iris');
+		fsSync.mkdirSync(irisDir, { recursive: true });
+		await fs.writeFile(path.join(irisDir, 'learning_log.json'), JSON.stringify({
+			version: 1,
+			updatedAt: fixedNow,
+			events: [
+				{
+					classification: 'memory',
+					guidanceText: 'Remember the default browser instead of asking again.',
+					userText: 'use the actual default browser',
+				},
+			],
+		}, null, 2));
+		await fs.writeFile(path.join(irisDir, 'self_fix_issues.json'), JSON.stringify({
+			version: 1,
+			updatedAt: fixedNow,
+			issues: [
+				{
+					issueSignature: 'core_gap:browser',
+					description: 'Browser recall is still brittle',
+					canonicalDescription: 'browser recall still brittle',
+					count: 2,
+					status: 'pending',
+				},
+			],
+		}, null, 2));
+
 		const loop = new DailyLoop({
 			taskEngine: { hasHighPriorityRunning: () => false },
 			createGhostDraft: async (draft) => {
@@ -88,7 +116,10 @@ async function main() {
 	assert.strictEqual(utcKey, '2026-03-07', 'fixture should still be on the previous UTC date');
 	assert.strictEqual(ghostDraftCalls.length, 1, 'daily loop should create one draft for the local day');
 	assert.strictEqual(ghostDraftCalls[0].title, 'Iris Daily Note — 2026-03-08', 'draft title should use the local day');
+	assert.match(ghostDraftCalls[0].html, /Signals:/, 'draft html should summarize learning signals');
+	assert.match(ghostDraftCalls[0].html, /browser recall still brittle/i, 'draft html should include the top active issue');
 	assert.strictEqual(convexCalls[0].record.date, '2026-03-08', 'convex payload should use the local day');
+	assert.match(convexCalls[0].record.summary, /1 learning events, 1 active issues, 0 resolved issues/i, 'convex payload should persist the generated summary');
 	assert.strictEqual(state.lastRunDate, '2026-03-08', 'loop state should persist the local day');
 
 	console.log('Daily loop local date tests passed.');
