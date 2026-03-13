@@ -39,7 +39,7 @@ export function createScreenCaptureController({ gemini, onCapture = null }) {
 					if (!passive && capture.context) {
 						const ctx = capture.context;
 						gemini.sendRealtimeText(
-							`[SCREEN CONTEXT] Capture ID: ${ctx.captureId}. Image: ${ctx.imageWidth}x${ctx.imageHeight}px, Display: ${ctx.displayWidth}x${ctx.displayHeight}, Scale: ${ctx.scaleFactor}x, Cursor: (${ctx.cursorX}, ${ctx.cursorY}). IMPORTANT: Use the IMAGE pixel coordinates (from ${ctx.imageWidth}x${ctx.imageHeight} image) directly for mouse_move, click_at, double_click, and drag, and pass capture_id="${ctx.captureId}" with those pointer tools. Never reuse coordinates across different captures.`
+							`[SCREEN CONTEXT] Capture ID: ${ctx.captureId}. Captured: ${ctx.capturedAtIso || 'unknown'}. Image: ${ctx.imageWidth}x${ctx.imageHeight}px, Display: ${ctx.displayWidth}x${ctx.displayHeight}, Scale: ${ctx.scaleFactor}x, Display ID: ${ctx.displayId}, Cursor(image): (${ctx.cursorX}, ${ctx.cursorY}), Cursor(screen): (${ctx.cursorScreenX}, ${ctx.cursorScreenY}). IMPORTANT: Use the IMAGE pixel coordinates (from ${ctx.imageWidth}x${ctx.imageHeight} image) directly for mouse_move, click_at, double_click, and drag, and pass capture_id="${ctx.captureId}" with those pointer tools. Never reuse coordinates across different captures.`
 						);
 					}
 					gemini.sendImage(capture.data);

@@ -133,6 +133,7 @@ console.log('Running V2 behavior rules tests...');
 	const promptSrc = fs.readFileSync('src/renderer/gemini/system-prompt.js', 'utf-8');
 	assert.ok(promptSrc.includes('your turn must start with tool calls'), 'system prompt requires tool-first behavior for direct computer-control requests');
 	assert.ok(promptSrc.includes('Do not say "Done", "I clicked it", or "I went there"'), 'system prompt forbids claiming UI actions without same-turn tool use');
+	assert.ok(promptSrc.includes('If a click depends on prior setup, do that setup first.'), 'system prompt requires setup before dependent click actions');
 }
 
 console.log('V2 behavior rules tests passed.');

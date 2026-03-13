@@ -5,10 +5,512 @@ function containsAny(text, patterns) {
 	return patterns.some((pattern) => normalized.includes(normalizeText(pattern)));
 }
 
+function matchesTransliteratedWhatAreYouDoing(text = '') {
+	return /(হোয়াট|হোয়াট|ह्वाट|व्हाट|वाट)\s+(আর|आर|आर)\s+(ইউ|यू)\s+(ডুইং|ডूইং|डुइंग|डूइंग)/i.test(String(text || '').trim());
+}
+
+function matchesTransliteratedWhatsDoneAlready(text = '') {
+	return /(হোয়াটস|হোয়াটস|व्हाट्स|व्हाट)\s+(ডান|ডোন|डन|डोन)\s+(অলরেডি|আলরেডি|अलरेडी|ऑलरेडी)/i.test(String(text || '').trim());
+}
+
+const POINTER_TOOL_NAMES = new Set(['click_at', 'double_click', 'mouse_move', 'drag']);
+
+function hasPointerActivity(events = []) {
+	return events.some((item) => item && POINTER_TOOL_NAMES.has(item.name));
+}
+
+function hasRecentPointerContext(context = {}) {
+	const recentTools = Array.isArray(context.recentToolExecutions) ? context.recentToolExecutions.slice(-6) : [];
+	return recentTools.some((item) => {
+		if (!item || !item.name) return false;
+		return POINTER_TOOL_NAMES.has(item.name) || (item.name === 'run_ui_task' && item.success === false);
+	});
+}
+
+function looksLikeGenericPointerCorrection(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	if (/\b(screen|screenshot|display|monitor|status bar|menu bar|default browser|default mail|default app)\b/.test(normalized)) {
+		return false;
+	}
+	if (/\b(what are you doing|whats done already|what's done already|keep working|continue working)\b/.test(normalized)) {
+		return false;
+	}
+	if (/\b(click|open|tap|press|select|move|drag)\b.{0,20}\b(there|here|that|this|it)\b/.test(normalized)) return true;
+	if (/\b(move|drag)\b.{0,20}\b(mouse|cursor|pointer)\b/.test(normalized)) return true;
+	if (/\b(make your move|move your move|your move)\b/.test(normalized)) return true;
+	return /[^\u0000-\u007f]/.test(text) && normalized.split(/\s+/).length <= 12;
+}
+
+function buildScreenReferencePolicyPayload(text = '', confidence = 0.94) {
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.screen_reference_direct_action',
+		value: {
+			enabled: true,
+			message: 'When the user gives a deictic or otherwise ambiguous pointer correction during active UI work, treat it as a screen-referential request. Use the latest screen context and visible target instead of asking them to restate or point again.',
+			evidence: text.trim(),
+		},
+		source: 'user_correction',
+		confidence,
+		evidence: text,
+	};
+}
+
+function buildActionVerificationPolicyPayload(text = '', confidence = 0.97) {
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.action_verification',
+		value: {
+			enabled: true,
+			message: 'For screen-based actions, never claim "clicked", "opened", or "went there" until a fresh screenshot, DOM/app checkpoint, or other direct verification confirms the result. Do not rely on stale screenshots when deciding where to click. If verification is unavailable, say the action is unverified or blocked instead of claiming success.',
+			evidence: text.trim(),
+		},
+		source: 'user_correction',
+		confidence,
+		evidence: text,
+	};
+}
+
+function buildPreClickPreparationPolicyPayload(text = '', confidence = 0.96) {
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.pre_click_preparation',
+		value: {
+			enabled: true,
+			message: 'When a UI task depends on a specific app or window, open or focus that app first, refresh the screen context, and only then use pointer actions or resolve visible targets. Treat run_ui_task -> open_app recovery as missing preparation rather than a reason to ask the user for the same guidance again.',
+			evidence: text.trim(),
+		},
+		source: 'observed_recovery',
+		confidence,
+		evidence: text,
+	};
+}
+
+function isStatusBarIconCorrection(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const mentionsBar = /\b(status bar|menu bar)\b/.test(normalized);
+	const mentionsIcon = /\b(icon|indicator|toggle|item)\b/.test(normalized)
+		|| /\b(battery|wifi|wi-fi|bluetooth|volume|clock|focus|control center)\b/.test(normalized);
+	const asksAboutVisibility = /\b(do|can|now do|now can|are)\s+you\s+(see|seeing|spot|find|notice|read)\b/.test(normalized);
+	return mentionsBar && mentionsIcon && asksAboutVisibility;
+}
+
+function isScreenReferenceCorrection(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const mentionsScreen = /\b(screen|screenshot|display|monitor)\b/.test(normalized);
+	const asksAboutVision = /\b(can you|cant you|cannot you|why (?:can|cant|cannot) you|you can)\s+(see|watch|read)\b/.test(normalized);
+	const deicticAction = /\b(click|open|tap|select|press)\b/.test(normalized) && /\b(there|here|that|this|where i (?:said|told you|pointed)|the one i (?:said|told you))\b/.test(normalized);
+	return (mentionsScreen && /\b(click|open|tap|select|press|see|read)\b/.test(normalized)) || asksAboutVision || deicticAction;
+}
+
+function isVisibleControlReferenceCorrection(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const mentionsNamedControl = /\b(focus toggle|focus mode toggle|mute button|share switch|toggle|button|switch|checkbox|tab|icon)\b/.test(normalized);
+	const asksAboutSeeingControl = /\b(do|can|did)\s+you\s+see\b/.test(normalized) && mentionsNamedControl;
+	const deicticControlAction = mentionsNamedControl
+		&& /\b(click|open|tap|select|press|toggle|enable|disable|turn on|turn off)\b/.test(normalized)
+		&& /\b(there|here|that|this|it|the)\b/.test(normalized);
+	return asksAboutSeeingControl || deicticControlAction;
+}
+
+function isScreenVisibilityQuestion(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	if (!/\b(screen|screenshot|display|monitor)\b/.test(normalized)) return false;
+	if (/\b(click|open|tap|select|press|drag|scroll|type)\b/.test(normalized)) return false;
+	if (/\b(there|here|that|this)\b/.test(normalized)) return false;
+	return /\b(do|can|cant|cannot|are)\s+you\s+(see|seeing|watch|watching|read|reading)\b/.test(normalized)
+		|| /\bdo you see my screen\b/.test(normalized)
+		|| /\bcan you see my screen\b/.test(normalized)
+		|| /\byou see my screen\b/.test(normalized);
+}
+
+function isActionVerificationGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const mentionsVerification = /\b(verif\w*|check|confirm(?:ation|ed)?|validated?)\b/.test(normalized);
+	const mentionsFalseClaim = /\b(you say you did|you said you did|say you clicked|say you opened|say you went|already went to that page|not actually gone to that page|havent actually gone to that page|have not actually gone to that page)\b/.test(normalized);
+	const mentionsStaleScreen = /\b(outdated|stale|old)\b.{0,20}\b(screen|screenshot|capture|image)s?\b|\b(screen|screenshot|capture|image)s?\b.{0,20}\b(outdated|stale|old)\b/.test(normalized);
+	const mentionsPointerAction = /\b(click|tap|open|go|went|gone|page)\b/.test(normalized);
+	const mentionsTiming = /\bbefore (?:you )?(?:tap|click|say|claim|report)\b/.test(normalized);
+	return (
+		(mentionsVerification && (mentionsFalseClaim || mentionsStaleScreen || mentionsPointerAction))
+		|| (mentionsFalseClaim && mentionsStaleScreen)
+		|| (mentionsVerification && mentionsTiming)
+	);
+}
+
+function needsPreparationBeforeClick(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	return (
+		/\bbefore (?:you )?(?:click|right click|double click)\b/.test(normalized)
+		|| /\b(?:need|needs|have|has|had|should|must|want|wants)\s+to\b.{0,80}\bbefore\b.{0,40}\b(?:click|right click|double click)\b/.test(normalized)
+		|| /\b(?:first|start by)\b.{0,80}\b(?:then|before)\b.{0,40}\b(?:click|right click|double click)\b/.test(normalized)
+		|| /\b(?:prepare|prep|focus|open|run|search|launch)\b.{0,80}\b(?:before|then)\b.{0,40}\b(?:click|right click|double click)\b/.test(normalized)
+	);
+}
+
+function isScreenReferentialGoal(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	if (/\b(click|open|tap|press|select)\b.{0,20}\b(there|here|that|this|it)\b/.test(normalized)) return true;
+	if (/\b(where i (?:said|told you|pointed)|the one i (?:said|told you))\b/.test(normalized)) return true;
+	if (/\b(written there|what is written there|that channel|that link|that button|that result)\b/.test(normalized)) return true;
+	return false;
+}
+
+function isAutonomousContinuationGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const mentionsContinue = /\b(keep working(?: on (?:it|this|the task))?|keep going|continue working|continue on (?:it|this|the task)|dont stop|don't stop|until i get back|while im away|while i'm away|when im back|when i'm back)\b/.test(normalized);
+	const mentionsAbsenceWindow = /\b(i(?:'| a)?ll get back (?:in|after) (?:a |few |couple of )?hours?|get back in a few hours|be back in a few hours|until then|till then|til then)\b/.test(normalized);
+	const mentionsBacklogClearance = /\b(clear(?: out)? (?:all )?(?:your|the)? ?(?:todo|to do|to-do|tasks?|backlog)|finish (?:off )?(?:your|the)? ?(?:todo|to do|tasks?|backlog)|wrap up (?:your|the)? ?(?:todo|to do|tasks?|backlog))\b/.test(normalized);
+	const mentionsSelfVerification = /\b(self[- ]?verif(?:y|ying)|keep (?:self )?verifying|verify yourself|verify your(?:self| work)|check your own work|keep checking)\b/.test(normalized);
+	const mentionsSelfInput = /\b(giv(?:e|ing) yourself input|feed yourself input|generate your own (?:next )?input|decide the next step yourself|figure out the next step yourself)\b/.test(normalized);
+	const mentionsAutonomy = /\b(work autonomously|autonomously|on your own|by yourself)\b/.test(normalized);
+	return (
+		((mentionsContinue || mentionsAbsenceWindow) && (mentionsSelfVerification || mentionsSelfInput || mentionsAutonomy || mentionsBacklogClearance))
+		|| (mentionsContinue && mentionsBacklogClearance)
+		|| (mentionsAbsenceWindow && mentionsBacklogClearance)
+		|| (mentionsSelfVerification && mentionsSelfInput)
+	);
+}
+
+function isProgressAccountabilityGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const asksCurrentWork = /\b(what are you (?:doing|working on)|whatre you doing|whats happening|what is happening|where are you at|what's the status|status update|progress update)\b/.test(normalized)
+		|| matchesTransliteratedWhatAreYouDoing(text);
+	const asksCompletedWork = /\b(what(?:'s| is)? done already|whats done already|what have you done|what did you finish|what is finished|what's finished|done already|already done)\b/.test(normalized)
+		|| matchesTransliteratedWhatsDoneAlready(text);
+	const asksBoth = (/\bwhat are you doing\b/.test(normalized) || matchesTransliteratedWhatAreYouDoing(text))
+		&& (/\bdone already\b/.test(normalized) || matchesTransliteratedWhatsDoneAlready(text));
+	return asksCurrentWork || asksBoth || (asksCurrentWork && asksCompletedWork);
+}
+
+function isTerminalLogObservabilityGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized && !String(text || '').trim()) return false;
+	const mentionsTerminal = /\b(terminal|console)\b/.test(normalized) || /(टर्मिनल|कन्सोल|कंसोल)/.test(text);
+	if (!mentionsTerminal) return false;
+	const mentionsLogs = /\b(runtime log|runtime logs|run time log|run time logs|logs|log output|console output|terminal output|stdout|stderr)\b/.test(normalized)
+		|| /(रन\s*टाइम|रनटाइम|लॉग|लॉग्स|आउटपुट)/.test(text);
+	const asksVisibility = /\b(do|can|did|are)\s+you\s+(see|seeing|read|reading|notice|spot)\b/.test(normalized)
+		|| /\bdo you see\b/.test(normalized)
+		|| /(डू यू सी|सी|रीड|देख)/i.test(text);
+	return mentionsTerminal && (mentionsLogs || asksVisibility);
+}
+
+function isTaskCreationAccountabilityGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const mentionsTasks = /\b(task|tasks|todo|to do|backlog)\b/.test(normalized)
+		|| /(टास्क|टास्क्स|कामहरू|कामहर|काम)/.test(text);
+	const mentionsCreation = /\b(created|create|queued|queue|opened|open|made|added|spawned)\b/.test(normalized)
+		|| /(क्रिएटेड|क्रिएट|क्युड|क्यूड|ओपन|बनाए|एडेड)/.test(text);
+	const asksOverview = /\b(tell me about|what all|show me|list|summari[sz]e|everything|details?|regarding|regards|for this|for this task|for this issue)\b/.test(normalized)
+		|| /(टेल मी|अबाउट|ऑल|एवरीथिंग|डिटेल|रिगार्ड्स|दिस)/.test(text);
+	return mentionsTasks && mentionsCreation && asksOverview;
+}
+
+function isEditorSelfImprovementGeneralizationGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const mentionsRepeatedTeaching = (
+		/\b(keep telling you|keep teaching you|ive just taught you|i've just taught you|stop asking|same guidance|every time)\b/.test(normalized)
+		|| /\b(how many times do i have to tell you|i have to tell you again|told you already|already told you|why do i need to tell you again)\b/.test(normalized)
+		|| /(कति\s*चोटी|कति\s*पटक|कति\s*चोटि|बार\s*बार|फेरि\s*भन्नु|फेरि\s*भन|कतिचोटी)/i.test(text)
+		|| /(বলেছি|বলেন|বলতে|বারবার|কত\s*বার|আবার\s*বল)/i.test(text)
+	);
+	const mentionsSelfModification = /\b(modify your own code|change your own code|improve yourself|fix yourself)\b/.test(normalized);
+	const mentionsGeneralization = /\b(generic way|generally|broader range|broader set|not in a specific problem|not specific problem solving|similar problems|range of problems)\b/.test(normalized);
+	return mentionsRepeatedTeaching && (mentionsSelfModification || mentionsGeneralization || !/^\s*$/.test(String(text || '')));
+}
+
+function isThoroughExecutionGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	return (
+		/\b(do it properly|do it well|do it right|do it thoroughly|do it carefully|be more thorough|be thorough|be more decisive|handle it properly|properly this time|just do it|do it already)\b/.test(normalized)
+		|| /\b(?:all\s*right|alright)\b.{0,20}\bdo it\b/.test(normalized)
+		|| /\bdo it\b.{0,30}\b(?:dont|don't)\s+hesitate\b/.test(normalized)
+		|| /\b(?:dont|don't)\s+hesitate\b/.test(normalized)
+		|| /बेसरी\s+गर/.test(text)
+	);
+}
+
+function isConflictResolutionContinuationGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const mentionsConflict = /\b(resolve|fix|handle|sort out|merge)\b.{0,24}\bconflicts?\b|\bconflicts?\b/.test(normalized)
+		|| /(कॉन्फ्लिक्ट|कन्फ्लिक्ट|कन्फ्लीक्ट|मर्ज\s*कॉन्फ्लिक्ट|कन्फ्लिक्ट्स)/i.test(text);
+	const mentionsResolve = /\b(resolve|fix|handle|sort out|merge)\b/.test(normalized)
+		|| /(रिजॉल्व|रिजल्व|रिजल्भ|सुल्झा)/i.test(text);
+	const mentionsContinue = /\b(continue|keep going|keep working|move on|carry on)\b/.test(normalized)
+		|| /(कंटिन्यू|कन्टिन्यू|जारी|अगाडि\s*बढ)/i.test(text);
+	const mentionsLightTouchReview = (
+		/\b(without|dont|don't|avoid|stop)\b.{0,24}\b(over[- ]?read(?:ing)?|overthink(?:ing)?|reading too much|digging too deep|deep reading)\b/.test(normalized)
+		|| (/\b(either|both)\b.{0,18}\b(change|changes|side|sides|version|versions|diff|diffs)\b/.test(normalized)
+			&& /\b(over[- ]?read(?:ing)?|overthink(?:ing)?|reading too much)\b/.test(normalized))
+		|| /(ओवर\s*रेड(?:िंग|ing)?|ओभर\s*रेड(?:िंग|ing)?)/i.test(text)
+		|| (/(इदर|ईदर|either)/i.test(text) && /(चेंज|चेन्ज|changes?)/i.test(text))
+	);
+	return mentionsConflict && mentionsResolve && mentionsContinue && mentionsLightTouchReview;
+}
+
+function isPresenceReassuranceGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const asksWhereabouts = /\b(where are you|where you at|where're you|wherere you|hello where are you)\b/.test(normalized);
+	const asksAvailability = /\b(are you there|you there|are you here|hello are you there|can you hear me|are you listening)\b/.test(normalized);
+	const nepaliPresence = /(हेलो\s*)?(कता|कहाँ|कताहो|कहां)\s*(हो|छौ|छ|chau|cha|chhau)?\s*(साथी)?/.test(normalized)
+		|| /\b(kata ho|kata chau|kata cha|kahaa chau|kaha chau|sathi)\b/.test(normalized);
+	return asksWhereabouts || asksAvailability || nepaliPresence;
+}
+
+function isBareAssistantAttentionPing(text = '', context = {}) {
+	const raw = String(text || '').trim();
+	if (!raw) return false;
+	const normalized = normalizeText(raw);
+	if (!normalized) return false;
+	const directNamePing = /^(?:hey[,\s]+|ok[,\s]+|okay[,\s]+)?iris(?:[- ]?chan)?[.!?…]*$/i.test(raw);
+	if (!directNamePing) return false;
+	const recentTurns = Array.isArray(context.recentTurns) ? context.recentTurns.slice(-6) : [];
+	const activeConversation = recentTurns.some((turn) => turn && String(turn.role || '') !== 'user' && String(turn.text || '').trim());
+	return activeConversation || hasRecentPointerContext(context);
+}
+
 class LearningClassifier {
 	classifyConversation(text = '', context = {}) {
 		const normalized = normalizeText(text);
 		if (!normalized) return null;
+		if (isAutonomousContinuationGuidance(normalized)) {
+			return {
+				type: 'memory',
+				key: 'policy.autonomous_self_drive',
+				reason: 'autonomous continuation guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.autonomous_self_drive',
+					value: {
+						enabled: true,
+						message: 'During autonomous coding or self-fix work, keep iterating without waiting for more user input. Self-verify each step, use verification results as the next input, keep working until the user returns, and clear the remaining todo/backlog before stopping unless a concrete blocker is reached.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.98,
+					evidence: text,
+				},
+			};
+		}
+		if (isProgressAccountabilityGuidance(normalized)) {
+			return {
+				type: 'memory',
+				key: 'policy.progress_accountability',
+				reason: 'progress accountability guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.progress_accountability',
+					value: {
+						enabled: true,
+						message: 'When the user asks what you are doing or what is already done during active work, answer with a concise progress report: current task, concrete completed work, next step, and any blocker. Do not ask them to restate the task if active work context already exists.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.97,
+					evidence: text,
+				},
+			};
+		}
+		if (isTerminalLogObservabilityGuidance(text)) {
+			return {
+				type: 'memory',
+				key: 'policy.terminal_log_observability',
+				reason: 'terminal log observability guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.terminal_log_observability',
+					value: {
+						enabled: true,
+						message: 'When the user asks whether you can see terminal output, runtime logs, or console lines that are visible on screen, inspect the visible terminal/log pane and answer concretely from the current screen context instead of asking them to repeat it. If the text is unreadable or capture is stale, report that concrete blocker.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.97,
+					evidence: text,
+				},
+			};
+		}
+		if (isTaskCreationAccountabilityGuidance(text)) {
+			return {
+				type: 'memory',
+				key: 'policy.task_creation_accountability',
+				reason: 'task creation accountability guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.task_creation_accountability',
+					value: {
+						enabled: true,
+						message: 'When the user asks about tasks you created, queued, or opened for the current work, answer from the active work state and task history instead of asking them to restate it. Summarize each relevant task for this request, its status, completed work, next step, and any blocker. Check tasks.json when available before saying context is missing.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.97,
+					evidence: text,
+				},
+			};
+		}
+		if (isEditorSelfImprovementGeneralizationGuidance(text)) {
+			return {
+				type: 'memory',
+				key: 'policy.editor_self_improvement_generalization',
+				reason: 'editor self-improvement generalization guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.editor_self_improvement_generalization',
+					value: {
+						enabled: true,
+						message: 'When repeated user friction reveals a reusable editor or self-modification pattern, update your own code in a generic way instead of fixing only the narrow case. Generalize the learned stop/continuation behavior across similar editor tasks and do not ask for the same guidance again when the surrounding pattern matches.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.98,
+					evidence: text,
+				},
+			};
+		}
+		if (isThoroughExecutionGuidance(text)) {
+			return {
+				type: 'memory',
+				key: 'policy.thorough_execution',
+				reason: 'thorough execution guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.thorough_execution',
+					value: {
+						enabled: true,
+						message: 'When the user gives terse follow-up guidance meaning "do it properly", "just do it", or "don\'t hesitate" during active work, continue the current task without asking them to restate it. Take a stronger end-to-end pass: investigate the root cause, complete the action decisively, rerun verification, and stop only at a concrete blocker.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.93,
+					evidence: text,
+				},
+			};
+		}
+		if (isConflictResolutionContinuationGuidance(text)) {
+			return {
+				type: 'memory',
+				key: 'policy.conflict_resolution_continuation',
+				reason: 'conflict resolution continuation guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.conflict_resolution_continuation',
+					value: {
+						enabled: true,
+						message: 'When resolving conflicts between two change sets during active work, do a light-touch comparison first. Do not over-read either side if the intent is already clear. Preserve compatible intent from both changes, resolve the conflict decisively, and continue the active task without asking for the same guidance again.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.97,
+					evidence: text,
+				},
+			};
+		}
+		if (isPresenceReassuranceGuidance(normalized)) {
+			return {
+				type: 'memory',
+				key: 'policy.presence_reassurance',
+				reason: 'presence reassurance guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.presence_reassurance',
+					value: {
+						enabled: true,
+						message: 'When the user greets you, says your name to get your attention, or asks where you are, answer briefly that you are here and listening. If active work is already in progress, treat a bare-name ping as a request for a concise status update instead of asking them to restate the task.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.96,
+					evidence: text,
+				},
+			};
+		}
+		if (isBareAssistantAttentionPing(text, context)) {
+			return {
+				type: 'memory',
+				key: 'policy.presence_reassurance',
+				reason: 'assistant attention ping guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.presence_reassurance',
+					value: {
+						enabled: true,
+						message: 'When the user greets you, says your name to get your attention, or asks where you are, answer briefly that you are here and listening. If active work is already in progress, treat a bare-name ping as a request for a concise status update instead of asking them to restate the task.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.97,
+					evidence: text,
+				},
+			};
+		}
+		if (isStatusBarIconCorrection(normalized)) {
+			return {
+				type: 'memory',
+				key: 'policy.status_bar_icon_visibility',
+				reason: 'status-bar icon visibility guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.status_bar_icon_visibility',
+					value: {
+						enabled: true,
+						message: 'When the user asks about a visible status or menu bar icon such as the battery indicator, inspect the latest screen context and answer concretely from what is visible instead of asking them to restate it.',
+					},
+					source: 'user_correction',
+					confidence: 0.98,
+					evidence: text,
+				},
+			};
+		}
+		if (needsPreparationBeforeClick(normalized)) {
+			return {
+				type: 'memory',
+				key: 'policy.pre_click_preparation',
+				reason: 'pre-click preparation guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.pre_click_preparation',
+					value: {
+						enabled: true,
+						message: 'When a click depends on prior setup, do the preparation first and verify the context before using pointer tools.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.94,
+					evidence: text,
+				},
+			};
+		}
 		if (containsAny(normalized, ['default browser', 'default mail', 'default app'])) {
 			return {
 				type: 'memory',
@@ -44,6 +546,77 @@ class LearningClassifier {
 				},
 			};
 		}
+		if (isScreenVisibilityQuestion(normalized)) {
+			return {
+				type: 'memory',
+				key: 'policy.screen_visibility_reassurance',
+				reason: 'screen visibility reassurance guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.screen_visibility_reassurance',
+					value: {
+						enabled: true,
+						message: 'When the user asks whether you can see the screen, answer yes and clarify that you see periodic screenshots unless capture is unavailable.',
+					},
+					source: 'user_correction',
+					confidence: 0.98,
+					evidence: text,
+				},
+			};
+		}
+		if (isActionVerificationGuidance(text)) {
+			return {
+				type: 'core-gap',
+				key: 'issue:action-verification',
+				reason: 'action verification guidance',
+				payload: {
+					issueSignature: 'issue:action-verification',
+					description: `Iris should verify screen-based actions with fresh evidence before claiming success or navigation completion: ${text.trim()}`,
+					memory: buildActionVerificationPolicyPayload(text, 0.98),
+					evidence: text,
+				},
+			};
+		}
+		if (isScreenReferenceCorrection(normalized)) {
+			return {
+				type: 'core-gap',
+				key: 'issue:screen-reference-direct-action',
+				reason: 'screen-reference action guidance',
+				payload: {
+					issueSignature: 'issue:screen-reference-direct-action',
+					description: `Iris should use visible screen context for direct references instead of asking the user to restate or point again: ${text.trim()}`,
+					memory: buildScreenReferencePolicyPayload(text, 0.97),
+					evidence: text,
+				},
+			};
+		}
+		if (isVisibleControlReferenceCorrection(normalized)) {
+			return {
+				type: 'core-gap',
+				key: 'issue:visible-control-direct-action',
+				reason: 'visible control action guidance',
+				payload: {
+					issueSignature: 'issue:visible-control-direct-action',
+					description: `Iris should treat named visible controls like toggles and buttons as actionable on-screen targets instead of asking the user to confirm visibility again: ${text.trim()}`,
+					evidence: text,
+				},
+			};
+		}
+		if (hasRecentPointerContext(context) && looksLikeGenericPointerCorrection(text)) {
+			return {
+				type: 'core-gap',
+				key: 'issue:screen-reference-direct-action',
+				reason: 'contextual pointer action guidance',
+				payload: {
+					issueSignature: 'issue:screen-reference-direct-action',
+					description: `Iris should treat generic pointer corrections as screen-referential guidance when fresh UI context exists instead of asking the user to restate the target: ${text.trim()}`,
+					semanticText: 'screen reference click there direct action pointer guidance',
+					memory: buildScreenReferencePolicyPayload(text),
+					evidence: text,
+				},
+			};
+		}
 		return {
 			type: 'core-gap',
 			key: `issue:${normalized}`,
@@ -61,6 +634,15 @@ class LearningClassifier {
 		const failedNames = failedTools.map((item) => item.name).filter(Boolean);
 		const successNames = successfulTools.map((item) => item.name).filter(Boolean);
 		const userText = normalizeText(latestUserText);
+		const latestPlannerGoal = [...failedTools]
+			.reverse()
+			.find((item) => item?.name === 'run_ui_task')
+			?.args?.goal || '';
+		const pointerHeavy = hasPointerActivity(successfulTools);
+		const pointerContext = pointerHeavy || hasPointerActivity(failedTools);
+		const preparationRecovery = failedNames.includes('run_ui_task')
+			&& successNames.includes('open_app')
+			&& (pointerContext || isScreenReferentialGoal(latestUserText) || isScreenReferentialGoal(latestPlannerGoal));
 
 		if (containsAny(userText, ['default browser']) && successNames.includes('open_app')) {
 			return {
@@ -78,8 +660,17 @@ class LearningClassifier {
 			};
 		}
 
-		const pointerHeavy = successfulTools.some((item) => ['click_at', 'double_click', 'mouse_move', 'drag'].includes(item.name));
-		if (pointerHeavy) {
+		if (preparationRecovery) {
+			const evidenceText = String(latestUserText || latestPlannerGoal || '').trim();
+			return {
+				type: 'memory',
+				key: 'policy.pre_click_preparation',
+				reason: 'run_ui_task recovery exposed missing app/window preparation',
+				payload: buildPreClickPreparationPolicyPayload(evidenceText, 0.97),
+			};
+		}
+
+		if (pointerHeavy && userText) {
 			return {
 				type: 'stabilization_candidate',
 				key: `stabilize:${userText}`,

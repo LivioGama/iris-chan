@@ -6,6 +6,7 @@ const { runHelper } = require('../native-helper');
 const { getCaptureHealth, getScreenPermissionStatus } = require('../screen-capture');
 const workspace = require('../workspace');
 const log = require('../logger');
+const { createCommandEnv } = require('../path-env');
 
 const SKILL_LOG = path.join(os.homedir(), '.iris', 'skill_log.txt');
 
@@ -67,7 +68,7 @@ async function run_terminal_command(args) {
 	if (LONG_RUNNING.test(command)) {
 		log.info('Tools', `Detaching long-running command: ${command.slice(0, 100)}`);
 		const child = spawn('/bin/zsh', ['-l', '-c', `unset CLAUDECODE; cd "${cwd.replace(/"/g, '\\"')}" && ${command}`], {
-			cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+			cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: createCommandEnv(),
 		});
 		let stdout = '';
 		child.stdout.on('data', (d) => { stdout += d; });
@@ -84,7 +85,7 @@ async function run_terminal_command(args) {
 
 	const wrapped = `/bin/zsh -l -c 'unset CLAUDECODE; cd "${cwd.replace(/"/g, '\\"')}" && ${command.replace(/'/g, "'\\''")}'`;
 	return new Promise((resolve) => {
-		exec(wrapped, { timeout: 60000, maxBuffer: 1024 * 512, cwd }, (err, stdout, stderr) => {
+		exec(wrapped, { timeout: 60000, maxBuffer: 1024 * 512, cwd, env: createCommandEnv() }, (err, stdout, stderr) => {
 			logSkillOutput('run_terminal_command', command, stdout, stderr, err);
 			if (!err) autoOpenGeneratedImage(stdout);
 			if (err && !stdout && !stderr) {

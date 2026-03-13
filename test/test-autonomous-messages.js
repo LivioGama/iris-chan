@@ -66,7 +66,7 @@ assert(reconnectMsg.includes('Do NOT announce'),
 
 // 3. Autonomous loop prompt should be brief (in _startAutonomousLoop)
 console.log('\n3. Autonomous loop follow-up prompt:');
-const loopContent = sliceFrom(voiceEngine, '[AUTONOMOUS CODING PROMPT] If a Claude Code task is running', 300);
+const loopContent = sliceFrom(voiceEngine, '[AUTONOMOUS CODING PROMPT] If a Claude Code task is running', 420);
 
 assert(loopContent.includes('one-sentence') || loopContent.includes('One sentence'),
 	'Limits response to one sentence');
@@ -74,6 +74,10 @@ assert(loopContent.includes('STOP'),
 	'Instructs to STOP after asking');
 assert(!loopContent.includes('gently'),
 	'No soft language that invites verbose responses');
+assert(loopContent.includes('continue working silently'),
+	'Keeps active coding tasks progressing without a reprompt');
+assert(!loopContent.includes('ask ONE short question about what to work on'),
+	'Does not default to re-asking what to work on');
 
 // 4. System prompt reinforces silence in autonomous mode
 console.log('\n4. System prompt (FIX_PROJECT section):');

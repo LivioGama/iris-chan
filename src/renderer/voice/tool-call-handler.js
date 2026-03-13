@@ -20,10 +20,13 @@ const SCREEN_REFRESH_TOOLS = new Set([
 	'activate_app',
 ]);
 const POINTER_TOOLS = new Set(['click_at', 'double_click', 'mouse_move', 'drag']);
+const AUTO_ESCALATE_SOURCE_TOOLS = new Set(['click_at', 'double_click', 'press_key', 'type_text']);
 const FOREGROUND_UI_STABILIZE_MS = 350;
 const SAME_TURN_UI_TASK_MESSAGE = 'Ignored repeated UI task in the same spoken turn';
 const SAME_TURN_POINTER_RETRY_MESSAGE = 'Ignored repeated pointer retries in the same spoken turn';
 const MAX_POINTER_ONLY_BATCHES_PER_SPEECH = 2;
+const NAVIGATIONAL_UI_INTENT_PATTERN = /\b(click|open|go to|goto|select|search|find|navigate|visit|follow|choose)\b/i;
+const DESTRUCTIVE_UI_INTENT_PATTERN = /\b(delete|remove|trash|discard|send|submit|purchase|buy|pay|confirm|replace|overwrite)\b/i;
 
 function isSearchTool(name, args) {
 	if (name === 'web_search' || name === 'ask_chatgpt' || name === 'research') return true;
@@ -63,7 +66,34 @@ export function shouldDeferForegroundUiTool(name, { userSpeaking = false } = {})
 	return name === 'run_ui_task' && userSpeaking;
 }
 
-export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }) {
+function normalizeAutoEscalationIntent(value = '') {
+	return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function isNavigationalUiIntent(intentText = '') {
+	const text = normalizeAutoEscalationIntent(intentText);
+	if (!text) return false;
+	if (DESTRUCTIVE_UI_INTENT_PATTERN.test(text)) return false;
+	return NAVIGATIONAL_UI_INTENT_PATTERN.test(text);
+}
+
+function shouldAutoEscalateTool(name, result, intentText = '') {
+	if (name === 'run_ui_task') return false;
+	if (!AUTO_ESCALATE_SOURCE_TOOLS.has(name)) return false;
+	if (!result || result.ok !== false) return false;
+	return isNavigationalUiIntent(intentText);
+}
+
+export function createToolCallHandler({
+	gemini,
+	onStateChange,
+	onEvent,
+	screen,
+	getLastUserIntent,
+	getSelfFixContext,
+	onSelfFixAccepted,
+	onSelfFixIntentPreamble,
+}) {
 	let activeToolCount = 0;
 	let userSpeaking = false;
 	let pendingUiCall = null;
@@ -73,6 +103,10 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 	let pointerOnlyBatchesThisSpeech = 0;
 	let toolCallChain = Promise.resolve();
 	let shouldAcceptToolCalls = () => true;
+	const readLastUserIntent = typeof getLastUserIntent === 'function' ? getLastUserIntent : () => '';
+	const readSelfFixContext = typeof getSelfFixContext === 'function' ? getSelfFixContext : () => ({});
+	const notifySelfFixAccepted = typeof onSelfFixAccepted === 'function' ? onSelfFixAccepted : () => {};
+	const notifySelfFixIntentPreamble = typeof onSelfFixIntentPreamble === 'function' ? onSelfFixIntentPreamble : () => {};
 
 	function updateToolPresence(name, args, index, total) {
 		const { label, detail } = getToolDisplay(name, args);
@@ -130,7 +164,8 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		};
 	}
 
-	const _executeOne = async (name, args, id, index, total) => {
+	const _executeOne = async (name, args, id, index, total, options = {}) => {
+		const { allowAutoEscalation = true } = options;
 		const toolArgs = attachPointerCaptureId(name, args);
 		activeToolCount++;
 		updateToolPresence(name, toolArgs, index, total);
@@ -144,8 +179,30 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 
 		const toolStart = Date.now();
 		try {
-			const result = await window.electronAPI.executeTool(name, toolArgs);
+			let result = await window.electronAPI.executeTool(name, toolArgs);
+			const escalationGoal = normalizeAutoEscalationIntent(readLastUserIntent());
+			if (allowAutoEscalation && shouldAutoEscalateTool(name, result, escalationGoal)) {
+				const failureReason = result?.result || 'unknown failure';
+				logInfo('Tool', `Auto-escalating ${name} → run_ui_task. goal="${escalationGoal}" reason="${failureReason}"`);
+				markUiTaskDispatched('run_ui_task');
+				const escalatedResult = await window.electronAPI.executeTool('run_ui_task', { goal: escalationGoal });
+				const escalatedText = formatToolResponseText(escalatedResult);
+				logInfo('Tool', `Auto-escalation outcome: source=${name} escalated=${escalatedResult.ok !== false ? 'OK' : 'FAIL'} result=${escalatedText.slice(0, 300)}`);
+				result = {
+					...escalatedResult,
+					autoEscalatedFrom: name,
+					autoEscalationGoal: escalationGoal,
+					autoEscalationReason: failureReason,
+					autoEscalationSourceOk: result.ok !== false,
+					result: escalatedResult.ok !== false
+						? `${escalatedResult.result || 'done'}`
+						: escalatedResult.result || failureReason,
+				};
+			}
 			const toolResponseText = formatToolResponseText(result);
+			if (name === 'self_fix' && result?.ok !== false) {
+				notifySelfFixAccepted({ name, args: toolArgs, result });
+			}
 			if (screen && shouldRefreshScreenAfterTool(name, result)) {
 				await screen.capture({ passive: false, force: true });
 			}
@@ -227,6 +284,21 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		}
 	}
 
+	function shouldRejectSelfFixCall(call) {
+		if (call?.name !== 'self_fix') return null;
+		const context = readSelfFixContext() || {};
+		const kind = String(context.classification?.kind || '');
+		if (kind === 'intent_preamble') {
+			notifySelfFixIntentPreamble(context);
+			return 'Wait for the exact self-fix details before calling self_fix. Acknowledge readiness once, then stay silent.';
+		}
+		if (context.awaitingDetails && kind !== 'specific_change') {
+			notifySelfFixIntentPreamble(context);
+			return 'Still waiting for the concrete self-fix request. Do not call self_fix until the user gives the specific change details.';
+		}
+		return null;
+	}
+
 	const _processToolCalls = async (calls) => {
 		if (!shouldAcceptToolCalls(calls)) {
 			rejectSuppressedToolCalls(calls);
@@ -236,6 +308,11 @@ export function createToolCallHandler({ gemini, onStateChange, onEvent, screen }
 		const deferredCalls = [];
 		const executableCalls = [];
 		for (const call of calls) {
+			const selfFixRejection = shouldRejectSelfFixCall(call);
+			if (selfFixRejection) {
+				gemini.sendToolResponse(call.id, call.name, selfFixRejection);
+				continue;
+			}
 			if (isUiTaskLockedForCurrentSpeech(call.name)) {
 				rejectDuplicateUiTask(call);
 				continue;

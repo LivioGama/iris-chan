@@ -2,11 +2,11 @@
 // Format: SKILL.md (description + system prompt) + optional tools.json + scripts/
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { spawn } = require('child_process');
 const config = require('../shared/config').default;
 const log = require('./logger');
 const workspace = require('./workspace');
+const { createCommandEnv } = require('./path-env');
 
 const skillsDir = path.join(config.paths.irisDir, 'skills');
 const SKILL_LOG = path.join(config.paths.irisDir, 'skill_log.txt');
@@ -108,10 +108,8 @@ function getHandler(toolName) {
 		}
 
 		return (args) => new Promise((resolve) => {
-			const homedir = os.homedir();
-			const extraPaths = [`${homedir}/.local/bin`, '/opt/homebrew/bin', '/usr/local/bin'];
 			const wsDir = (args && args.workspace) || workspace.get();
-			const env = { ...process.env, CLAUDECODE: '1', IRIS_WORKSPACE: wsDir, PATH: extraPaths.join(':') + ':' + (process.env.PATH || '') };
+			const env = createCommandEnv({ CLAUDECODE: '1', IRIS_WORKSPACE: wsDir });
 			const child = spawn(scriptPath, [], { env, stdio: ['pipe', 'pipe', 'pipe'] });
 
 			activeSkillProcess = child;
@@ -246,10 +244,8 @@ function runSkillByName(skillName, args, onLog) {
 		const scriptPath = skill.scriptMap[scriptName];
 		log.info(`Skill:${skillName}`, `[runSkillByName] Using script: ${scriptName} at ${scriptPath}`);
 
-		const homedir = os.homedir();
-		const extraPaths = [`${homedir}/.local/bin`, '/opt/homebrew/bin', '/usr/local/bin'];
 		const wsDir = (args && args.workspace) || workspace.get();
-		const env = { ...process.env, CLAUDECODE: '1', IRIS_WORKSPACE: wsDir, PATH: extraPaths.join(':') + ':' + (process.env.PATH || '') };
+		const env = createCommandEnv({ CLAUDECODE: '1', IRIS_WORKSPACE: wsDir });
 
 		// Build script arguments based on skill type
 		let scriptArgs = [scriptPath];  // First arg is the script path when using python3

@@ -8,6 +8,8 @@ require('ts-node').register({ transpileOnly: true });
 const { MemoryStore } = require('../src/main/automation/memory-store');
 const { LearningManager } = require('../src/main/automation/learning-manager');
 const { SelfImprovementManager } = require('../src/main/automation/self-improvement-manager');
+const { buildCodingPrompt } = require('../src/main/coding/prompt');
+const serviceRef = require('../src/main/automation/service-ref');
 const appsTools = require('../src/main/tools/apps');
 
 console.log('Running learning manager tests...');
@@ -26,6 +28,92 @@ async function testMemoryStoreSeedsDefaultPolicy() {
 	const policy = memoryStore.find({ key: 'policy.default_app_resolution' });
 	assert.ok(policy, 'memory store should seed default app resolution policy');
 	assert.strictEqual(policy.kind, 'fallback_policy', 'seeded default policy should be a fallback policy');
+	const screenPolicy = memoryStore.find({ key: 'policy.screen_visibility_reassurance' });
+	assert.ok(screenPolicy, 'memory store should seed screen visibility reassurance policy');
+	assert.strictEqual(screenPolicy.kind, 'fallback_policy', 'screen visibility policy should be a fallback policy');
+	const statusBarPolicy = memoryStore.find({ key: 'policy.status_bar_icon_visibility' });
+	assert.ok(statusBarPolicy, 'memory store should seed status bar icon visibility policy');
+	assert.strictEqual(statusBarPolicy.kind, 'fallback_policy', 'status bar icon visibility policy should be a fallback policy');
+	const autonomousPolicy = memoryStore.find({ key: 'policy.autonomous_self_drive' });
+	assert.ok(autonomousPolicy, 'memory store should seed autonomous self-drive policy');
+	assert.strictEqual(autonomousPolicy.kind, 'fallback_policy', 'autonomous self-drive policy should be a fallback policy');
+	const progressPolicy = memoryStore.find({ key: 'policy.progress_accountability' });
+	assert.ok(progressPolicy, 'memory store should seed progress accountability policy');
+	assert.strictEqual(progressPolicy.kind, 'fallback_policy', 'progress accountability policy should be a fallback policy');
+	const taskHistoryPolicy = memoryStore.find({ key: 'policy.task_creation_accountability' });
+	assert.ok(taskHistoryPolicy, 'memory store should seed task creation accountability policy');
+	assert.strictEqual(taskHistoryPolicy.kind, 'fallback_policy', 'task creation accountability policy should be a fallback policy');
+	const editorGeneralizationPolicy = memoryStore.find({ key: 'policy.editor_self_improvement_generalization' });
+	assert.ok(editorGeneralizationPolicy, 'memory store should seed editor self-improvement generalization policy');
+	assert.strictEqual(editorGeneralizationPolicy.kind, 'fallback_policy', 'editor self-improvement policy should be a fallback policy');
+	const executionPolicy = memoryStore.find({ key: 'policy.thorough_execution' });
+	assert.ok(executionPolicy, 'memory store should seed thorough execution policy');
+	assert.strictEqual(executionPolicy.kind, 'fallback_policy', 'thorough execution policy should be a fallback policy');
+	const actionVerificationPolicy = memoryStore.find({ key: 'policy.action_verification' });
+	assert.ok(actionVerificationPolicy, 'memory store should seed action-verification policy');
+	assert.strictEqual(actionVerificationPolicy.kind, 'fallback_policy', 'action-verification policy should be a fallback policy');
+	const presencePolicy = memoryStore.find({ key: 'policy.presence_reassurance' });
+	assert.ok(presencePolicy, 'memory store should seed presence reassurance policy');
+	assert.strictEqual(presencePolicy.kind, 'fallback_policy', 'presence reassurance policy should be a fallback policy');
+	const creativePolicy = memoryStore.find({ key: 'policy.direct_creative_fulfillment' });
+	assert.ok(creativePolicy, 'memory store should seed direct creative fulfillment policy');
+	assert.strictEqual(creativePolicy.kind, 'fallback_policy', 'direct creative fulfillment policy should be a fallback policy');
+}
+
+async function testLearningManagerStoresScreenVisibilityReassurance() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'डू यू सी माय SCREEN');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.screen_visibility_reassurance' });
+	assert.ok(policy, 'screen visibility guidance should be stored as a memory policy');
+	assert.match(String(policy.value?.message || ''), /periodic screenshots/i, 'stored guidance should preserve the screen visibility reassurance');
+	assert.strictEqual(selfFixCalls, 0, 'screen visibility reassurance should not queue a core self-fix');
+}
+
+async function testLearningManagerStoresStatusBarIconVisibilityPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'Now do you see a battery icon in the status bar');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.status_bar_icon_visibility' });
+	assert.ok(policy, 'status bar icon guidance should be stored as a memory policy');
+	assert.match(String(policy.value?.message || ''), /battery indicator/i, 'stored guidance should preserve the status bar icon visibility rule');
+	assert.strictEqual(selfFixCalls, 0, 'status bar icon visibility guidance should not queue a core self-fix');
 }
 
 async function testLearningManagerWritesDefaultBrowserMemory() {
@@ -79,6 +167,406 @@ async function testLearningManagerTracksDefaultAppQueryRecovery() {
 	assert.ok(policy, 'default-app query recovery should keep the native default-app policy in memory');
 }
 
+async function testLearningManagerStoresPreClickPreparationPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	manager.recordConversationTurn('user', 'will need to run before you click right');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.pre_click_preparation' });
+	assert.ok(policy, 'pre-click preparation guidance should become a stored fallback policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'pre-click preparation should be persisted as a fallback policy');
+	assert.strictEqual(policy.value.enabled, true, 'stored pre-click preparation policy should be enabled');
+}
+
+async function testBuildCodingPromptIncludesAutonomousPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const previous = serviceRef.getMemoryStore();
+	serviceRef.setMemoryStore(memoryStore);
+	try {
+		const prompt = buildCodingPrompt({
+			description: 'Fix the autonomous loop.',
+			cwd: irisDir,
+			target: 'iris',
+		});
+		assert.match(prompt, /Learned autonomy policy:/, 'coding prompt should include the learned autonomy policy');
+		assert.match(prompt, /Learned progress policy:/, 'coding prompt should include the learned progress policy');
+		assert.match(prompt, /clear the remaining todo\/backlog/i, 'coding prompt should surface the autonomous backlog-clearing guidance');
+		assert.match(prompt, /current task, concrete completed work, next step, and any blocker/i, 'coding prompt should surface the learned progress-accountability guidance');
+	} finally {
+		serviceRef.setMemoryStore(previous);
+	}
+}
+
+async function testLearningManagerStoresProgressAccountabilityPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'what are you doing and whats done already');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.progress_accountability' });
+	assert.ok(policy, 'progress accountability guidance should be stored as a memory policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'progress accountability guidance should persist as a fallback policy');
+	assert.match(String(policy.value?.message || ''), /current task, concrete completed work, next step, and any blocker/i);
+	assert.strictEqual(selfFixCalls, 0, 'progress accountability guidance should not queue a core self-fix once learned as policy');
+}
+
+async function testLearningManagerStoresProgressAccountabilityPolicyFromBanglaScriptTransliteration() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordToolExecution('click_at', { x: 160, y: 90, capture_id: 'cap_progress' }, 'missed target', false, 9);
+	manager.recordConversationTurn('user', 'হোয়াট আর ইউ ডুইং');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.progress_accountability' });
+	assert.ok(policy, 'Bangla-script transliterated progress guidance should be learned as the progress-accountability policy');
+	assert.match(String(policy.value?.message || ''), /current task, concrete completed work, next step, and any blocker/i);
+	assert.strictEqual(selfFixCalls, 0, 'Bangla-script transliterated progress guidance should not queue a core self-fix');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'Bangla-script transliterated progress guidance should not create a generic core-gap issue');
+}
+
+async function testRepeatedPoemFrictionLearnsDirectCreativePolicyWithoutSelfFix() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	await manager._applyCoreGapEvent({
+		type: 'core-gap',
+		domain: 'general',
+		userText: 'टेल मी अ पोयम',
+		guidanceText: 'टेल मी अ पोयम',
+		classification: { payload: { description: 'User asked for a poem and Iris asked for clarification instead.' } },
+		createdAt: new Date().toISOString(),
+	});
+	await wait(40);
+
+	const policy = memoryStore.find({ key: 'policy.direct_creative_fulfillment' });
+	assert.ok(policy, 'repeated poem friction should be converted into a reusable direct-creative policy');
+	assert.match(
+		String(policy.value?.message || ''),
+		/short casual creative request such as asking for a poem/i,
+		'stored creative policy should preserve direct fulfillment guidance'
+	);
+	assert.strictEqual(selfFixCalls, 0, 'direct creative friction should not queue another generic self-fix');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'poem friction should be learned as policy instead of a core-gap issue');
+}
+
+async function testLearningManagerStoresThoroughExecutionPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordToolExecution('click_at', { x: 320, y: 240, capture_id: 'cap_thorough' }, 'Clicked at (320,240)', true, 12);
+	manager.recordConversationTurn('user', 'बेसरी गर्ने होला ल।');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.thorough_execution' });
+	assert.ok(policy, 'terse do-it-properly guidance should be stored as a reusable memory policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'thorough execution guidance should persist as a fallback policy');
+	assert.match(String(policy.value?.message || ''), /do it properly/i, 'stored execution policy should preserve the thorough-execution instruction');
+	assert.strictEqual(selfFixCalls, 0, 'thorough execution guidance should not queue a core self-fix once learned as policy');
+}
+
+async function testLearningManagerTreatsDontHesitateAsThoroughExecutionPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordToolExecution('click_at', { x: 640, y: 320, capture_id: 'cap_decisive' }, 'Clicked at (640,320)', true, 11);
+	manager.recordConversationTurn('user', "All right do it don't hesitate.");
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.thorough_execution' });
+	assert.ok(policy, 'decisive follow-up guidance should be stored as the reusable thorough execution policy');
+	assert.match(String(policy.value?.message || ''), /don't hesitate/i, 'stored execution policy should preserve the anti-hesitation instruction');
+	assert.strictEqual(selfFixCalls, 0, 'decisive follow-up guidance should not queue a core self-fix once learned as policy');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'anti-hesitation guidance should not fall back to generic self-fix issue clustering');
+}
+
+async function testLearningManagerStoresPresenceReassurancePolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'हेलो कता हो साथी');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.presence_reassurance' });
+	assert.ok(policy, 'presence reassurance guidance should be stored as a memory policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'presence reassurance guidance should persist as a fallback policy');
+	assert.match(String(policy.value?.message || ''), /here and listening/i);
+	assert.strictEqual(selfFixCalls, 0, 'presence reassurance guidance should not queue a core self-fix once learned as policy');
+}
+
+async function testBareAssistantNamePingDuringActiveWorkLearnsPresencePolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordToolExecution('run_ui_task', { goal: 'open that' }, 'Error: could not resolve visible target', false, 10);
+	manager.recordToolExecution('click_at', { x: 318, y: 204, capture_id: 'cap_iris_ping' }, 'clicked visible item candidate', true, 12);
+	manager.recordConversationTurn('assistant', 'I am opening the visible target now.');
+	manager.recordConversationTurn('user', 'Iris');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.presence_reassurance' });
+	assert.ok(policy, 'bare assistant-name ping during active work should update the presence reassurance policy');
+	assert.match(
+		String(policy.value?.message || ''),
+		/bare-name ping as a request for a concise status update/i,
+		'presence policy should preserve bare-name active-work handling'
+	);
+	assert.strictEqual(selfFixCalls, 0, 'bare assistant-name ping should learn presence behavior instead of queuing a self-fix');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'bare assistant-name ping should not create a generic pointer core-gap issue');
+
+	const previous = serviceRef.getMemoryStore();
+	serviceRef.setMemoryStore(memoryStore);
+	try {
+		const prompt = buildCodingPrompt({
+			cwd: irisDir,
+			target: 'iris',
+			description: 'Handle bare Iris attention pings during active work.',
+		});
+		assert.match(prompt, /Presence handling:/, 'coding prompt should include the presence handling rule');
+		assert.match(
+			prompt,
+			/treat it as an attention ping/i,
+			'coding prompt should surface the bare-name attention-ping behavior'
+		);
+	} finally {
+		serviceRef.setMemoryStore(previous);
+	}
+}
+
+async function testLearningManagerStoresTaskCreationAccountabilityPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'टेल मी अबाउट ऑल द टास्क यू क्रिएटेड एंड एवरीथिंग इन दोस रिगार्ड्स फॉर दिस');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.task_creation_accountability' });
+	assert.ok(policy, 'task-creation accountability guidance should be stored as a memory policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'task-creation accountability guidance should persist as a fallback policy');
+	assert.match(String(policy.value?.message || ''), /task history instead of asking them to restate it/i);
+	assert.match(String(policy.value?.message || ''), /Check tasks\.json when available/i);
+	assert.strictEqual(selfFixCalls, 0, 'task-creation accountability guidance should not queue a core self-fix once learned as policy');
+}
+
+async function testLearningManagerStoresActionVerificationPolicyAndClustersSpecifically() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+	const guidance = 'you also need to have a verifikation of some sort because when i tell you to click at something currently you say you did or you even go as far as to say you already went to that page when you have not actually gone to that page and you sometimes use outdated screenshots';
+
+	manager.recordToolExecution('click_at', { x: 512, y: 384, capture_id: 'cap_verify' }, 'Clicked at (512,384)', true, 12);
+	manager.recordConversationTurn('user', guidance);
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.action_verification' });
+	assert.ok(policy, 'action-verification friction should be stored as a reusable memory policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'action-verification guidance should persist as a fallback policy');
+	assert.match(String(policy.value?.message || ''), /fresh screenshot/i, 'stored action-verification policy should require fresh evidence');
+	assert.strictEqual(selfFixCalls, 0, 'single action-verification correction should learn policy before escalating');
+
+	manager.recordConversationTurn('user', guidance);
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 1, 'repeated action-verification friction should cluster into one issue');
+	assert.strictEqual(
+		issues.issues[0].issueSignature,
+		'core_gap:general:action_verification:screen_context+self_verification:none:none:pointer',
+		'action-verification friction should map to the specific verification issue signature instead of the generic pointer bucket'
+	);
+	assert.strictEqual(selfFixCalls, 1, 'repeated action-verification friction should queue one self-fix');
+}
+
+async function testEditorSelfImprovementFrictionStoresReusablePolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+	const guidance = 'you and I keep telling you to do stops and I keep teaching you if you feel can you modify your own code and in a generic way not in a specific problem solving way but you should be able to solve it generally broader range of problems that are like the problems that we just I\'ve just taught you can you do that already <noise>';
+
+	manager.recordConversationTurn('user', guidance);
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.editor_self_improvement_generalization' });
+	assert.ok(policy, 'editor self-improvement friction should be stored as a reusable memory policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'editor self-improvement friction should persist as a fallback policy');
+	assert.match(String(policy.value?.message || ''), /generic way instead of fixing only the narrow case/i);
+	assert.strictEqual(selfFixCalls, 0, 'editor self-improvement friction should not queue a core self-fix once learned as policy');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'editor self-improvement guidance should not fall back to the generic core-gap issue queue');
+}
+
 async function testLearningManagerRewritesDefaultAppQueryFromMemory() {
 	const irisDir = createTempDir();
 	const memoryStore = new MemoryStore({ irisDir });
@@ -111,7 +599,6 @@ async function testLearningManagerRewritesDefaultAppQueryFromMemory() {
 async function testGetDefaultAppUsesStoredMemory() {
 	const irisDir = createTempDir();
 	const memoryStore = new MemoryStore({ irisDir });
-	const serviceRef = require('../src/main/automation/service-ref');
 	const previous = serviceRef.getMemoryStore();
 	serviceRef.setMemoryStore(memoryStore);
 	memoryStore.upsert({
@@ -174,6 +661,100 @@ async function testLearningManagerCreatesReusableToolSkill() {
 	assert.ok(resolved.args.learned_skill_id, 'learned tool resolution should annotate the learned skill id');
 }
 
+async function testPlannerOpenThenPointerRecoveryLearnsPreparationPolicyInsteadOfSkill() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'open that channel link');
+	manager.recordToolExecution('run_ui_task', { goal: 'open that channel link' }, 'Error: Could not resolve visible target', false, 10);
+	manager.recordToolExecution('open_app', { name: 'Safari' }, 'Opened Safari', true, 10);
+	manager.recordToolExecution('click_at', { x: 510, y: 220, capture_id: 'cap_channel_link' }, 'Clicked the visible channel link', true, 10);
+	await wait(120);
+
+	const policy = memoryStore.find({ key: 'policy.pre_click_preparation' });
+	assert.ok(policy, 'mixed planner/native/pointer recovery should learn a reusable preparation policy');
+	assert.match(
+		String(policy.value?.message || ''),
+		/open or focus that app first, refresh the screen context/i,
+		'preparation policy should preserve the app/window setup rule'
+	);
+	assert.match(
+		String(policy.value?.evidence || policy.evidence || ''),
+		/open that channel link/i,
+		'preparation policy should preserve the triggering guidance'
+	);
+	const registry = selfImprovementManager.loadRegistry();
+	assert.strictEqual(registry.skills.length, 0, 'pointer-assisted recovery should not create an unusable learned skill');
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(
+		issues.issues.some((issue) => issue.issueSignature === 'core_gap:general:general:none:none:click_at+open_app+recovered+run_ui_task:pointer'),
+		false,
+		'native preparation recovery should not regress to the old generic issue bucket'
+	);
+	assert.strictEqual(selfFixCalls, 0, 'native preparation recovery should be learned without a core self-fix');
+}
+
+async function testPlannerPointerFailureThenOpenAppRecoveryLearnsPreparationPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'open that channel link');
+	manager.recordToolExecution('run_ui_task', { goal: 'open that channel link' }, 'Error: Could not resolve visible target', false, 10);
+	manager.recordToolExecution('click_at', { x: 510, y: 220, capture_id: 'cap_channel_link' }, 'missed the visible channel link', false, 10);
+	manager.recordToolExecution('open_app', { name: 'Safari' }, 'Opened Safari', true, 10);
+	await wait(120);
+
+	const policy = memoryStore.find({ key: 'policy.pre_click_preparation' });
+	assert.ok(policy, 'failed-pointer then open_app recovery should still learn the preparation policy');
+	assert.match(
+		String(policy.value?.message || ''),
+		/open or focus that app first, refresh the screen context/i,
+		'preparation policy should preserve the app/window setup rule after failed pointer recovery'
+	);
+	assert.match(
+		String(policy.value?.evidence || policy.evidence || ''),
+		/open that channel link/i,
+		'preparation policy should preserve the triggering guidance after failed pointer recovery'
+	);
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(
+		issues.issues.some((issue) => issue.issueSignature === 'core_gap:general:general:none:none:click_at+open_app+recovered+run_ui_task:pointer'),
+		false,
+		'failed-pointer then open_app recovery should not regress to the old generic issue bucket'
+	);
+	assert.strictEqual(selfFixCalls, 0, 'failed-pointer then open_app recovery should be learned without a core self-fix');
+}
+
 async function testLearningManagerExposesSafeMultiToolSequence() {
 	const irisDir = createTempDir();
 	const memoryStore = new MemoryStore({ irisDir });
@@ -232,8 +813,22 @@ async function testLearningManagerDedupesAutonomousSelfFix() {
 		},
 	});
 
-	manager.recordConversationTurn('user', 'you should stop asking me this every time');
-	manager.recordConversationTurn('user', 'you should stop asking me this every time');
+	manager.enqueue({
+		type: 'core-gap',
+		domain: 'general',
+		userText: 'the same unsupported workflow keeps failing',
+		guidanceText: 'the same unsupported workflow keeps failing',
+		classification: { payload: { description: 'unsupported workflow keeps failing in the same way' } },
+		createdAt: new Date().toISOString(),
+	});
+	manager.enqueue({
+		type: 'core-gap',
+		domain: 'general',
+		userText: 'the same unsupported workflow keeps failing',
+		guidanceText: 'the same unsupported workflow keeps failing',
+		classification: { payload: { description: 'unsupported workflow keeps failing in the same way' } },
+		createdAt: new Date().toISOString(),
+	});
 	await wait(120);
 
 	assert.strictEqual(selfFixCalls, 1, 'repeated structural friction should queue one deduped self-fix');
@@ -305,6 +900,300 @@ async function testSemanticIssueClusteringMergesNearDuplicateCoreGaps() {
 	assert.strictEqual(issues.issues[0].semanticFeatures.intentFamily, 'navigation');
 	assert.strictEqual(issues.issues[0].semanticFeatures.targets.includes('channel_result'), true);
 	assert.strictEqual(selfFixCalls, 1, 'clustered repeated issue should trigger a single self-fix');
+}
+
+async function testAutonomousContinuationGuidanceStoresPolicyWithoutSelfFix() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'ओके आई विल गेट बैक in a few hours until then keep working on this task and clear out all your to do');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.autonomous_self_drive' });
+	assert.ok(policy, 'autonomous continuation guidance should be stored as a reusable policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'autonomous continuation guidance should persist as a fallback policy');
+	assert.match(String(policy.value?.message || ''), /clear the remaining todo\/backlog/i);
+	assert.strictEqual(selfFixCalls, 0, 'autonomous continuation guidance should not queue a core self-fix once learned as policy');
+}
+
+async function testScreenReferenceFrictionMapsToSpecificNativeIssue() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'can you see my screen and click there too');
+	manager.recordConversationTurn('user', 'can you see my screen and click there too');
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 1, 'screen-reference friction should cluster into one issue');
+	assert.strictEqual(
+		issues.issues[0].issueSignature,
+		'core_gap:general:screen_reference:screen_context+visible_target:none:none:nonpointer',
+		'screen-reference friction should map to a specific screen-context issue signature'
+	);
+	assert.strictEqual(
+		issues.issues[0].semanticFeatures.targets.includes('screen_context'),
+		true,
+		'screen-reference issue should preserve screen-context targeting'
+	);
+	assert.strictEqual(
+		issues.issues[0].semanticFeatures.targets.includes('visible_target'),
+		true,
+		'screen-reference issue should preserve deictic visible-target guidance'
+	);
+	assert.strictEqual(selfFixCalls, 1, 'repeated screen-reference friction should queue one self-fix');
+}
+
+async function testFocusToggleFrictionMapsToVisibleControlIssue() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordToolExecution('click_at', { x: 640, y: 220, capture_id: 'cap_focus' }, 'clicked focus toggle candidate', true, 12);
+	manager.recordConversationTurn('user', 'Do you see the focus toggle');
+	manager.recordConversationTurn('user', 'Do you see the focus toggle');
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 1, 'focus-toggle friction should cluster into one issue');
+	assert.strictEqual(
+		issues.issues[0].issueSignature,
+		'core_gap:general:screen_reference:focus_toggle+screen_context+visible_target:none:none:pointer',
+		'focus-toggle friction should map to a specific visible-control issue signature'
+	);
+	assert.strictEqual(
+		issues.issues[0].semanticFeatures.targets.includes('focus_toggle'),
+		true,
+		'focus-toggle issue should preserve the visible control target'
+	);
+	assert.strictEqual(
+		issues.issues[0].semanticFeatures.targets.includes('visible_target'),
+		true,
+		'focus-toggle issue should preserve visible-target semantics'
+	);
+	assert.strictEqual(selfFixCalls, 1, 'repeated focus-toggle friction should queue one self-fix');
+}
+
+async function testStatusBarBatteryFrictionMapsToStatusIconIssue() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'Now do you see a battery icon in the status bar');
+	manager.recordConversationTurn('user', 'Now do you see a battery icon in the status bar');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.status_bar_icon_visibility' });
+	assert.ok(policy, 'status-bar battery guidance should be stored as a reusable memory policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'status-bar battery guidance should persist as a fallback policy');
+	assert.match(
+		String(policy.value?.message || ''),
+		/status or menu bar icon such as the battery indicator/i,
+		'status-bar battery policy should preserve the native icon-inspection guidance'
+	);
+	assert.strictEqual(selfFixCalls, 0, 'status-bar battery guidance should not queue a core self-fix once learned as policy');
+}
+
+async function testNoisyMultilingualPointerFrictionMapsToVisibleTargetIssue() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordToolExecution('click_at', { x: 512, y: 320, capture_id: 'cap_noise' }, 'clicked visible item candidate', true, 12);
+	manager.recordConversationTurn('user', 'ไป <noise> ராமலிங்கம்');
+	manager.recordConversationTurn('user', 'ไป <noise> ராமலிங்கம்');
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 1, 'noisy multilingual pointer friction should cluster into one issue');
+	assert.strictEqual(
+		issues.issues[0].issueSignature,
+		'core_gap:general:screen_reference:screen_context+visible_target:none:none:pointer',
+		'noisy multilingual pointer friction should map to the native screen-reference issue instead of a generic noise bucket'
+	);
+	assert.strictEqual(
+		issues.issues[0].semanticFeatures.targets.includes('visible_target'),
+		true,
+		'noisy multilingual pointer friction should preserve visible-target semantics'
+	);
+	assert.strictEqual(
+		issues.issues[0].semanticFeatures.targets.includes('screen_context'),
+		true,
+		'noisy multilingual pointer friction should preserve screen-context semantics'
+	);
+	assert.strictEqual(selfFixCalls, 1, 'repeated noisy multilingual pointer friction should queue one deduped self-fix');
+}
+
+async function testOpaqueNepaliPointerRecoveryMapsToVisibleTargetIssue() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordToolExecution('run_ui_task', { goal: 'open that' }, 'Error: could not resolve visible target', false, 10);
+	manager.recordConversationTurn('user', 'य ल ल');
+	manager.recordToolExecution('click_at', { x: 412, y: 268, capture_id: 'cap_np_1' }, 'clicked visible item candidate', true, 12);
+	await wait(80);
+	manager.recordConversationTurn('user', 'य ल ल');
+	manager.recordToolExecution('click_at', { x: 420, y: 272, capture_id: 'cap_np_2' }, 'clicked visible item candidate', true, 12);
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	const signatures = issues.issues.map((issue) => issue.issueSignature);
+	assert.strictEqual(
+		signatures.includes('core_gap:general:navigation:visible_target:none:none:pointer'),
+		true,
+		'opaque Nepali pointer recovery should produce a visible-target navigation issue instead of only the generic pointer bucket'
+	);
+	assert.strictEqual(
+		signatures.includes('core_gap:general:general:none:none:none:pointer'),
+		false,
+		'opaque Nepali pointer recovery should not regress to the generic pointer issue signature'
+	);
+	const visibleTargetIssue = issues.issues.find((issue) => issue.issueSignature === 'core_gap:general:navigation:visible_target:none:none:pointer');
+	assert.strictEqual(
+		visibleTargetIssue?.semanticFeatures?.targets?.includes('visible_target'),
+		true,
+		'opaque Nepali pointer recovery should preserve visible-target semantics'
+	);
+	assert.strictEqual(selfFixCalls, 1, 'repeated opaque Nepali pointer recovery should queue one deduped self-fix');
+}
+
+async function testNoisyMultilingualScreenReferencePointerMapsToScreenReferenceIssue() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordToolExecution('run_ui_task', { goal: 'open that' }, 'Error: could not resolve visible target', false, 10);
+	manager.recordToolExecution('click_at', { x: 468, y: 301, capture_id: 'cap_screen_ref_1' }, 'clicked visible item candidate', true, 12);
+	manager.recordConversationTurn('user', 'एनसी में एक रेंट स्क्रीन');
+	await wait(80);
+	manager.recordConversationTurn('user', 'एनसी में एक रेंट स्क्रीन');
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	const signatures = issues.issues.map((issue) => issue.issueSignature);
+	assert.strictEqual(
+		signatures.includes('core_gap:general:screen_reference:screen_context+visible_target:none:none:pointer'),
+		true,
+		'noisy multilingual screen-reference friction should map to the native screen-reference issue'
+	);
+	assert.strictEqual(
+		signatures.includes('core_gap:general:general:none:none:none:pointer'),
+		false,
+		'noisy multilingual screen-reference friction should not regress to the generic pointer issue signature'
+	);
+	const screenReferenceIssue = issues.issues.find((issue) => issue.issueSignature === 'core_gap:general:screen_reference:screen_context+visible_target:none:none:pointer');
+	assert.strictEqual(
+		screenReferenceIssue?.semanticFeatures?.targets?.includes('screen_context'),
+		true,
+		'noisy multilingual screen-reference friction should preserve screen-context semantics'
+	);
+	assert.strictEqual(
+		screenReferenceIssue?.semanticFeatures?.targets?.includes('visible_target'),
+		true,
+		'noisy multilingual screen-reference friction should preserve visible-target semantics'
+	);
+	assert.strictEqual(selfFixCalls >= 1, true, 'repeated noisy multilingual screen-reference friction should queue a self-fix for the learned native issue');
 }
 
 async function testSemanticIssueClusteringMergesParaphrasedFalsePositives() {
@@ -501,15 +1390,38 @@ async function testDeferredSelfFixIssuesAreRetried() {
 
 Promise.resolve()
 	.then(testMemoryStoreSeedsDefaultPolicy)
+	.then(testLearningManagerStoresScreenVisibilityReassurance)
+	.then(testLearningManagerStoresStatusBarIconVisibilityPolicy)
 	.then(testGetDefaultAppUsesStoredMemory)
 	.then(testLearningManagerWritesDefaultBrowserMemory)
 	.then(testLearningManagerTracksDefaultAppQueryRecovery)
+	.then(testLearningManagerStoresPreClickPreparationPolicy)
+	.then(testLearningManagerStoresProgressAccountabilityPolicy)
+	.then(testLearningManagerStoresProgressAccountabilityPolicyFromBanglaScriptTransliteration)
+	.then(testRepeatedPoemFrictionLearnsDirectCreativePolicyWithoutSelfFix)
+	.then(testLearningManagerStoresThoroughExecutionPolicy)
+	.then(testLearningManagerTreatsDontHesitateAsThoroughExecutionPolicy)
+	.then(testLearningManagerStoresPresenceReassurancePolicy)
+	.then(testBareAssistantNamePingDuringActiveWorkLearnsPresencePolicy)
+	.then(testLearningManagerStoresTaskCreationAccountabilityPolicy)
+	.then(testLearningManagerStoresActionVerificationPolicyAndClustersSpecifically)
+	.then(testEditorSelfImprovementFrictionStoresReusablePolicy)
+	.then(testBuildCodingPromptIncludesAutonomousPolicy)
 	.then(testLearningManagerRewritesDefaultAppQueryFromMemory)
 	.then(testLearningManagerCreatesReusableToolSkill)
+	.then(testPlannerOpenThenPointerRecoveryLearnsPreparationPolicyInsteadOfSkill)
+	.then(testPlannerPointerFailureThenOpenAppRecoveryLearnsPreparationPolicy)
 	.then(testLearningManagerExposesSafeMultiToolSequence)
 	.then(testLearningManagerDedupesAutonomousSelfFix)
 	.then(testPointerRecoveryDoesNotCreateLearnedSkill)
 	.then(testSemanticIssueClusteringMergesNearDuplicateCoreGaps)
+	.then(testAutonomousContinuationGuidanceStoresPolicyWithoutSelfFix)
+	.then(testScreenReferenceFrictionMapsToSpecificNativeIssue)
+	.then(testFocusToggleFrictionMapsToVisibleControlIssue)
+	.then(testStatusBarBatteryFrictionMapsToStatusIconIssue)
+	.then(testNoisyMultilingualPointerFrictionMapsToVisibleTargetIssue)
+	.then(testOpaqueNepaliPointerRecoveryMapsToVisibleTargetIssue)
+	.then(testNoisyMultilingualScreenReferencePointerMapsToScreenReferenceIssue)
 	.then(testSemanticIssueClusteringMergesParaphrasedFalsePositives)
 	.then(testSemanticIssueClusteringIgnoresToolPathVariance)
 	.then(testStabilizationFailureQueuesImmediateSelfFix)

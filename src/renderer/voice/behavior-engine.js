@@ -97,6 +97,7 @@ export class BehaviorEngine {
 	noteSelfFixTriggered() {
 		this.awaitingSelfFixDetails = false;
 		this.selfFixIntentAt = 0;
+		this.idleAckSent = false;
 	}
 
 	// Check if we're still waiting for self-fix details (with auto-timeout)

@@ -59,7 +59,7 @@ function create() {
 		const tagMatch = m.match(/^\[(\w+)\]\s*(.*)/s);
 		if (tagMatch) return; // already forwarded by renderer logger via IPC
 		const level = ev.level <= 0 ? 'info' : ev.level === 1 ? 'warn' : 'error';
-		log[level]('Renderer', m);
+		log.captureRendererConsole(level, 'Renderer', m);
 	});
 
 	// Poll cursor position to follow it across displays

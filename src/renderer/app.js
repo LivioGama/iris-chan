@@ -13,10 +13,12 @@ import { createClaudeCodeBatcher } from './voice/claude-code-batcher.js';
 import { renderToolsSkillsPanel, anchorPanelToAvatar } from './ui/tools-skills-panel.js';
 import { onRuntimeEvent } from './app-init.js';
 import { eventBusWeb } from '../shared/event-bus-web.js';
+import { initLogger, getLogSettings } from './logger.js';
 
 const avatarConfig = window.getAvatarConfig ? await window.getAvatarConfig() : null;
 const avatarType = avatarConfig?.current || 'tripo3d';
 const voiceConfig = await window.electronAPI.getVoiceConfig?.().catch(() => null);
+await initLogger();
 
 const { renderer, camera, scene } = createScene();
 const { vrm, mixer, glowMaterials = [] } = await loadAvatar(scene, avatarType);
@@ -78,6 +80,7 @@ window.addEventListener('click', () => {
 const tools = (await window.electronAPI.getSkillDeclarations()?.then((decl) => (decl || []).map((d) => d.name)).catch(() => [])) || [];
 const skills = (await window.electronAPI.getSkillCatalog()?.then((items) => (items || []).map((s) => s.name)).catch(() => [])) || [];
 renderToolsSkillsPanel({ tools, skills });
+setupLogModeButton();
 
 function updateSidePanelsAnchor() {
 	const canvasRect = renderer.domElement.getBoundingClientRect();
@@ -128,3 +131,42 @@ function animate() {
 	renderer.render(scene, camera);
 }
 animate();
+
+function setupLogModeButton() {
+	const button = document.getElementById('log-mode-button');
+	if (!button || !window.electronAPI?.updateLogSettings) return;
+	const render = () => {
+		const settings = getLogSettings();
+		const level = String(settings?.console?.level || 'info').toUpperCase();
+		const persistOn = settings?.persist?.enabled !== false && settings?.persist?.level !== 'silent';
+		button.textContent = `LOG ${level}`;
+		button.dataset.persist = persistOn ? 'on' : 'off';
+		button.title = `Console: ${level}. ${persistOn ? 'File logging on' : 'File logging off'}. Click to cycle console level, Shift-click to toggle file logging.`;
+	};
+	render();
+	button.addEventListener('click', async (event) => {
+		event.stopPropagation();
+		const settings = getLogSettings();
+		if (event.shiftKey) {
+			const persistOn = settings?.persist?.enabled !== false && settings?.persist?.level !== 'silent';
+			await window.electronAPI.updateLogSettings({
+				persist: {
+					enabled: !persistOn,
+					level: !persistOn ? 'info' : 'silent',
+				},
+			});
+			return;
+		}
+		const levels = ['info', 'warn', 'error', 'silent'];
+		const currentIndex = levels.indexOf(settings?.console?.level || 'info');
+		const nextLevel = levels[(currentIndex + 1 + levels.length) % levels.length];
+		await window.electronAPI.updateLogSettings({
+			console: {
+				enabled: nextLevel !== 'silent',
+				level: nextLevel,
+			},
+		});
+	});
+	button.addEventListener('pointerdown', (event) => event.stopPropagation());
+	window.addEventListener('iris-log-settings-changed', render);
+}

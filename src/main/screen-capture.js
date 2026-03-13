@@ -203,13 +203,26 @@ async function capture() {
 			data: base64,
 			context: {
 				captureId,
+				capturedAt,
+				capturedAtIso: new Date(capturedAt).toISOString(),
 				imageWidth: thumbSize.width,
 				imageHeight: thumbSize.height,
 				displayWidth: captureWidth,
 				displayHeight: captureHeight,
 				scaleFactor,
+				displayId: cursorDisplay.id,
+				displayLabel: cursorDisplay.label || source.name || `Display ${cursorDisplay.id}`,
+				displayBounds: {
+					x: display.x,
+					y: display.y,
+					width: display.width,
+					height: display.height,
+				},
+				permissionStatus,
 				cursorX: cursorImgX,
 				cursorY: cursorImgY,
+				cursorScreenX: cursor.x,
+				cursorScreenY: cursor.y,
 			}
 		};
 	} catch (err) {

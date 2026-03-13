@@ -367,6 +367,202 @@ async function testSuppressedTurnBlocksRawToolCalls() {
 	global.window = originalWindow;
 }
 
+async function testFailedNavigationalClickAutoEscalatesToUiTask() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				executed.push({ name, args });
+				if (name === 'click_at') {
+					return { ok: false, result: 'Pointer fallback is blocked until native/app-specific and accessibility attempts fail.' };
+				}
+				if (name === 'run_ui_task') {
+					return { ok: true, result: `Completed UI task: ${args.goal}` };
+				}
+				return { ok: true, result: `Executed ${name}` };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: {
+			capture: async () => {},
+			lastInteractiveCaptureId: 'cap_active',
+		},
+		getLastUserIntent: () => 'click the Theo channel result',
+	});
+
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 10, y: 20 }, id: 'call-1' }]);
+
+	assert.deepStrictEqual(
+		executed.map((entry) => entry.name),
+		['click_at', 'run_ui_task'],
+		'failed navigational low-level action should auto-escalate once to run_ui_task'
+	);
+	assert.strictEqual(
+		executed[1].args.goal,
+		'click the Theo channel result',
+		'auto-escalation should reuse the original natural-language user intent'
+	);
+	assert.strictEqual(
+		responses.some((entry) => entry.id === 'call-1' && /Completed UI task: click the Theo channel result/.test(entry.result)),
+		true,
+		'original tool call should receive the escalated UI task outcome'
+	);
+
+	global.window = originalWindow;
+}
+
+async function testFailedPointerOnlyActionDoesNotAutoEscalateWithoutNavigationalIntent() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				executed.push({ name, args });
+				return { ok: false, result: 'Could not click requested coordinates' };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: {
+			capture: async () => {},
+			lastInteractiveCaptureId: 'cap_active',
+		},
+		getLastUserIntent: () => 'move slightly to the left',
+	});
+
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 10, y: 20 }, id: 'call-1' }]);
+
+	assert.deepStrictEqual(
+		executed.map((entry) => entry.name),
+		['click_at'],
+		'non-navigational pointer failures should not auto-escalate to run_ui_task'
+	);
+	assert.strictEqual(
+		responses.some((entry) => entry.id === 'call-1' && /Error: Could not click requested coordinates/.test(entry.result)),
+		true,
+		'non-escalated pointer failure should be returned unchanged'
+	);
+
+	global.window = originalWindow;
+}
+
+async function testFailedNavigationalClickEscalatesOnlyOnce() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				executed.push({ name, args });
+				if (name === 'click_at') {
+					return { ok: false, result: 'Pointer fallback is blocked until native/app-specific and accessibility attempts fail.' };
+				}
+				return { ok: false, result: `Could not complete UI task: ${args.goal}` };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: {
+			capture: async () => {},
+			lastInteractiveCaptureId: 'cap_active',
+		},
+		getLastUserIntent: () => 'open the Theo channel',
+	});
+
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 10, y: 20 }, id: 'call-1' }]);
+
+	assert.deepStrictEqual(
+		executed.map((entry) => entry.name),
+		['click_at', 'run_ui_task'],
+		'escalation should retry once and stop without looping'
+	);
+	assert.strictEqual(
+		responses.some((entry) => entry.id === 'call-1' && /Error: Could not complete UI task: open the Theo channel/.test(entry.result)),
+		true,
+		'failed escalation should surface the single run_ui_task failure'
+	);
+
+	global.window = originalWindow;
+}
+
+async function testSelfFixPreambleBlocksDispatch() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	let notedPreamble = 0;
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				executed.push({ name, args });
+				return { ok: true, result: 'started' };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: { capture: async () => {} },
+		getLastUserIntent: () => 'Go ahead',
+		getSelfFixContext: () => ({
+			awaitingDetails: true,
+			classification: { kind: 'intent_preamble' },
+		}),
+		onSelfFixIntentPreamble() {
+			notedPreamble += 1;
+		},
+	});
+
+	await handler.handleToolCalls([{ name: 'self_fix', args: { description: 'do a bunch of stuff' }, id: 'call-1' }]);
+
+	assert.strictEqual(executed.length, 0, 'self_fix should not dispatch from a preamble-only utterance');
+	assert.strictEqual(notedPreamble, 1, 'preamble callback should fire once');
+	assert.strictEqual(
+		responses.some((entry) => entry.id === 'call-1' && /wait for the exact self-fix details/i.test(entry.result)),
+		true,
+		'blocked self_fix should explain that concrete details are still required'
+	);
+
+	global.window = originalWindow;
+}
+
 Promise.resolve()
 	.then(testDeferredUiTaskFlushesOnce)
 	.then(testDeferredUiTaskSupersedesOlderTranscript)
@@ -374,6 +570,10 @@ Promise.resolve()
 	.then(testPointerToolsUseLatestInteractiveCaptureId)
 	.then(testPointerRetryBudgetSuppressesClickCycling)
 	.then(testSuppressedTurnBlocksRawToolCalls)
+	.then(testFailedNavigationalClickAutoEscalatesToUiTask)
+	.then(testFailedPointerOnlyActionDoesNotAutoEscalateWithoutNavigationalIntent)
+	.then(testFailedNavigationalClickEscalatesOnlyOnce)
+	.then(testSelfFixPreambleBlocksDispatch)
 	.then(() => {
 		console.log('Tool call handler tests passed.');
 	})

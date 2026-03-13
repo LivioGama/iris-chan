@@ -25,6 +25,7 @@ function hash(value = '') {
 function normalizeIssueText(value = '') {
 	return String(value || '')
 		.toLowerCase()
+		.replace(/<noise>/g, ' ')
 		.replace(/https?:\/\/\S+/g, '<url>')
 		.replace(/["'`]/g, '')
 		.replace(/\b\d+\b/g, '<num>')
@@ -84,12 +85,15 @@ const ISSUE_TOKEN_MAP = new Map([
 	['launching', 'activate'],
 	['opened', 'open'],
 	['opening', 'open'],
+	['icons', 'icon'],
 	['pasted', 'paste'],
 	['pasting', 'paste'],
 	['preferences', 'settings'],
 	['queried', 'query'],
 	['querying', 'query'],
 	['results', 'result'],
+	['screens', 'screen'],
+	['seeing', 'see'],
 	['saved', 'save'],
 	['saving', 'save'],
 	['searched', 'search'],
@@ -144,8 +148,64 @@ const RECENT_SELF_FIX_COOLDOWN_MS = 30 * 1000;
 
 function canonicalizeIssueText(value = '') {
 	return normalizeIssueText(value)
+		.replace(/(হোয়াট|হোয়াট|ह्वाट|व्हाट|वाट)\s+(আর|आर|आर)\s+(ইউ|यू)\s+(ডুইং|ডूইং|डुइंग|डूइंग)/g, 'what are you doing')
+		.replace(/(হোয়াটস|হোয়াটস|व्हाट्स|व्हाट)\s+(ডান|ডোন|डन|डोन)\s+(অলরেডি|আলরেডি|अलरेडी|ऑलरेडी)/g, 'whats done already')
+		.replace(/\bkeep self[- ]?verifying\b/g, 'self_verify')
+		.replace(/\bself[- ]?verif(?:y|ying)\b/g, 'self_verify')
+		.replace(/\bverify your(?:self| work)\b/g, 'self_verify')
+		.replace(/\bcheck your own work\b/g, 'self_verify')
+		.replace(/\bgiv(?:e|ing) yourself input\b/g, 'self_input')
+		.replace(/\bfeed yourself input\b/g, 'self_input')
+		.replace(/\bgenerate your own (?:next )?input\b/g, 'self_input')
+		.replace(/\bdecide the next step yourself\b/g, 'self_input')
+		.replace(/\bkeep working on it\b/g, 'autonomous_continuation')
+		.replace(/\bcontinue working\b/g, 'autonomous_continuation')
+		.replace(/\bkeep going\b/g, 'autonomous_continuation')
+		.replace(/\buntil i get back\b/g, 'autonomous_continuation')
+		.replace(/\bwhile im away\b/g, 'autonomous_continuation')
+		.replace(/\bwhile i'm away\b/g, 'autonomous_continuation')
+		.replace(/\bnow do you see a battery icon in the status bar\b/g, 'status_bar battery_icon')
+		.replace(/\bdo you see a battery icon in the status bar\b/g, 'status_bar battery_icon')
+		.replace(/\bcan you see a battery icon in the status bar\b/g, 'status_bar battery_icon')
+		.replace(/\bbattery icon in the status bar\b/g, 'status_bar battery_icon')
+		.replace(/\bbattery icon in the menu bar\b/g, 'status_bar battery_icon')
+		.replace(/\bstatus bar\b/g, 'status_bar')
+		.replace(/\bmenu bar\b/g, 'status_bar')
+		.replace(/\bbattery icon\b/g, 'battery_icon')
+		.replace(/\bdo you see the focus toggle\b/g, 'screen_reference visible_target focus_toggle')
+		.replace(/\bcan you see the focus toggle\b/g, 'screen_reference visible_target focus_toggle')
+		.replace(/\bfocus mode toggle\b/g, 'focus_toggle')
+		.replace(/\bfocus toggle\b/g, 'focus_toggle')
+		.replace(/\bcan you see my screen\b/g, 'screen_reference')
+		.replace(/\bcan you see the screen\b/g, 'screen_reference')
+		.replace(/\bdo you see my screen\b/g, 'screen_reference')
+		.replace(/\bdo you see the screen\b/g, 'screen_reference')
+		.replace(/\blook at my screen\b/g, 'screen_reference')
+		.replace(/\blook at the screen\b/g, 'screen_reference')
+		.replace(/\bon my screen\b/g, 'screen_reference')
+		.replace(/\bclick where i told you(?: to)?\b/g, 'click visible_target')
+		.replace(/\bclick where i pointed\b/g, 'click visible_target')
+		.replace(/\bclick there\b/g, 'click visible_target')
+		.replace(/\bclick here\b/g, 'click visible_target')
+		.replace(/\bclick that one\b/g, 'click visible_target')
+		.replace(/\bclick this one\b/g, 'click visible_target')
+		.replace(/\bopen that\b/g, 'open visible_target')
+		.replace(/\bopen this\b/g, 'open visible_target')
+		.replace(/\bthat one\b/g, 'visible_target')
+		.replace(/\bthis one\b/g, 'visible_target')
 		.replace(/\bgo to\b/g, 'open')
 		.replace(/\bgo back\b/g, 'navigate back')
+		.replace(/\b(verif\w*|check|confirm(?:ation|ed)?|validated?)\b/g, 'self_verify')
+		.replace(/\b(outdated|stale|old)\s+(screen|screenshot|capture|image)s?\b/g, 'stale_screen')
+		.replace(/\b(screen|screenshot|capture|image)s?\s+(are\s+)?(outdated|stale|old)\b/g, 'stale_screen')
+		.replace(/\byou say you did\b/g, 'unverified_action_claim')
+		.replace(/\byou said you did\b/g, 'unverified_action_claim')
+		.replace(/\bsay you clicked\b/g, 'unverified_action_claim')
+		.replace(/\bsay you opened\b/g, 'unverified_action_claim')
+		.replace(/\bsay you went\b/g, 'unverified_action_claim')
+		.replace(/\balready went to that page\b/g, 'unverified_navigation_claim')
+		.replace(/\b(?:have not|havent|haven't|not)\s+actually gone to that page\b/g, 'unverified_navigation_claim')
+		.replace(/\bbefore you (?:tap|click|say|claim|report)\b/g, 'pre_action_verification')
 		.replace(/\bdefault browser\b/g, 'default_browser')
 		.replace(/\bdefault mail\b/g, 'default_mail')
 		.replace(/\bdefault app\b/g, 'default_app')
@@ -153,6 +213,52 @@ function canonicalizeIssueText(value = '') {
 		.replace(/\bchannel result\b/g, 'channel_result')
 		.replace(/\bsystem settings\b/g, 'system_settings')
 		.replace(/\bvisual studio code\b/g, 'vscode');
+}
+
+function inferAutonomousSelfImprovementPolicy(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return null;
+	const asksForNextSelfImprovementStep = /\b(what else do you have to do(?: after that)?|what do you have to do after that|what else is left(?: after that)?|what else remains(?: after that)?)\b/.test(normalized);
+	const mentionsSelfImprovement = /\b(self improve|self-improve|self improvement|self-improvement|improve yourself)\b/.test(normalized);
+	if (!asksForNextSelfImprovementStep || !mentionsSelfImprovement) return null;
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.autonomous_self_drive',
+		value: {
+			enabled: true,
+			message: 'After each self-fix, partial success, or verification result, determine the next improvement step yourself and keep iterating until the underlying friction is removed. Do not ask the user what to do next when the next self-improvement action can be inferred from the current result.',
+			evidence: String(text || '').trim(),
+		},
+		source: 'user_correction',
+		confidence: 0.96,
+		evidence: text,
+	};
+}
+
+function inferDirectCreativeFulfillmentPolicy(text = '') {
+	const raw = String(text || '').trim();
+	if (!raw) return null;
+	const normalized = normalizeText(raw);
+	if (!normalized) return null;
+	const asksForPoem = /\b(?:tell|write|say|make|compose|give)\s+me\s+(?:a\s+)?poem\b/.test(normalized)
+		|| /\bpoem\b/.test(normalized)
+		|| /टेल\s+मी\s+(?:अ\s+)?पोय[म]|टेल\s+मी\s+(?:ए\s+)?पोय[म]/i.test(raw);
+	const asksForOtherCreative = /\b(?:tell|write|say|make|give)\s+me\s+(?:a\s+)?(?:joke|caption|story)\b/.test(normalized);
+	if (!asksForPoem && !asksForOtherCreative) return null;
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.direct_creative_fulfillment',
+		value: {
+			enabled: true,
+			message: 'When the user makes a short casual creative request such as asking for a poem, joke, caption, or short story, fulfill it directly instead of asking for task clarification or workspace context. Treat brief transliterated variants like "tell me a poem" as the same request when the intent is clear.',
+			evidence: raw,
+		},
+		source: 'user_correction',
+		confidence: 0.96,
+		evidence: raw,
+	};
 }
 
 function tokenizeIssueText(value = '') {
@@ -177,6 +283,14 @@ function toolFamily(toolName = '') {
 }
 
 function deriveIntentFamily(text, tokenSet, domain) {
+	if (text.includes('autonomous_continuation') || tokenSet.has('self_input')) return 'autonomous_continuation';
+	if (tokenSet.has('self_verify') && (text.includes('autonomous_continuation') || tokenSet.has('self_input'))) return 'autonomous_continuation';
+	if (/\bwhat are you doing\b/.test(text) || /\bwhats done already\b/.test(text) || /\bwhat(?:'s| is)? the status\b/.test(text) || /\bprogress update\b/.test(text)) {
+		return 'progress_accountability';
+	}
+	if (text.includes('stale_screen') || text.includes('unverified_action_claim') || text.includes('unverified_navigation_claim') || text.includes('pre_action_verification')) return 'action_verification';
+	if (text.includes('status_bar') && (text.includes('battery_icon') || tokenSet.has('icon'))) return 'status_bar_icon';
+	if (text.includes('screen_reference') || tokenSet.has('screen')) return 'screen_reference';
 	if (text.includes('default_browser') || text.includes('default_mail') || text.includes('default_app')) return 'resolve_default';
 	if (tokenSet.has('pause') || tokenSet.has('play') || tokenSet.has('video')) return 'media_control';
 	if (tokenSet.has('save') || tokenSet.has('undo') || tokenSet.has('redo') || tokenSet.has('copy') || tokenSet.has('paste') || tokenSet.has('cut') || tokenSet.has('find') || tokenSet.has('close')) {
@@ -192,6 +306,21 @@ function deriveIntentFamily(text, tokenSet, domain) {
 
 function deriveTargetFeatures(text, tokenSet, domain) {
 	const targets = [];
+	if (text.includes('what are you doing') || text.includes('whats done already') || tokenSet.has('status') || tokenSet.has('progress')) {
+		targets.push('active_work_context');
+	}
+	if (text.includes('self_verify') || tokenSet.has('self_verify')) targets.push('self_verification');
+	if (text.includes('self_input') || tokenSet.has('self_input')) targets.push('self_directed_input');
+	if (text.includes('status_bar') || (tokenSet.has('status') && tokenSet.has('bar'))) targets.push('status_bar');
+	if (text.includes('battery_icon') || (tokenSet.has('battery') && tokenSet.has('icon'))) targets.push('battery_icon');
+	if (text.includes('screen_reference') || tokenSet.has('screen')) targets.push('screen_context');
+	if (text.includes('stale_screen') || tokenSet.has('stale_screen')) targets.push('screen_context');
+	if (text.includes('visible_target') || (tokenSet.has('there') && tokenSet.has('click')) || (tokenSet.has('here') && tokenSet.has('click'))) {
+		targets.push('visible_target');
+	}
+	if (text.includes('focus_toggle') || tokenSet.has('focus_toggle') || (tokenSet.has('focus') && tokenSet.has('toggle'))) {
+		targets.push('focus_toggle');
+	}
 	if (text.includes('default_browser')) targets.push('default_browser');
 	if (text.includes('default_mail')) targets.push('default_mail');
 	if (text.includes('channel_link') || text.includes('channel_result') || (tokenSet.has('channel') && (tokenSet.has('link') || tokenSet.has('result')))) {
@@ -216,11 +345,50 @@ function deriveEntityFeatures(tokens = [], targets = [], apps = []) {
 		tokens.filter((token) => {
 			if (GENERIC_ACTION_TOKENS.has(token)) return false;
 			if (APP_HINT_TOKENS.has(token)) return false;
+			if (token === 'noise') return false;
 			if (targets.includes(token)) return false;
 			if (apps.includes(token)) return false;
 			return token.length > 2;
 		}).slice(0, 6)
 	);
+}
+
+function countAsciiTokens(tokens = []) {
+	return tokens.filter((token) => /^[a-z0-9_]+$/.test(token)).length;
+}
+
+function countRawTerms(value = '') {
+	return String(value || '')
+		.trim()
+		.split(/\s+/)
+		.filter(Boolean).length;
+}
+
+function hasNonAsciiLetters(value = '') {
+	return /[^\x00-\x7f]/.test(String(value || ''));
+}
+
+function inferNoisyPointerVisibleTarget({ rawText = '', text = '', tokenSet, pointerMode = 'nonpointer', targets = [] } = {}) {
+	if (pointerMode !== 'pointer') return false;
+	if (targets.length) return false;
+	if (!hasNonAsciiLetters(rawText)) return false;
+	const asciiTokens = countAsciiTokens([...tokenSet]);
+	if (/<noise>/i.test(String(rawText || '')) || /\bnoise\b/.test(text)) {
+		return asciiTokens <= 1;
+	}
+	const rawTerms = countRawTerms(rawText);
+	return rawTerms > 0 && rawTerms <= 4 && asciiTokens === 0;
+}
+
+function inferNoisyPointerScreenReference({ rawText = '', tokenSet, pointerMode = 'nonpointer', targets = [] } = {}) {
+	if (pointerMode !== 'pointer') return false;
+	if (targets.includes('screen_context')) return false;
+	if (!hasNonAsciiLetters(rawText)) return false;
+	if (!tokenSet.has('screen')) return false;
+	const rawTerms = countRawTerms(rawText);
+	if (rawTerms === 0 || rawTerms > 6) return false;
+	const asciiTokens = countAsciiTokens([...tokenSet]);
+	return asciiTokens <= 1;
 }
 
 const POINTER_SEQUENCE_TOOLS = new Set(['click_at', 'double_click', 'mouse_move', 'drag']);
@@ -423,18 +591,32 @@ class LearningManager {
 
 	_clusterIssue(event = {}) {
 		const domain = event.domain || inferDomain(event.userText || event.guidanceText || '');
-		const rawText = event.guidanceText || event.userText || event.classification?.payload?.description || event.issueSignature || '';
-		const text = canonicalizeIssueText(rawText);
-		const tokens = tokenizeIssueText(rawText);
+		const semanticText = event.classification?.payload?.semanticText || '';
+		const rawText = event.guidanceText
+			|| event.userText
+			|| event.classification?.payload?.description
+			|| event.issueSignature
+			|| '';
+		const clusteringText = semanticText ? `${semanticText} ${rawText}`.trim() : rawText;
+		const text = canonicalizeIssueText(clusteringText);
+		const tokens = tokenizeIssueText(clusteringText);
 		const tokenSet = new Set(tokens);
-		const intentFamily = deriveIntentFamily(text, tokenSet, domain);
-		const targets = deriveTargetFeatures(text, tokenSet, domain);
-		const apps = deriveAppFeatures(tokenSet);
-		const entities = deriveEntityFeatures(tokens, targets, apps);
-		const entitySignature = targets.length || apps.length ? 'none' : (entities.join('+') || 'none');
 		const failedFamilies = uniqueSorted((event.failedTools || []).map((item) => toolFamily(item.name)));
 		const succeededFamilies = uniqueSorted((event.successfulTools || []).map((item) => toolFamily(item.name)));
 		const pointerMode = failedFamilies.includes('pointer') || succeededFamilies.includes('pointer') ? 'pointer' : 'nonpointer';
+		let intentFamily = deriveIntentFamily(text, tokenSet, domain);
+		let targets = deriveTargetFeatures(text, tokenSet, domain);
+		if (inferNoisyPointerScreenReference({ rawText, tokenSet, pointerMode, targets })) {
+			intentFamily = 'screen_reference';
+			targets = uniqueSorted([...targets, 'screen_context', 'visible_target']);
+		}
+		if (inferNoisyPointerVisibleTarget({ rawText, text, tokenSet, pointerMode, targets })) {
+			intentFamily = 'navigation';
+			targets = uniqueSorted([...targets, 'visible_target']);
+		}
+		const apps = deriveAppFeatures(tokenSet);
+		const entities = deriveEntityFeatures(tokens, targets, apps);
+		const entitySignature = targets.length || apps.length ? 'none' : (entities.join('+') || 'none');
 		const family = event.type === 'stabilization_candidate'
 			? 'stabilize'
 			: event.type === 'skill'
@@ -522,6 +704,15 @@ class LearningManager {
 			return;
 		}
 		if (event.type === 'core-gap') {
+			if (event.classification?.payload?.memory) {
+				await this._applyMemoryEvent({
+					...event,
+					type: 'memory',
+					classification: {
+						payload: event.classification.payload.memory,
+					},
+				});
+			}
 			await this._applyCoreGapEvent(event);
 			return;
 		}
@@ -580,6 +771,22 @@ class LearningManager {
 	}
 
 	async _applyCoreGapEvent(event) {
+		const selfImprovementPolicy = inferAutonomousSelfImprovementPolicy(event.guidanceText || event.userText || '');
+		if (selfImprovementPolicy) {
+			const stored = this.memoryStore.upsert(selfImprovementPolicy);
+			if (stored) {
+				log.info('Learning', `Memory updated: key=${stored.key} kind=${stored.kind} scope=${stored.scope}`);
+			}
+			return;
+		}
+		const directCreativePolicy = inferDirectCreativeFulfillmentPolicy(event.guidanceText || event.userText || '');
+		if (directCreativePolicy) {
+			const stored = this.memoryStore.upsert(directCreativePolicy);
+			if (stored) {
+				log.info('Learning', `Memory updated: key=${stored.key} kind=${stored.kind} scope=${stored.scope}`);
+			}
+			return;
+		}
 		const issues = this._readJson(this.issuePath, { version: 1, updatedAt: nowIso(), issues: [] });
 		const clustered = this._clusterIssue(event);
 		let issue = issues.issues.find((item) => item.issueSignature === clustered.signature);

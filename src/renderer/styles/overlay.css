@@ -99,6 +99,28 @@ canvas { display: block; }
 	gap: 6px;
 	align-items: center;
 }
+#log-mode-button {
+	pointer-events: auto;
+	border: 1px solid rgba(255,255,255,0.22);
+	background: rgba(12, 16, 28, 0.6);
+	color: rgba(255,255,255,0.82);
+	font: inherit;
+	font-size: 9px;
+	letter-spacing: 0.08em;
+	padding: 4px 7px;
+	border-radius: 999px;
+	cursor: pointer;
+	text-transform: uppercase;
+	transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+#log-mode-button:hover {
+	background: rgba(25, 33, 51, 0.82);
+	border-color: rgba(255,255,255,0.42);
+}
+#log-mode-button[data-persist='off'] {
+	color: rgba(248, 113, 113, 0.95);
+	border-color: rgba(248, 113, 113, 0.4);
+}
 .dbg-dot {
 	display: flex;
 	align-items: center;

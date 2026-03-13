@@ -156,6 +156,12 @@ async function main() {
 		corrected = voice._correctTranscript('cloud code');
 		assert.strictEqual(corrected, 'Claude Code', 'existing vocabulary corrections should take precedence over recent seen terms');
 
+		corrected = voice._correctTranscript('डू यू सी माय स्क्रीन');
+		assert.strictEqual(corrected, 'do you see my screen', 'screen visibility transliteration should normalize to the intended English phrase');
+
+		corrected = voice._correctTranscript('एनसी में एक रेंट स्क्रीन');
+		assert.strictEqual(corrected, 'can you see my current screen', 'noisy multilingual screen-reference phrase should normalize to the intended screen guidance');
+
 		console.log('Voice screen-context correction tests passed.');
 	} finally {
 		restoreDom();

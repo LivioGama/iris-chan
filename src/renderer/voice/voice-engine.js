@@ -34,6 +34,27 @@ const AUTONOMOUS_LOOP_INTERVAL_MS = 600000;
 const FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
 
 const DEFAULT_VOICE_CONFIG = Object.freeze({
+	modelVoiceName: null,
+	speechProfile: Object.freeze({
+		playbackRate: 0.93,
+		pitchSemitones: -2.6,
+		lowShelfFrequencyHz: 170,
+		lowShelfGainDb: 3.4,
+		warmthFrequencyHz: 280,
+		warmthGainDb: 2.6,
+		warmthQ: 0.9,
+		presenceFrequencyHz: 2100,
+		presenceGainDb: 0.9,
+		presenceQ: 0.7,
+		highShelfFrequencyHz: 4800,
+		highShelfGainDb: 0.4,
+		outputGain: 1.05,
+		compressorThresholdDb: -22,
+		compressorKneeDb: 8,
+		compressorRatio: 2.8,
+		compressorAttackSeconds: 0.003,
+		compressorReleaseSeconds: 0.22,
+	}),
 	volumeThreshold: 0.015,
 	screenCaptureInterval: 10000,
 	newTurnThresholdMs: 3000,
@@ -89,6 +110,10 @@ function buildVoiceConfig(voiceConfig = {}) {
 		recentSeen: {
 			...DEFAULT_VOICE_CONFIG.recentSeen,
 			...(overrides.recentSeen || {}),
+		},
+		speechProfile: {
+			...DEFAULT_VOICE_CONFIG.speechProfile,
+			...(overrides.speechProfile || {}),
 		},
 	};
 }
@@ -184,6 +209,12 @@ export class VoiceEngine extends Emitter {
 		this.playback.setReferenceCallback((float32Samples) => {
 			this.capture.sendReferenceSignal(float32Samples);
 		});
+		if (typeof this.gemini?.setVoiceName === 'function') {
+			this.gemini.setVoiceName(this.voiceConfig.modelVoiceName);
+		}
+		if (typeof this.playback?.setSpeechProfile === 'function') {
+			this.playback.setSpeechProfile(this.voiceConfig.speechProfile);
+		}
 
 		this._bind();
 	}

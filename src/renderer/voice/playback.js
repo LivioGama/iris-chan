@@ -2,6 +2,35 @@
 import { Emitter } from '../../shared/emitter.js';
 import { info as logInfo, error as logError } from '../logger.js';
 
+const DEFAULT_SPEECH_PROFILE = Object.freeze({
+	playbackRate: 1,
+	pitchSemitones: 0,
+	lowShelfFrequencyHz: 170,
+	lowShelfGainDb: 0,
+	warmthFrequencyHz: 280,
+	warmthGainDb: 0,
+	warmthQ: 0.9,
+	presenceFrequencyHz: 2100,
+	presenceGainDb: 0,
+	presenceQ: 0.7,
+	highShelfFrequencyHz: 4800,
+	highShelfGainDb: 0,
+	outputGain: 1,
+	compressorThresholdDb: -24,
+	compressorKneeDb: 8,
+	compressorRatio: 2.2,
+	compressorAttackSeconds: 0.003,
+	compressorReleaseSeconds: 0.2,
+});
+
+function buildSpeechProfile(profile = {}) {
+	const overrides = profile && typeof profile === 'object' ? profile : {};
+	return {
+		...DEFAULT_SPEECH_PROFILE,
+		...overrides,
+	};
+}
+
 export class AudioPlayback extends Emitter {
 	constructor() {
 		super();
@@ -19,10 +48,26 @@ export class AudioPlayback extends Emitter {
 		this._initPromise = null;
 		this._catchUpLeadSeconds = 0.2;
 		this._catchUpPlaybackRate = 1.04;
+		this.speechProfile = buildSpeechProfile();
+		this._playbackRate = this.speechProfile.playbackRate;
+		this.processingInputNode = null;
+		this.lowShelfFilter = null;
+		this.warmthFilter = null;
+		this.presenceFilter = null;
+		this.highShelfFilter = null;
+		this.compressorNode = null;
 	}
 
 	setReferenceCallback(callback) {
 		this.referenceCallback = callback;
+	}
+
+	setSpeechProfile(profile) {
+		this.speechProfile = buildSpeechProfile(profile);
+		this._playbackRate = this._sanitizePlaybackRate(this.speechProfile.playbackRate);
+		if (this.ctx) {
+			this._configureProcessingGraph();
+		}
 	}
 
 	async init() {
@@ -39,9 +84,8 @@ export class AudioPlayback extends Emitter {
 				this.analyser.fftSize = 256;
 				this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
 				this.gainNode = this.ctx.createGain();
-				this.gainNode.connect(this.analyser);
-				this.analyser.connect(this.ctx.destination);
 			}
+			this._configureProcessingGraph();
 
 			// Route to specific output device if available
 			await this._setOutputDevice();
@@ -122,13 +166,11 @@ export class AudioPlayback extends Emitter {
 
 		const source = this.ctx.createBufferSource();
 		source.buffer = audioBuffer;
-		source.connect(this.gainNode);
+		source.connect(this.processingInputNode || this.gainNode);
 
 		const now = this.ctx.currentTime;
 		const bufferedLead = Math.max(0, this.nextStartTime - now);
-		const playbackRate = bufferedLead > this._catchUpLeadSeconds
-			? this._catchUpPlaybackRate
-			: 1;
+		const playbackRate = this._resolvePlaybackRate(bufferedLead);
 		if (source.playbackRate && typeof source.playbackRate.value === 'number') {
 			source.playbackRate.value = playbackRate;
 		}
@@ -152,6 +194,95 @@ export class AudioPlayback extends Emitter {
 			this.playing = true;
 			this.emit('started');
 		}
+	}
+
+	_sanitizePlaybackRate(value) {
+		const numeric = Number(value);
+		if (!Number.isFinite(numeric)) return 1;
+		return Math.min(1.08, Math.max(0.8, numeric));
+	}
+
+	_resolvePlaybackRate(bufferedLead) {
+		const baseRate = this._sanitizePlaybackRate(this._playbackRate);
+		if (bufferedLead <= this._catchUpLeadSeconds) {
+			return baseRate;
+		}
+		return Math.max(baseRate, Math.min(1.08, baseRate * this._catchUpPlaybackRate));
+	}
+
+	_disconnectNode(node) {
+		if (!node || typeof node.disconnect !== 'function') return;
+		try {
+			node.disconnect();
+		} catch {}
+	}
+
+	_configureProcessingGraph() {
+		if (!this.ctx || !this.gainNode || !this.analyser) return;
+
+		this._disconnectNode(this.lowShelfFilter);
+		this._disconnectNode(this.warmthFilter);
+		this._disconnectNode(this.presenceFilter);
+		this._disconnectNode(this.highShelfFilter);
+		this._disconnectNode(this.compressorNode);
+		this._disconnectNode(this.gainNode);
+		this._disconnectNode(this.analyser);
+
+		this.lowShelfFilter = null;
+		this.warmthFilter = null;
+		this.presenceFilter = null;
+		this.highShelfFilter = null;
+		this.compressorNode = null;
+
+		this.gainNode.gain.value = this.speechProfile.outputGain;
+
+		const chain = [];
+		if (typeof this.ctx.createBiquadFilter === 'function') {
+			this.lowShelfFilter = this.ctx.createBiquadFilter();
+			this.lowShelfFilter.type = 'lowshelf';
+			this.lowShelfFilter.frequency.value = this.speechProfile.lowShelfFrequencyHz;
+			this.lowShelfFilter.gain.value = this.speechProfile.lowShelfGainDb;
+			chain.push(this.lowShelfFilter);
+
+			this.warmthFilter = this.ctx.createBiquadFilter();
+			this.warmthFilter.type = 'peaking';
+			this.warmthFilter.frequency.value = this.speechProfile.warmthFrequencyHz;
+			this.warmthFilter.gain.value = this.speechProfile.warmthGainDb;
+			this.warmthFilter.Q.value = this.speechProfile.warmthQ;
+			chain.push(this.warmthFilter);
+
+			this.presenceFilter = this.ctx.createBiquadFilter();
+			this.presenceFilter.type = 'peaking';
+			this.presenceFilter.frequency.value = this.speechProfile.presenceFrequencyHz;
+			this.presenceFilter.gain.value = this.speechProfile.presenceGainDb;
+			this.presenceFilter.Q.value = this.speechProfile.presenceQ;
+			chain.push(this.presenceFilter);
+
+			this.highShelfFilter = this.ctx.createBiquadFilter();
+			this.highShelfFilter.type = 'highshelf';
+			this.highShelfFilter.frequency.value = this.speechProfile.highShelfFrequencyHz;
+			this.highShelfFilter.gain.value = this.speechProfile.highShelfGainDb;
+			chain.push(this.highShelfFilter);
+		}
+
+		if (typeof this.ctx.createDynamicsCompressor === 'function') {
+			this.compressorNode = this.ctx.createDynamicsCompressor();
+			this.compressorNode.threshold.value = this.speechProfile.compressorThresholdDb;
+			this.compressorNode.knee.value = this.speechProfile.compressorKneeDb;
+			this.compressorNode.ratio.value = this.speechProfile.compressorRatio;
+			this.compressorNode.attack.value = this.speechProfile.compressorAttackSeconds;
+			this.compressorNode.release.value = this.speechProfile.compressorReleaseSeconds;
+			chain.push(this.compressorNode);
+		}
+
+		let currentNode = this.gainNode;
+		for (const node of chain) {
+			currentNode.connect(node);
+			currentNode = node;
+		}
+		currentNode.connect(this.analyser);
+		this.analyser.connect(this.ctx.destination);
+		this.processingInputNode = chain[0] || this.gainNode;
 	}
 
 	stop() {

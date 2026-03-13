@@ -50,6 +50,9 @@ Return a JSON object with:
 - enrichedPrompt: string — detailed, actionable prompt for a coding agent (include specific files, expected behavior, edge cases)
 - impactedFiles: string[] — list of files likely to be modified
 - complexity: "trivial" | "small" | "medium" | "large"
+- experimentPlan: string[] — short ordered steps for hypothesis/experiment/verification
+- explorationPlan: string[] — parameter or alternative-path checks worth trying
+- verificationPlan: string[] — concrete checks or artifacts to inspect before declaring success
 
 Respond ONLY with valid JSON, no markdown fences.`;
 
@@ -86,10 +89,13 @@ User's raw task: "${rawPrompt}"`;
 			enrichedPrompt: parsed.enrichedPrompt || rawPrompt,
 			impactedFiles: parsed.impactedFiles || [],
 			complexity: parsed.complexity || 'unknown',
+			experimentPlan: Array.isArray(parsed.experimentPlan) ? parsed.experimentPlan : [],
+			explorationPlan: Array.isArray(parsed.explorationPlan) ? parsed.explorationPlan : [],
+			verificationPlan: Array.isArray(parsed.verificationPlan) ? parsed.verificationPlan : [],
 		};
 	} catch (err) {
 		log.warn('Enricher', `Enrichment failed: ${err.message}`);
-		return { enrichedPrompt: rawPrompt, impactedFiles: [], complexity: 'unknown' };
+		return { enrichedPrompt: rawPrompt, impactedFiles: [], complexity: 'unknown', experimentPlan: [], explorationPlan: [], verificationPlan: [] };
 	}
 }
 

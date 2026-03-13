@@ -3,7 +3,7 @@ import { Emitter } from '../../shared/emitter.js';
 import { toolDeclarations } from './tool-declarations.js';
 import { refreshVocabulary, buildPrioritizedVocab, buildCorrectionsPrompt, buildSystemInstruction } from './system-prompt.js';
 import { buildRecentSeenPrompt } from '../vocab/recent-seen-store.js';
-import { info as logInfo, error as logError } from '../logger.js';
+import { info as logInfo, warn as logWarn, error as logError } from '../logger.js';
 
 const ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 const MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
@@ -14,6 +14,133 @@ const LOW_LATENCY_ACTIVITY_DETECTION = {
 	prefixPaddingMs: 20,
 	silenceDurationMs: 140,
 };
+const DEFAULT_SYSTEM_MODEL_VOICE = null;
+const MAX_SKILL_SECTION_CHARS = 12000;
+const MAX_SKILL_CATALOG_ENTRIES = 40;
+const SYSTEM_PROMPT_VERSION = 'speed-scientific-v1';
+const DEFAULT_SETUP_MAX_SYSTEM_CHARS = Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_SETUP_MAX_SYSTEM_CHARS || '24000', 10);
+const COMPACT_SETUP_MAX_SYSTEM_CHARS = Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_SETUP_COMPACT_SYSTEM_CHARS || '14000', 10);
+const SETUP_FALLBACK_PROFILES = Object.freeze([
+	Object.freeze({
+		label: 'full',
+		allowVoice: true,
+		includeSkillDeclarations: true,
+		maxSystemInstructionChars: DEFAULT_SETUP_MAX_SYSTEM_CHARS,
+	}),
+	Object.freeze({
+		label: 'no-custom-voice',
+		allowVoice: false,
+		includeSkillDeclarations: true,
+		maxSystemInstructionChars: DEFAULT_SETUP_MAX_SYSTEM_CHARS,
+	}),
+	Object.freeze({
+		label: 'core-tools-only',
+		allowVoice: false,
+		includeSkillDeclarations: false,
+		maxSystemInstructionChars: DEFAULT_SETUP_MAX_SYSTEM_CHARS,
+	}),
+	Object.freeze({
+		label: 'compact-system-instruction',
+		allowVoice: false,
+		includeSkillDeclarations: false,
+		maxSystemInstructionChars: Math.min(DEFAULT_SETUP_MAX_SYSTEM_CHARS, COMPACT_SETUP_MAX_SYSTEM_CHARS),
+	}),
+]);
+const SELF_FIX_PREAMBLE_PATTERNS = [
+	/^(?:ok(?:ay)?|sure|alright|fine)[, ]+(?:go ahead|continue|tell me|let'?s hear it)\.?$/i,
+	/^(?:go ahead|continue|keep going|tell me|say it|i'?m listening|i am listening|i'?m ready|i am ready|ready)\.?$/i,
+	/^(?:hold on|wait|one sec|one second|hang on|let me explain|hear me out|listen up)\.?$/i,
+	/^(?:i(?:'m| am)? going to|i(?:'m| am)? about to|i want to|i need to) (?:change|fix|modify|update|improve) (?:you|iris|yourself|your behavior|your idle behavior|your voice)\.?$/i,
+	/^(?:we need to|i need to) talk about changing (?:you|your behavior|your idle behavior|your voice)\.?$/i,
+];
+const SELF_FIX_ACTION_PATTERNS = [
+	/\b(?:change|fix|modify|update|improve|stop|start|add|remove|rewrite|adjust|enforce)\b/i,
+];
+const SELF_FIX_TARGET_PATTERNS = [
+	/\b(?:you|yourself|iris|your|voice|behavior|instructions|memory|prompt|tool|tools|ui|speech|responses?|idle behavior|silence)\b/i,
+];
+const SELF_FIX_DETAIL_PATTERNS = [
+	/\b(?:because|when|after|before|instead of|so that|followed by|unless|until|prevent|ensure|should|must|never|always)\b/i,
+	/\b(?:problem|desired behavior|implementation|files?)\s*:/i,
+	/\b(?:voice|behavior|instructions|memory|prompt|tool|tools|ui|speech|response|responses|restart|screen|transcript|idle|silence)\b/i,
+];
+
+function normalizeSelfFixUtterance(text = '') {
+	return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function stripSelfFixPunctuation(text = '') {
+	return normalizeSelfFixUtterance(text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+}
+
+export function classifySelfFixRequest(text = '', { awaitingDetails = false } = {}) {
+	const normalized = normalizeSelfFixUtterance(text);
+	if (!normalized) {
+		return { kind: 'none', normalizedText: '', detailSignals: 0 };
+	}
+
+	const plain = stripSelfFixPunctuation(normalized);
+	if (!plain) {
+		return { kind: 'none', normalizedText: normalized, detailSignals: 0 };
+	}
+
+	const isPreamble = SELF_FIX_PREAMBLE_PATTERNS.some((pattern) => pattern.test(normalized));
+	const hasAction = SELF_FIX_ACTION_PATTERNS.some((pattern) => pattern.test(normalized));
+	const hasTarget = SELF_FIX_TARGET_PATTERNS.some((pattern) => pattern.test(normalized));
+	const detailSignals = SELF_FIX_DETAIL_PATTERNS.reduce(
+		(count, pattern) => count + (pattern.test(normalized) ? 1 : 0),
+		0,
+	);
+	const longEnough = plain.length >= 40 || normalized.split(/\s+/).length >= 8;
+
+	if (isPreamble) {
+		return { kind: 'intent_preamble', normalizedText: normalized, detailSignals };
+	}
+
+	if (awaitingDetails && !longEnough) {
+		return { kind: 'intent_preamble', normalizedText: normalized, detailSignals };
+	}
+
+	if (hasAction && hasTarget && (detailSignals >= 2 || longEnough)) {
+		return { kind: 'specific_change', normalizedText: normalized, detailSignals };
+	}
+
+	if (awaitingDetails && hasAction && hasTarget) {
+		return { kind: detailSignals >= 1 ? 'specific_change' : 'intent_preamble', normalizedText: normalized, detailSignals };
+	}
+
+	return { kind: 'none', normalizedText: normalized, detailSignals };
+}
+
+function parseClaudeCodeStatus(text) {
+	const value = String(text || '');
+	const updateMatch = value.match(/^\[CLAUDE CODE UPDATE — ([^\]]+)\]/);
+	if (updateMatch) {
+		return { kind: 'update', taskId: updateMatch[1] };
+	}
+	const finishedMatch = value.match(/^\[CLAUDE CODE FINISHED — ([^\]]+)\]/);
+	if (finishedMatch) {
+		return { kind: 'finished', taskId: finishedMatch[1] };
+	}
+	return null;
+}
+
+function appendWithinBudget(baseText = '', block = '', budget = MAX_SKILL_SECTION_CHARS) {
+	if (!block) return baseText;
+	if (!baseText) return block.slice(0, budget);
+	const remaining = Math.max(0, budget - baseText.length - 2);
+	if (!remaining) return baseText;
+	return `${baseText}\n\n${block.slice(0, remaining)}`;
+}
+
+function fingerprintText(value = '') {
+	const text = String(value || '');
+	let hash = 0;
+	for (let index = 0; index < text.length; index += 1) {
+		hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+	}
+	return `${text.length}:${hash.toString(16)}`;
+}
 
 export class GeminiClient extends Emitter {
 	constructor() {
@@ -28,6 +155,7 @@ export class GeminiClient extends Emitter {
 		this._reconnectTimer = null;
 		this._connectId = 0; // guards against stale WS callbacks
 		this._directMode = false;
+		this._autonomousMode = false;
 		this._audioMsg = {
 			realtimeInput: {
 				audio: {
@@ -36,30 +164,89 @@ export class GeminiClient extends Emitter {
 				},
 			},
 		};
+		this._voiceName = DEFAULT_SYSTEM_MODEL_VOICE;
+		this._cachedSetupPayload = null;
+		this._cachedSetupKey = '';
+		this._cachedSkillSection = '';
+		this._cachedSystemInstruction = '';
+		this._cachedSystemInstructionKey = '';
+		this._setupFallbackLevel = 0;
 	}
 
 	setDirectMode(enabled) {
 		this._directMode = !!enabled;
+		this._invalidateSetupCache();
+	}
+
+	setAutonomousMode(enabled) {
+		this._autonomousMode = !!enabled;
+		this._invalidateSetupCache();
+	}
+
+	setVoiceName(voiceName) {
+		const nextVoice = String(voiceName || '').trim();
+		this._voiceName = nextVoice || null;
+		this._invalidateSetupCache();
 	}
 
 	async connect(apiKey) {
 		this.apiKey = apiKey;
 		this.retryCount = 0;
 		this.maxRetries = 5;
+		this._setupFallbackLevel = 0;
 		// Cancel any pending reconnect timer from a previous session
 		clearTimeout(this._reconnectTimer);
 		this._reconnectTimer = null;
-		await refreshVocabulary();
-		try {
-			this._skillDeclarations = await window.electronAPI.getSkillDeclarations();
-			this._skillPrompts = await window.electronAPI.getSkillPrompts();
-			this._skillCatalog = await window.electronAPI.getSkillCatalog();
-		} catch {
-			this._skillDeclarations = [];
-			this._skillPrompts = [];
-			this._skillCatalog = [];
-		}
+		await this._loadSetupResources();
 		this._connect();
+	}
+
+	async _loadSetupResources() {
+		const [
+			vocabRefresh,
+			skillDeclarations,
+			skillPrompts,
+			skillCatalog,
+		] = await Promise.allSettled([
+			refreshVocabulary(),
+			window.electronAPI.getSkillDeclarations(),
+			window.electronAPI.getSkillPrompts(),
+			window.electronAPI.getSkillCatalog(),
+		]);
+		if (vocabRefresh.status === 'rejected') {
+			logWarn('Gemini', `Vocabulary refresh failed before connect: ${vocabRefresh.reason?.message || vocabRefresh.reason || 'unknown error'}`);
+		}
+		this._skillDeclarations = skillDeclarations.status === 'fulfilled' ? skillDeclarations.value : [];
+		this._skillPrompts = skillPrompts.status === 'fulfilled' ? skillPrompts.value : [];
+		this._skillCatalog = skillCatalog.status === 'fulfilled' ? skillCatalog.value : [];
+		this._cachedSkillSection = this._buildSkillSection();
+		this._invalidateSetupCache();
+	}
+
+	_invalidateSetupCache() {
+		this._cachedSetupPayload = null;
+		this._cachedSetupKey = '';
+		this._cachedSystemInstruction = '';
+		this._cachedSystemInstructionKey = '';
+	}
+
+	_getSystemInstruction() {
+		const systemInstructionKey = JSON.stringify({
+			version: SYSTEM_PROMPT_VERSION,
+			directMode: this._directMode,
+			autonomousMode: this._autonomousMode,
+			skillFingerprint: fingerprintText(this._cachedSkillSection),
+		});
+		if (this._cachedSystemInstruction && this._cachedSystemInstructionKey === systemInstructionKey) {
+			return this._cachedSystemInstruction;
+		}
+		const nextInstruction = `${buildSystemInstruction({
+			directMode: this._directMode,
+			autonomousMode: this._autonomousMode,
+		})}${this._cachedSkillSection}`;
+		this._cachedSystemInstruction = nextInstruction;
+		this._cachedSystemInstructionKey = systemInstructionKey;
+		return nextInstruction;
 	}
 
 	_connect() {
@@ -109,51 +296,128 @@ export class GeminiClient extends Emitter {
 			this.connected = false;
 			this.sessionReady = false;
 			logInfo('Gemini', `WebSocket closed: code=${ev.code}, reason=${ev.reason}`);
+			if (this._shouldDegradeSetupOnClose(ev)) {
+				this._applyInvalidArgumentFallback(ev.reason);
+			}
 			this.emit('disconnected', ev.code, ev.reason);
 			this._tryReconnect();
 		};
 	}
 
 	_sendSetup() {
+		this._send(this._getSetupPayload());
+	}
+
+	_getSetupPayload() {
+		const fallbackProfile = this._getSetupFallbackProfile();
+		const setupKey = JSON.stringify({
+			directMode: this._directMode,
+			autonomousMode: this._autonomousMode,
+			voiceName: this._voiceName,
+			setupFallbackLevel: this._setupFallbackLevel,
+			skillDeclarations: fallbackProfile.includeSkillDeclarations && Array.isArray(this._skillDeclarations)
+				? this._skillDeclarations.length
+				: 0,
+			skillSectionFingerprint: fingerprintText(this._cachedSkillSection),
+			systemPromptVersion: SYSTEM_PROMPT_VERSION,
+		});
+		if (this._cachedSetupPayload && this._cachedSetupKey === setupKey) {
+			return this._cachedSetupPayload;
+		}
+
+		const generationConfig = {
+			responseModalities: ['AUDIO'],
+		};
+		if (fallbackProfile.allowVoice && this._voiceName) {
+			generationConfig.speechConfig = {
+				voiceConfig: {
+					prebuiltVoiceConfig: {
+						voiceName: this._voiceName,
+					},
+				},
+			};
+		}
+		const functionDeclarations = [
+			...toolDeclarations,
+			...(fallbackProfile.includeSkillDeclarations ? (this._skillDeclarations || []) : []),
+		];
 		const setup = {
 			setup: {
 				model: MODEL,
-				generationConfig: {
-					responseModalities: ['AUDIO'],
-					speechConfig: {
-						voiceConfig: {
-							prebuiltVoiceConfig: {
-								voiceName: 'Kore',
-							},
-						},
-					},
-				},
+				generationConfig,
 				realtimeInputConfig: {
 					activityHandling: 'START_OF_ACTIVITY_INTERRUPTS',
 					automaticActivityDetection: LOW_LATENCY_ACTIVITY_DETECTION,
 				},
 				outputAudioTranscription: {},
 				inputAudioTranscription: {},
-				tools: [{ functionDeclarations: [...toolDeclarations, ...(this._skillDeclarations || [])] }],
+				tools: [{ functionDeclarations }],
 				systemInstruction: {
-					parts: [{ text: buildSystemInstruction({ directMode: this._directMode }) + this._buildSkillSection() }],
+					parts: [{ text: this._getTrimmedSystemInstruction(fallbackProfile) }],
 				},
 			},
 		};
-		this._send(setup);
+		this._cachedSetupPayload = setup;
+		this._cachedSetupKey = setupKey;
+		return setup;
+	}
+
+	_getSetupFallbackProfile(level = this._setupFallbackLevel) {
+		return SETUP_FALLBACK_PROFILES[Math.min(Math.max(level, 0), SETUP_FALLBACK_PROFILES.length - 1)];
+	}
+
+	_getTrimmedSystemInstruction(profile = this._getSetupFallbackProfile()) {
+		const fullInstruction = this._getSystemInstruction();
+		const budget = Math.max(4000, Number(profile?.maxSystemInstructionChars || DEFAULT_SETUP_MAX_SYSTEM_CHARS));
+		if (fullInstruction.length <= budget) return fullInstruction;
+		const trimmed = `${fullInstruction.slice(0, Math.max(0, budget - 29)).trimEnd()}\n\n[system instruction truncated]`;
+		logWarn('Gemini', `Trimmed system instruction from ${fullInstruction.length} to ${trimmed.length} chars for ${profile?.label || 'unknown'} setup profile`);
+		return trimmed;
+	}
+
+	_shouldDegradeSetupOnClose(ev) {
+		return ev?.code === 1007 && /invalid argument/i.test(String(ev?.reason || ''));
+	}
+
+	_applyInvalidArgumentFallback(reason = '') {
+		if (this._setupFallbackLevel >= SETUP_FALLBACK_PROFILES.length - 1) {
+			logWarn('Gemini', `Invalid-argument close persisted after all setup fallbacks. reason=${reason || 'unknown'}`);
+			return false;
+		}
+		this._setupFallbackLevel += 1;
+		this._invalidateSetupCache();
+		const profile = this._getSetupFallbackProfile();
+		logWarn('Gemini', `Invalid-argument close detected. Retrying with ${profile.label} setup profile. reason=${reason || 'unknown'}`);
+		return true;
 	}
 
 	_buildSkillSection() {
 		let section = '';
+		let truncated = false;
 		// Active skill prompts (skills with tools.json)
 		if (this._skillPrompts?.length) {
-			section += '\n\n' + this._skillPrompts.join('\n\n');
+			const promptBlock = this._skillPrompts.join('\n\n');
+			const nextSection = appendWithinBudget(section, promptBlock, MAX_SKILL_SECTION_CHARS);
+			truncated = truncated || nextSection.length < section.length + promptBlock.length + (section ? 2 : 0);
+			section = nextSection;
 		}
 		// Skill catalog (all skills, for use_skill discovery)
 		if (this._skillCatalog?.length) {
-			section += '\n\nINSTALLED SKILLS CATALOG (located at ~/.iris/skills/) — use the use_skill tool to load any skill\'s full instructions:\n';
-			section += this._skillCatalog.map(s => `• ${s.name}: ${s.description}`).join('\n');
-			section += '\nWhen the user asks for something that matches a skill, call use_skill with the skill name to get detailed instructions, then execute them using your existing tools. Skills are stored in ~/.iris/skills/<skill-name>/.';
+			const catalogHeader = 'INSTALLED SKILLS CATALOG (located at ~/.iris/skills/) — use the use_skill tool to load any skill\'s full instructions:\n';
+			const catalogEntries = this._skillCatalog
+				.slice(0, MAX_SKILL_CATALOG_ENTRIES)
+				.map((s) => `• ${s.name}: ${s.description}`)
+				.join('\n');
+			const catalogFooter = '\nWhen the user asks for something that matches a skill, call use_skill with the skill name to get detailed instructions, then execute them using your existing tools. Skills are stored in ~/.iris/skills/<skill-name>/.';
+			const catalogBlock = `${catalogHeader}${catalogEntries}${catalogFooter}`;
+			const nextSection = appendWithinBudget(section, catalogBlock, MAX_SKILL_SECTION_CHARS);
+			truncated = truncated
+				|| this._skillCatalog.length > MAX_SKILL_CATALOG_ENTRIES
+				|| nextSection.length < section.length + catalogBlock.length + (section ? 2 : 0);
+			section = nextSection;
+		}
+		if (truncated) {
+			logWarn('Gemini', `Trimmed skill prompt/catalog section to ${section.length} chars to keep setup payload stable`);
 		}
 		return section;
 	}
@@ -161,6 +425,10 @@ export class GeminiClient extends Emitter {
 	_handleMessage(msg) {
 		if (msg.setupComplete) {
 			this.sessionReady = true;
+			if (this._setupFallbackLevel > 0) {
+				const profile = this._getSetupFallbackProfile();
+				logInfo('Gemini', `Session ready using ${profile.label} setup fallback`);
+			}
 			this.emit('ready');
 			return;
 		}
@@ -228,12 +496,35 @@ export class GeminiClient extends Emitter {
 
 	sendText(text) {
 		if (!this.sessionReady) return;
+		const claudeCodeStatus = parseClaudeCodeStatus(text);
+		const finalText = this._autonomousMode && claudeCodeStatus
+			? this._buildAutonomousClaudeCodeStatusPrompt(text, claudeCodeStatus)
+			: text;
+		if (claudeCodeStatus) {
+			this.emit('claudeCodeStatusPrompt', {
+				...claudeCodeStatus,
+				text: finalText,
+			});
+		}
 		this._send({
 			clientContent: {
-				turns: [{ role: 'user', parts: [{ text }] }],
+				turns: [{ role: 'user', parts: [{ text: finalText }] }],
 				turnComplete: true,
 			},
 		});
+	}
+
+	_buildAutonomousClaudeCodeStatusPrompt(text, status) {
+		const prefix = status.kind === 'finished' ? 'Finished:' : 'Update:';
+		return (
+			`${text}\n\n` +
+			'[AUTONOMOUS MODE STATUS OVERRIDE]\n' +
+			'This status update is for an active autonomous coding task. ' +
+			`Reply proactively in one short sentence that starts with "${prefix}". ` +
+			'Use scientific progress wording: current task, completed evidence, next step, blocker only if it exists. ' +
+			'Do not ask questions. Do not mention waiting, silence rules, or that you are in autonomous mode. ' +
+			'Do not repeat earlier updates. If this is a completion, include the result briefly.'
+		);
 	}
 
 	sendRealtimeText(text) {
