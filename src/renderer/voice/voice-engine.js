@@ -225,6 +225,7 @@ export class VoiceEngine extends Emitter {
 		this._consecutiveAutoTurns = 0;
 		this._lastAutonomousPromptTime = 0;
 		this._autonomousResponseExpected = false;
+		this._pendingClaudeCodeStatus = null;
 		this._proactiveResponseExpected = false;
 		this._proactivePromptedAt = 0;
 		this._replySession = null;
@@ -904,12 +905,12 @@ export class VoiceEngine extends Emitter {
 			this.behavior.setMode('autonomous');
 			this.gemini.sendText(
 				'[SYSTEM: MODE CHANGE — AUTONOMOUS MODE ACTIVATED]\n' +
-				'You are now in autonomous coding mode. Confirm with ONE short sentence (e.g. "Autonomous mode on — what should I work on?") then STOP. ' +
+				'You are now in autonomous coding mode. Confirm with ONE short sentence (e.g. "Autonomous mode on.") then STOP. ' +
 				'Do NOT describe the mode, list capabilities, mention schedules, or say you are idle/waiting/standing by. ' +
 				'IDLE RULES STILL APPLY: after your initial confirmation, remain COMPLETELY SILENT until the user speaks or you receive an [AUTONOMOUS CODING PROMPT] system message. ' +
-				'When you receive [AUTONOMOUS CODING PROMPT], ask briefly what to work on, then STOP. ' +
+				'When you receive [AUTONOMOUS CODING PROMPT], keep active coding work in the background and speak only if there is no active task. ' +
 				'When the user describes a task, call fix_project immediately with a detailed description. ' +
-				'Share Claude Code progress ONLY when the user asks. When a task finishes, report the result in one sentence, then go silent.'
+				'Share Claude Code progress ONLY when the user asks. Do not volunteer logs, background coding updates, or task completion notices.'
 			);
 			if (!this._screen.isRunning && this._active) {
 				this._screen.start();
@@ -954,7 +955,7 @@ export class VoiceEngine extends Emitter {
 				this._screen.capture().then(() => {
 					if (this._autonomousMode) {
 						this.gemini.sendText(
-							'[AUTONOMOUS CODING PROMPT] If a Claude Code task is running, give a one-sentence progress update. ' +
+							'[AUTONOMOUS CODING PROMPT] If a Claude Code task is running, continue working silently. ' +
 							'Otherwise, ask ONE short question about what to work on. ' +
 							'No filler, no status commentary. One sentence max, then STOP.'
 						);

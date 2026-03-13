@@ -22,6 +22,11 @@ const FILLER_PATTERNS = [
 	/^\s*(thanks|thank you|okay|ok)\s*$/i,
 ];
 
+const INTERNAL_TRANSCRIPT_PATTERNS = [
+	/^\s*\[(?:CLAUDE CODE|SCREENSHOT|SYSTEM:)/i,
+	/^\s*\[[^\]]*progress update:/i,
+];
+
 export function cleanTranscript(text, corrections = {}, hints = {}) {
 	if (!text) return '';
 	let out = String(text);
@@ -55,6 +60,7 @@ export const IDLE_NOISE_PATTERN = /(i'?m here|i'?m listening|silence is correct 
 export function shouldDropTranscript(text) {
 	if (!text) return true;
 	if (text.length <= 1) return true;
+	if (INTERNAL_TRANSCRIPT_PATTERNS.some((pattern) => pattern.test(text))) return true;
 	return IDLE_NOISE_PATTERN.test(text);
 }
 

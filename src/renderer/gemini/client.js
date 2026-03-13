@@ -548,30 +548,17 @@ export class GeminiClient extends Emitter {
 	sendText(text) {
 		if (!this.sessionReady) return;
 		const claudeCodeStatus = parseClaudeCodeStatus(text);
-		const finalText = this._autonomousMode && claudeCodeStatus
-			? this._buildAutonomousClaudeCodeStatusPrompt(text, claudeCodeStatus)
-			: text;
 		if (claudeCodeStatus) {
 			this.emit('claudeCodeStatusPrompt', {
 				...claudeCodeStatus,
-				text: finalText,
+				text,
 			});
+			if (this._autonomousMode) {
+				return;
+			}
 		}
 		this._send(
-			`{"clientContent":{"turns":[{"role":"user","parts":[{"text":${JSON.stringify(finalText)}}]}],"turnComplete":true}}`
-		);
-	}
-
-	_buildAutonomousClaudeCodeStatusPrompt(text, status) {
-		const prefix = status.kind === 'finished' ? 'Finished:' : 'Update:';
-		return (
-			`${text}\n\n` +
-			'[AUTONOMOUS MODE STATUS OVERRIDE]\n' +
-			'This status update is for an active autonomous coding task. ' +
-			`Reply proactively in one short sentence that starts with "${prefix}". ` +
-			'Use scientific progress wording: current task, completed evidence, next step, blocker only if it exists. ' +
-			'Do not ask questions. Do not mention waiting, silence rules, or that you are in autonomous mode. ' +
-			'Do not repeat earlier updates. If this is a completion, include the result briefly.'
+			`{"clientContent":{"turns":[{"role":"user","parts":[{"text":${JSON.stringify(text)}}]}],"turnComplete":true}}`
 		);
 	}
 

@@ -215,9 +215,8 @@ async function main() {
 
 			assert.strictEqual(prompts.length, 1, 'autonomous client should emit one status prompt event');
 			assert.strictEqual(prompts[0].kind, 'update', 'update marker should classify correctly');
-			assert.match(prompts[0].text, /\[AUTONOMOUS MODE STATUS OVERRIDE\]/, 'autonomous client should append the override instructions');
-			assert.match(sent[0].clientContent.turns[0].parts[0].text, /^(\[CLAUDE CODE UPDATE — task-123\])/);
-			assert.match(sent[0].clientContent.turns[0].parts[0].text, /Reply proactively in one short sentence that starts with "Update:"/);
+			assert.match(prompts[0].text, /^(\[CLAUDE CODE UPDATE — task-123\])/, 'status event should preserve the raw task update');
+			assert.strictEqual(sent.length, 0, 'autonomous client should keep background task status out of the live speech channel');
 		}
 
 		{
@@ -231,18 +230,9 @@ async function main() {
 				text: '[CLAUDE CODE UPDATE — task-123]',
 			});
 
-			assert.deepStrictEqual(voice._pendingClaudeCodeStatus, { kind: 'update', taskId: 'task-123' }, 'voice engine should track pending autonomous status');
-			assert.strictEqual(voice._shouldAcceptModelOutput(), true, 'pending autonomous status should open the output gate');
-			assert.strictEqual(voice._shouldAcceptModelToolCalls(), false, 'pending autonomous status should reject tool calls');
-
-			gemini.emit('outputTranscription', 'Working through files now.');
-			assert.strictEqual(voice._accum.model, '', 'status output without Update:/Finished: prefix should be ignored');
-
-			gemini.emit('outputTranscription', 'Update: applied the renderer gate and queued verification.');
-			assert.match(voice._accum.model, /^Update:/, 'prefixed update should be accepted');
-
-			gemini.emit('turnComplete');
-			assert.strictEqual(voice._pendingClaudeCodeStatus, null, 'turn completion should clear pending status');
+			assert.strictEqual(voice._shouldAcceptModelOutput(), false, 'background status prompts should not reopen the speech gate');
+			gemini.emit('outputTranscription', '[CLAUDE CODE CODE progress update: still running]');
+			assert.strictEqual(voice._accum.model, '', 'internal bracketed progress text should be dropped');
 		}
 
 		{

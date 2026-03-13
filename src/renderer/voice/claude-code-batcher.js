@@ -42,7 +42,6 @@ export function createClaudeCodeBatcher({ gemini, screen }) {
 		if (!entries.has(taskId)) {
 			entries.set(taskId, {
 				lines: [],
-				lastSent: 0,
 				lastActivity: now,
 				createdAt: now,
 				completionDetected: false,
@@ -59,18 +58,6 @@ export function createClaudeCodeBatcher({ gemini, screen }) {
 
 		// Check for completion patterns in the new line
 		_checkCompletionPattern(taskId, entry, line);
-
-		// Send batched update to Gemini every 30s
-		if (now - entry.lastSent > 30000 && gemini?.sessionReady) {
-			entry.lastSent = now;
-			const recent = entry.lines.slice(-10).join('\n');
-			entry.lines = [];
-			gemini.sendText(
-				`[CLAUDE CODE UPDATE — ${taskId}]\n` +
-				`Recent activity:\n${recent}\n\n` +
-				'If the user asks about progress, share this update conversationally. Otherwise stay quiet.'
-			);
-		}
 	};
 
 	/** Check if a log line matches known completion patterns */
@@ -97,29 +84,10 @@ export function createClaudeCodeBatcher({ gemini, screen }) {
 
 		logInfo('Batcher', `Task done: ${taskId} → ${status}`);
 
-		if (gemini?.sessionReady) {
-			gemini.sendText(
-				`[CLAUDE CODE FINISHED — ${taskId}]\n` +
-				`Status: ${status}\n` +
-				`Summary:\n${summary || 'No details'}\n\n` +
-				'Tell the user briefly that the task finished and share the result. ' +
-				'If it failed, explain what went wrong.'
-			);
-
-			// Request a screenshot to visually verify the final state
-			if (screen) {
-				setTimeout(() => {
-					screen.capture(false).then(() => {
-						if (gemini?.sessionReady) {
-							gemini.sendText(
-								`[SCREENSHOT — post-task verification for ${taskId}]\n` +
-								'This screenshot shows the current state after task completion. ' +
-								'If the user asks, describe what you see to confirm the task result.'
-							);
-						}
-					}).catch(() => {});
-				}, 2000);
-			}
+		if (screen) {
+			setTimeout(() => {
+				screen.capture(false).catch(() => {});
+			}, 2000);
 		}
 	};
 
@@ -139,17 +107,7 @@ export function createClaudeCodeBatcher({ gemini, screen }) {
 				logInfo('Batcher', `Heartbeat timeout for ${taskId} — no activity for ${Math.round((now - entry.lastActivity) / 1000)}s`);
 				entry.completionDetected = true; // prevent re-notification
 
-				if (gemini?.sessionReady && !entry.notifiedGemini) {
-					entry.notifiedGemini = true;
-					const recentLines = entry.lines.slice(-5).join('\n');
-					gemini.sendText(
-						`[CLAUDE CODE STALE — ${taskId}]\n` +
-						`No activity for ${Math.round((now - entry.lastActivity) / 1000)} seconds.\n` +
-						`Last output:\n${recentLines || '(none)'}\n\n` +
-						'The task may be stuck or waiting for input. ' +
-						'If the user asks, let them know the task appears to have stalled.'
-					);
-				}
+				entry.notifiedGemini = true;
 
 				// Capture a screenshot for visual verification of stale state
 				if (screen) {

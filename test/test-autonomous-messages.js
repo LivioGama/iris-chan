@@ -50,6 +50,8 @@ assert(activationMsg.includes('ONE short sentence'),
 	'Limits initial confirmation to one short sentence');
 assert(activationMsg.includes('then STOP'),
 	'Instructs to STOP after confirmation');
+assert(!activationMsg.includes('what should I work on'),
+	'Does not ask what to work on during activation');
 
 // 2. Reconnection message should NOT say "idle silence rules are SUSPENDED"
 console.log('\n2. Reconnection message:');
@@ -76,8 +78,8 @@ assert(!loopContent.includes('gently'),
 	'No soft language that invites verbose responses');
 assert(loopContent.includes('continue working silently'),
 	'Keeps active coding tasks progressing without a reprompt');
-assert(!loopContent.includes('ask ONE short question about what to work on'),
-	'Does not default to re-asking what to work on');
+assert(loopContent.includes('Otherwise, ask ONE short question about what to work on'),
+	'Only asks what to work on when no active coding task exists');
 
 // 4. System prompt reinforces silence in autonomous mode
 console.log('\n4. System prompt (FIX_PROJECT section):');
