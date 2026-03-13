@@ -159,6 +159,7 @@ export class GeminiClient extends Emitter {
 		this._cachedSkillSection = '';
 		this._cachedSystemInstruction = '';
 		this._cachedSystemInstructionKey = '';
+		this._voiceName = null;
 		this._setupFallbackLevel = 0;
 		this._inboundQueue = [];
 		this._inboundDrainScheduled = false;
@@ -171,6 +172,12 @@ export class GeminiClient extends Emitter {
 
 	setAutonomousMode(enabled) {
 		this._autonomousMode = !!enabled;
+		this._invalidateSetupCache();
+	}
+
+	setVoiceName(voiceName) {
+		const normalized = String(voiceName || '').trim();
+		this._voiceName = normalized || null;
 		this._invalidateSetupCache();
 	}
 
@@ -355,6 +362,15 @@ export class GeminiClient extends Emitter {
 		const generationConfig = {
 			responseModalities: ['AUDIO'],
 		};
+		if (this._voiceName && fallbackProfile.label === 'full') {
+			generationConfig.speechConfig = {
+				voiceConfig: {
+					prebuiltVoiceConfig: {
+						voiceName: this._voiceName,
+					},
+				},
+			};
+		}
 		const functionDeclarations = [
 			...toolDeclarations,
 			...(fallbackProfile.includeSkillDeclarations ? (this._skillDeclarations || []) : []),

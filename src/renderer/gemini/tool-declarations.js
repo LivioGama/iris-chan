@@ -203,10 +203,20 @@ export const toolDeclarations = [
 		}, required: ['description'] },
 	},
 	{
-		name: 'self_fix',
-		description: 'Fix, improve, or modify your own source code. Use this whenever the user gives you a SPECIFIC change request about yourself \u2014 "fix yourself", "change your voice", "add a feature", "improve X", "you should do Y differently", "modify your code". This is your MOST IMPORTANT tool. CRITICAL: Only call this when you have a CONCRETE description of what to change. Do NOT call this for vague intent announcements like "I\'m going to change you" or "attends je vais te changer" \u2014 for those, acknowledge and wait for specifics first. Claude Code runs directly on the project files \u2014 no kanban tasks or remote execution involved.',
+		name: 'update_settings',
+		description: 'Update existing runtime-tunable Iris settings in ~/.iris/settings.json without modifying source code. Prefer this over self_fix when the requested behavior is already covered by a stable setting such as voice, avatar, behavior mode, or logging.',
 		parameters: { type: 'OBJECT', properties: {
-			description: { type: 'STRING', description: 'Detailed description of what to fix, change, or improve. MUST be specific \u2014 include current behavior, desired behavior, and likely files. Minimum 50 characters. Do NOT pass vague intents like "the user wants to change me".' },
+			patch: { type: 'STRING', description: 'Optional JSON object patch for ~/.iris/settings.json.' },
+			key: { type: 'STRING', description: 'Optional single settings key path like voice.modelVoiceName.' },
+			value: { type: 'STRING', description: 'Optional value paired with key.' },
+			request: { type: 'STRING', description: 'Optional natural-language settings change request.' },
+		} },
+	},
+	{
+		name: 'self_fix',
+		description: 'Fix, improve, or modify your own source code. Use this whenever the user gives you a SPECIFIC change request about yourself \u2014 "fix yourself", "change your voice", "add a feature", "improve X", "you should do Y differently", "modify your code". Prefer update_settings when an existing stable setting already covers the request. If self_fix adds a new user-tunable behavior, it must also define a stable setting in ~/.iris/settings.json. CRITICAL: Only call this when you have a CONCRETE description of what to change. Do NOT call this for vague intent announcements like "I\'m going to change you" or "attends je vais te changer" \u2014 for those, acknowledge and wait for specifics first. Claude Code runs directly on the project files \u2014 no kanban tasks or remote execution involved.',
+		parameters: { type: 'OBJECT', properties: {
+			description: { type: 'STRING', description: 'Detailed description of what to fix, change, or improve. MUST be specific \u2014 include current behavior, desired behavior, likely files, and for new tunable behaviors the settings key/default/live-apply expectation under ~/.iris/settings.json. Minimum 50 characters. Do NOT pass vague intents like "the user wants to change me".' },
 			files_to_touch: { type: 'STRING', description: 'Comma-separated list of files likely involved. Choose from: gemini/client.js, voice/voice-engine.js, voice/capture.js, voice/playback.js, tools/index.js, screen-capture.js, main/index.js, renderer/index.html, helpers/iris-helper.swift' },
 		}, required: ['description'] },
 	},
