@@ -80,7 +80,7 @@ export const toolDeclarations = [
 	},
 	{
 		name: 'web_search',
-		description: 'Search the web using Ollama Cloud with gpt-oss-120b. Use this for any web search, research, looking up current information, facts, news, documentation, or answering questions that need up-to-date data. Returns a concise, structured summary of search results. Prefer this over ask_chatgpt for research.',
+		description: 'Search the web using Perplexity with explicit source provenance. Use this for any web search, research, looking up current information, facts, news, documentation, or answering questions that need up-to-date data. Returns a concise, structured summary plus sources. Prefer this over ask_chatgpt for research.',
 		parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'The search query \u2014 be specific and descriptive' } }, required: ['query'] },
 	},
 	{
@@ -191,7 +191,8 @@ export const toolDeclarations = [
 			match_criteria: { type: 'OBJECT', description: 'Optional structured match criteria including appNames, intents, and keywords.' },
 			preferred_execution_path: { type: 'OBJECT', description: 'Preferred execution path, typically a stored UI plan.' },
 			fallback_path: { type: 'OBJECT', description: 'Optional fallback path metadata.' },
-			lane: { type: 'STRING', description: '"skill" (default) or "core" to escalate into self_fix.' },
+			lane: { type: 'STRING', description: 'Execution lane: "skill" (default), "core", "memory", "safety", or "research-observability".' },
+			hireable_profile: { type: 'STRING', description: 'Optional hireable profile slug for the lane, such as "memory-architect" or "safety-guardian".' },
 		}, required: ['purpose'] },
 	},
 	{
@@ -242,6 +243,9 @@ export const toolDeclarations = [
 		parameters: { type: 'OBJECT', properties: {
 			description: { type: 'STRING', description: 'What to do — can be vague, it will be enriched with project context automatically.' },
 			project_path: { type: 'STRING', description: 'Optional absolute path to the project. If omitted, auto-detected from what the user is hovering.' },
+			execution_lane: { type: 'STRING', description: 'Optional queue lane: "skill", "memory", "safety", "research-observability", or "core".' },
+			hireable_profile: { type: 'STRING', description: 'Optional hireable profile slug for the queued work.' },
+			queue_bucket: { type: 'STRING', description: 'Optional queue bucket label used to group queued work inside a lane.' },
 		}, required: ['description'] },
 	},
 ];

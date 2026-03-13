@@ -10,6 +10,8 @@ const {
 	DEFAULT_INFERENCE_POLICY,
 	DEFAULT_QUESTION_POLICY,
 	DEFAULT_STEERING_DECISION_TYPES,
+	normalizeExecutionLane,
+	inferHireableProfile,
 } = require('../src/main/automation/self-improvement-manager');
 
 console.log('Running self-improvement manager tests...');
@@ -107,6 +109,30 @@ async function testImageSkillInfersAnticipatoryBundle() {
 		'zero_questions',
 		'image skill bundle should default to zero-question behavior when a reasonable default exists'
 	);
+}
+
+async function testDedicatedLanePersistsHireableProfile() {
+	const irisDir = createTempDir();
+	const manager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+
+	const result = manager.createSkill({
+		purpose: 'Persist runtime evidence and summarize regressions',
+		source_goal: 'capture runtime evidence for regressions',
+		lane: 'research/observability',
+	});
+
+	const registry = readJson(path.join(irisDir, 'skills', '_registry.json'));
+	const createdEntry = registry.skills.find((entry) => entry.id === result.skillId);
+	assert.strictEqual(createdEntry.executionLane, 'research-observability', 'dedicated execution lanes should normalize to the canonical research-observability lane');
+	assert.strictEqual(createdEntry.hireableProfile, 'observability-researcher', 'research-observability lane should default to the observability hireable profile');
+	assert.strictEqual(createdEntry.hireable, true, 'dedicated non-core lanes should be marked hireable');
+	assert.ok(createdEntry.capabilityBundle.includes('runtime_analysis'), 'research-observability lane should pick the lane-specific capability bundle');
+	assert.strictEqual(normalizeExecutionLane('research/observability'), 'research-observability', 'lane aliases should normalize consistently');
+	assert.strictEqual(inferHireableProfile({}, 'memory'), 'memory-architect', 'memory lane should infer the memory hireable profile');
 }
 
 async function testRepeatedPatternPromotesToLearnedSkill() {
@@ -258,6 +284,7 @@ async function testReplacementPreservesExistingBundleMetadata() {
 Promise.resolve()
 	.then(testCreateSkillWritesPackageAndRegistry)
 	.then(testImageSkillInfersAnticipatoryBundle)
+	.then(testDedicatedLanePersistsHireableProfile)
 	.then(testRepeatedPatternPromotesToLearnedSkill)
 	.then(testCoreLaneEscalatesToSelfFix)
 	.then(testLegacySkillReplacementAddsDefaultPolicies)
