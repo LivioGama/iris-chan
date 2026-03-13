@@ -4,6 +4,7 @@ let memoryStoreRef = null;
 let learningManagerRef = null;
 let nativeFallbackManagerRef = null;
 let episodeRecorderRef = null;
+let convexClientRef = null;
 
 function setUiTaskService(service) {
 	uiTaskServiceRef = service || null;
@@ -53,6 +54,14 @@ function getEpisodeRecorder() {
 	return episodeRecorderRef;
 }
 
+function setConvexClient(client) {
+	convexClientRef = client || null;
+}
+
+function getConvexClient() {
+	return convexClientRef;
+}
+
 module.exports = {
 	setUiTaskService,
 	getUiTaskService,
@@ -66,4 +75,6 @@ module.exports = {
 	getNativeFallbackManager,
 	setEpisodeRecorder,
 	getEpisodeRecorder,
+	setConvexClient,
+	getConvexClient,
 };

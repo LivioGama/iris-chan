@@ -127,7 +127,13 @@ export interface Config {
 		avatarHeight: number;
 	};
 	search: {
+		defaultProvider: string;
+		providers: string[];
+		perplexityBaseUrl: string;
+		perplexityModel: string;
 		ollamaHost: string;
+		requestTimeoutMs: number;
+		synthesisModel: string;
 		autoHideMs: number;
 	};
 	paths: {
@@ -361,7 +367,16 @@ const config: Config = {
 		avatarHeight: 600,
 	},
 	search: {
+		defaultProvider: (process.env.IRIS_SEARCH_PROVIDER || 'perplexity').trim().toLowerCase() || 'perplexity',
+		providers: (process.env.IRIS_SEARCH_PROVIDERS || 'perplexity,ollama,chatgpt-app')
+			.split(',')
+			.map((provider) => provider.trim().toLowerCase())
+			.filter(Boolean),
+		perplexityBaseUrl: (process.env.IRIS_SEARCH_PERPLEXITY_BASE_URL || 'https://api.perplexity.ai').trim(),
+		perplexityModel: (process.env.IRIS_SEARCH_PERPLEXITY_MODEL || 'sonar').trim(),
 		ollamaHost: 'https://ollama.com',
+		requestTimeoutMs: Math.max(5000, Number(process.env.IRIS_SEARCH_TIMEOUT_MS || 30000)),
+		synthesisModel: process.env.IRIS_SEARCH_SYNTHESIS_MODEL || 'gpt-oss:120b-cloud',
 		autoHideMs: 30000,
 	},
 	paths: {
