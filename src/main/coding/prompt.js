@@ -45,6 +45,13 @@ function buildTaskCreationPolicyNote() {
 	return `Learned task-history policy: ${message}`;
 }
 
+function buildDirectTaskCreationPolicyNote() {
+	const policy = getMemoryStore()?.getValue?.('policy.direct_task_creation', null);
+	const message = String(policy?.message || '').trim();
+	if (!message) return '';
+	return `Learned task-creation policy: ${message}`;
+}
+
 function buildEditorGeneralizationPolicyNote() {
 	const policy = getMemoryStore()?.getValue?.('policy.editor_self_improvement_generalization', null);
 	const message = String(policy?.message || '').trim();
@@ -107,6 +114,7 @@ function buildCodingPrompt({ description, cwd, target = null } = {}) {
 		buildConflictResolutionPolicyNote(),
 		buildTerminalLogPolicyNote(),
 		buildTaskCreationPolicyNote(),
+		buildDirectTaskCreationPolicyNote(),
 		buildEditorGeneralizationPolicyNote(),
 		buildScreenReferencePolicyNote(),
 		buildActionVerificationPolicyNote(),
@@ -127,6 +135,7 @@ function buildCodingPrompt({ description, cwd, target = null } = {}) {
 		'Do not ask the user to restate or re-select the same work unless the prior task context is genuinely missing.',
 		'Progress handling: If the user asks what you are doing, what is done already, or asks for progress/status, answer with the current task, concrete completed work so far, the next step, and any blocker instead of asking them to repeat the task.',
 		'Task-history handling: If the user asks about tasks you created, queued, or opened for this work, answer with a concise task inventory from the active work state and task history. Summarize each relevant task, its status, completed work so far, the next step, and any blocker. Check tasks.json when available before saying the context is missing.',
+		'Task-creation handling: If the user asks you to add, create, or queue a task and the requested work is clear, create it directly from the active context instead of bouncing the request back for clarification. Preserve the requested goal, such as collecting Iris performance benchmarks, in the queued task description.',
 		'Editor self-improvement handling: If repeated user friction points out a reusable editor or self-modification pattern, make the broader code change instead of fixing only the single instance. Generalize the behavior across similar editor tasks and stop requiring the same follow-up guidance.',
 		'UI action verification: Do not say you clicked something, opened a page, or reached a UI state until fresh screen evidence or a semantic checkpoint confirms it. If the action was sent but not verified, say that clearly and keep investigating.',
 		'Direct creative handling: If the user makes a brief casual creative request such as "tell me a poem", fulfill it directly instead of asking for task clarification, workspace context, or project selection.',

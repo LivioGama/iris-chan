@@ -221,6 +221,17 @@ function isTaskCreationAccountabilityGuidance(text = '') {
 	return mentionsTasks && mentionsCreation && asksOverview;
 }
 
+function isDirectTaskCreationGuidance(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return false;
+	const mentionsTaskAction = /\b(add|create|queue|open|make)\b.{0,24}\b(task|tasks|todo|to do|backlog)\b/.test(normalized);
+	if (!mentionsTaskAction) return false;
+	const asksAssistant = /\b(can|could|would|will)\s+you\b/.test(normalized) || normalized.startsWith('please ');
+	const hasTaskContent = /\b(task|tasks|todo|to do|backlog)\b.{0,120}\b(to|for|about)\b/.test(normalized)
+		|| /\bbenchmark|benchmarks|performance|profile|profiling|measure|measurement|latency|throughput|regression\b/.test(normalized);
+	return asksAssistant && hasTaskContent;
+}
+
 function isEditorSelfImprovementGeneralizationGuidance(text = '') {
 	const normalized = normalizeText(text);
 	if (!normalized) return false;
@@ -230,9 +241,16 @@ function isEditorSelfImprovementGeneralizationGuidance(text = '') {
 		|| /(कति\s*चोटी|कति\s*पटक|कति\s*चोटि|बार\s*बार|फेरि\s*भन्नु|फेरि\s*भन|कतिचोटी)/i.test(text)
 		|| /(বলেছি|বলেন|বলতে|বারবার|কত\s*বার|আবার\s*বল)/i.test(text)
 	);
+	const mentionsNoNeedToAskAgain = (
+		/\b(?:dont|don't|do not|no need to)\b.{0,20}\b(?:ask|re-ask|reask|repeat|clarify|question)\b/.test(normalized)
+		|| /\b(?:stop|quit)\b.{0,20}\b(?:asking|re-asking|reasking|repeating)\b/.test(normalized)
+		|| /(सोध्न(?:े|ु)?|प्रश्न\s*गर्न|फेरि\s*सोध्न)\s*पर्दैन/i.test(text)
+		|| /के\s+\S+\s+हो\s+पर्दैन\s*नि?/i.test(text)
+	);
 	const mentionsSelfModification = /\b(modify your own code|change your own code|improve yourself|fix yourself)\b/.test(normalized);
 	const mentionsGeneralization = /\b(generic way|generally|broader range|broader set|not in a specific problem|not specific problem solving|similar problems|range of problems)\b/.test(normalized);
-	return mentionsRepeatedTeaching && (mentionsSelfModification || mentionsGeneralization || !/^\s*$/.test(String(text || '')));
+	return mentionsNoNeedToAskAgain
+		|| (mentionsRepeatedTeaching && (mentionsSelfModification || mentionsGeneralization || !/^\s*$/.test(String(text || ''))));
 }
 
 function isThoroughExecutionGuidance(text = '') {
@@ -271,9 +289,19 @@ function isPresenceReassuranceGuidance(text = '') {
 	if (!normalized) return false;
 	const asksWhereabouts = /\b(where are you|where you at|where're you|wherere you|hello where are you)\b/.test(normalized);
 	const asksAvailability = /\b(are you there|you there|are you here|hello are you there|can you hear me|are you listening)\b/.test(normalized);
+	const raw = String(text || '').trim();
+	const rawTerms = raw.split(/\s+/).filter(Boolean);
+	const plainGreeting = rawTerms.length > 0
+		&& rawTerms.length <= 3
+		&& /^(?:hi|hii|hiii|hello|helo|hey|yo|sup|namaste|namaskar|हेलो|हैलो|हेल्लो|नमस्ते|नमस्कार)[!?.…\s]*$/iu.test(raw)
+		&& !/\b(open|click|type|run|search|find|fix|edit|write|create)\b/i.test(raw);
+	const shortNoisyListeningPing = rawTerms.length > 0
+		&& rawTerms.length <= 4
+		&& /(सुन(?:ेको|ि?र(?:हे|हुन)|े|्छ|्?नु)|सुनेको|सुनेको)/i.test(raw)
+		&& !/(स्क्रिन|स्क्रीन|टर्मिनल|कन्सोल|कंसोल|लॉग|स्टेटस|मेनु|बार|टास्क|कन्फ्लिक्ट|क्लिक|ओपन|पोयम|कविता)/i.test(raw);
 	const nepaliPresence = /(हेलो\s*)?(कता|कहाँ|कताहो|कहां)\s*(हो|छौ|छ|chau|cha|chhau)?\s*(साथी)?/.test(normalized)
 		|| /\b(kata ho|kata chau|kata cha|kahaa chau|kaha chau|sathi)\b/.test(normalized);
-	return asksWhereabouts || asksAvailability || nepaliPresence;
+	return asksWhereabouts || asksAvailability || plainGreeting || nepaliPresence || shortNoisyListeningPing;
 }
 
 function isBareAssistantAttentionPing(text = '', context = {}) {
@@ -372,6 +400,26 @@ class LearningClassifier {
 				},
 			};
 		}
+		if (isDirectTaskCreationGuidance(text)) {
+			return {
+				type: 'memory',
+				key: 'policy.direct_task_creation',
+				reason: 'direct task creation guidance',
+				payload: {
+					kind: 'fallback_policy',
+					scope: 'machine',
+					key: 'policy.direct_task_creation',
+					value: {
+						enabled: true,
+						message: 'When the user asks you to add, create, or queue a task and the requested work is clear, create the task directly instead of asking them to restate it. Preserve the requested goal in the task description, infer the active project context when available, and only ask follow-up questions when the task target is genuinely ambiguous.',
+						evidence: text.trim(),
+					},
+					source: 'user_correction',
+					confidence: 0.97,
+					evidence: text,
+				},
+			};
+		}
 		if (isEditorSelfImprovementGeneralizationGuidance(text)) {
 			return {
 				type: 'memory',
@@ -432,7 +480,7 @@ class LearningClassifier {
 				},
 			};
 		}
-		if (isPresenceReassuranceGuidance(normalized)) {
+		if (isPresenceReassuranceGuidance(text)) {
 			return {
 				type: 'memory',
 				key: 'policy.presence_reassurance',

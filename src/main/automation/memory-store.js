@@ -124,6 +124,17 @@ class MemoryStore {
 		this.upsert({
 			kind: 'fallback_policy',
 			scope: 'machine',
+			key: 'policy.direct_task_creation',
+			value: {
+				enabled: true,
+				message: 'When the user asks you to add, create, or queue a task and the requested work is clear, create the task directly instead of asking them to restate it. Preserve the requested goal in the task description, infer the active project context when available, and only ask follow-up questions when the task target is genuinely ambiguous.',
+			},
+			source: 'inferred',
+			confidence: 0.95,
+		});
+		this.upsert({
+			kind: 'fallback_policy',
+			scope: 'machine',
 			key: 'policy.editor_self_improvement_generalization',
 			value: {
 				enabled: true,
@@ -205,6 +216,17 @@ class MemoryStore {
 			value: {
 				enabled: true,
 				message: 'When the user makes a short casual creative request such as asking for a poem, joke, caption, or short story, fulfill it directly instead of asking for task clarification or workspace context. Treat brief transliterated variants like "tell me a poem" as the same request when the intent is clear.',
+			},
+			source: 'inferred',
+			confidence: 0.95,
+		});
+		this.upsert({
+			kind: 'fallback_policy',
+			scope: 'machine',
+			key: 'policy.casual_chat_fulfillment',
+			value: {
+				enabled: true,
+				message: 'When the user makes a brief casual chat or small-talk request such as "what\'s up", "how are you", or "what\'s up dude", answer directly in a natural conversational way instead of asking for task clarification, workspace context, or project selection. Treat short transliterated or non-English variants as the same request when the intent is clear.',
 			},
 			source: 'inferred',
 			confidence: 0.95,

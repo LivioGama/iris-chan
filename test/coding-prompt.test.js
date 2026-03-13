@@ -37,6 +37,11 @@ function writeJson(filePath, value) {
 					message: 'When the user asks about tasks you created, queued, or opened for the current work, answer from the active work state and task history instead of asking them to restate it. Summarize each relevant task for this request, its status, completed work, next step, and any blocker. Check tasks.json when available before saying context is missing.',
 				};
 			}
+			if (key === 'policy.direct_task_creation') {
+				return {
+					message: 'When the user asks you to add, create, or queue a task and the requested work is clear, create the task directly instead of asking them to restate it. Preserve the requested goal in the task description, infer the active project context when available, and only ask follow-up questions when the task target is genuinely ambiguous.',
+				};
+			}
 			if (key === 'policy.thorough_execution') {
 				return {
 					message: 'When the user gives terse follow-up guidance meaning "do it properly", "just do it", or "don\'t hesitate" during active work, continue the current task without asking them to restate it. Take a stronger end-to-end pass: investigate the root cause, complete the action decisively, rerun verification, and stop only at a concrete blocker.',
@@ -89,6 +94,7 @@ function writeJson(filePath, value) {
 		assert.match(prompt, /do not ask the user to restate or re-select the same work/i, 'coding prompt should ban repetitive clarification');
 		assert.match(prompt, /Learned progress policy:/, 'coding prompt should expose the learned progress-accountability policy');
 		assert.match(prompt, /Learned task-history policy:/, 'coding prompt should expose the learned task-history accountability policy');
+		assert.match(prompt, /Learned task-creation policy:/, 'coding prompt should expose the learned direct task-creation policy');
 		assert.match(prompt, /Learned editor-improvement policy:/, 'coding prompt should expose the learned editor self-improvement policy');
 		assert.match(prompt, /Learned action-verification policy:/, 'coding prompt should expose the learned action-verification policy');
 		assert.match(prompt, /Learned UI-preparation policy:/, 'coding prompt should expose the learned UI preparation policy');
@@ -99,6 +105,8 @@ function writeJson(filePath, value) {
 		assert.match(prompt, /what you are doing, what is done already, or asks for progress\/status/i, 'coding prompt should explicitly coach status answers for active work');
 		assert.match(prompt, /asks about tasks you created, queued, or opened for this work/i, 'coding prompt should explicitly coach created-task inventory answers');
 		assert.match(prompt, /Check tasks\.json when available before saying the context is missing/i, 'coding prompt should direct the agent to consult tasks.json for task-history answers');
+		assert.match(prompt, /asks you to add, create, or queue a task and the requested work is clear, create it directly/i, 'coding prompt should explicitly coach direct task creation when the request is clear');
+		assert.match(prompt, /collecting Iris performance benchmarks/i, 'coding prompt should include the benchmark-task example');
 		assert.match(prompt, /generic way instead of fixing only the narrow case/i, 'coding prompt should surface the generic editor self-improvement rule');
 		assert.match(prompt, /Generalize the behavior across similar editor tasks/i, 'coding prompt should instruct broader editor-task generalization');
 		assert.match(prompt, /AI Scientist workflow:/, 'coding prompt should include the AI scientist workflow section');

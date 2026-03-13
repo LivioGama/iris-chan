@@ -131,8 +131,68 @@ async function testConflictResolutionContinuationGuidanceLearnsPolicy() {
 	}
 }
 
+async function testBenchmarkTaskCreationGuidanceLearnsPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'Can you can you add a task to get the performance benchmarks of Iris');
+	manager.recordConversationTurn('user', 'Can you can you add a task to get the performance benchmarks of Iris');
+	await wait(150);
+
+	const policy = memoryStore.find({ key: 'policy.direct_task_creation' });
+	assert.ok(policy, 'direct benchmark-task guidance should persist a reusable task-creation policy');
+	assert.match(
+		String(policy.value?.message || ''),
+		/create the task directly/i,
+		'policy should preserve the direct task-creation behavior'
+	);
+	assert.strictEqual(selfFixCalls, 0, 'direct task-creation guidance should not queue a generic self-fix');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'direct task-creation guidance should be learned as policy instead of a core-gap issue');
+
+	const previous = serviceRef.getMemoryStore();
+	serviceRef.setMemoryStore(memoryStore);
+	try {
+		const prompt = buildCodingPrompt({
+			cwd: irisDir,
+			target: 'iris',
+			description: 'Handle direct add-task requests for benchmark work without asking the user to restate them.',
+		});
+		assert.match(prompt, /Learned task-creation policy:/, 'coding prompt should include the learned direct task-creation policy');
+		assert.match(
+			prompt,
+			/add, create, or queue a task and the requested work is clear, create it directly/i,
+			'coding prompt should surface the direct task-creation rule'
+		);
+		assert.match(
+			prompt,
+			/collecting Iris performance benchmarks/i,
+			'coding prompt should explicitly coach benchmark-task follow-ups'
+		);
+	} finally {
+		serviceRef.setMemoryStore(previous);
+	}
+}
+
 main()
 	.then(() => testConflictResolutionContinuationGuidanceLearnsPolicy())
+	.then(() => testBenchmarkTaskCreationGuidanceLearnsPolicy())
 	.catch((error) => {
 		console.error(error);
 		process.exit(1);

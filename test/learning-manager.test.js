@@ -43,6 +43,9 @@ async function testMemoryStoreSeedsDefaultPolicy() {
 	const taskHistoryPolicy = memoryStore.find({ key: 'policy.task_creation_accountability' });
 	assert.ok(taskHistoryPolicy, 'memory store should seed task creation accountability policy');
 	assert.strictEqual(taskHistoryPolicy.kind, 'fallback_policy', 'task creation accountability policy should be a fallback policy');
+	const directTaskCreationPolicy = memoryStore.find({ key: 'policy.direct_task_creation' });
+	assert.ok(directTaskCreationPolicy, 'memory store should seed direct task creation policy');
+	assert.strictEqual(directTaskCreationPolicy.kind, 'fallback_policy', 'direct task creation policy should be a fallback policy');
 	const editorGeneralizationPolicy = memoryStore.find({ key: 'policy.editor_self_improvement_generalization' });
 	assert.ok(editorGeneralizationPolicy, 'memory store should seed editor self-improvement generalization policy');
 	assert.strictEqual(editorGeneralizationPolicy.kind, 'fallback_policy', 'editor self-improvement policy should be a fallback policy');
@@ -405,6 +408,68 @@ async function testLearningManagerStoresPresenceReassurancePolicy() {
 	assert.strictEqual(selfFixCalls, 0, 'presence reassurance guidance should not queue a core self-fix once learned as policy');
 }
 
+async function testPlainGreetingLearnsPresencePolicyWithoutCoreGap() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'हेलो');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.presence_reassurance' });
+	assert.ok(policy, 'plain greeting should be stored as the presence reassurance policy');
+	assert.match(String(policy.value?.message || ''), /here and listening/i);
+	assert.strictEqual(selfFixCalls, 0, 'plain greeting should not queue a core self-fix once learned as policy');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'plain greeting should not fall back to a generic nonpointer core-gap issue');
+}
+
+async function testNoisyNepaliListeningPingLearnsPresencePolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'चिउरा सुनेको');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.presence_reassurance' });
+	assert.ok(policy, 'short noisy Nepali listening guidance should be stored as the presence reassurance policy');
+	assert.match(String(policy.value?.message || ''), /here and listening/i);
+	assert.strictEqual(selfFixCalls, 0, 'short noisy Nepali listening guidance should not queue a core self-fix');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'short noisy Nepali listening guidance should not create a generic nonpointer core-gap issue');
+}
+
 async function testBareAssistantNamePingDuringActiveWorkLearnsPresencePolicy() {
 	const irisDir = createTempDir();
 	const memoryStore = new MemoryStore({ irisDir });
@@ -565,6 +630,38 @@ async function testEditorSelfImprovementFrictionStoresReusablePolicy() {
 
 	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
 	assert.strictEqual(issues.issues.length, 0, 'editor self-improvement guidance should not fall back to the generic core-gap issue queue');
+}
+
+async function testNepaliNoNeedToAskGuidanceStoresReusablePolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('user', 'के खाने हो पर्दैन नि');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.editor_self_improvement_generalization' });
+	assert.ok(policy, 'Nepali "no need to ask again" friction should be stored as reusable editor-improvement policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'Nepali anti-reask guidance should persist as a fallback policy');
+	assert.match(String(policy.value?.message || ''), /generic way instead of fixing only the narrow case/i);
+	assert.strictEqual(selfFixCalls, 0, 'Nepali anti-reask guidance should not queue a core self-fix once learned as policy');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'Nepali anti-reask guidance should bypass the generic core-gap issue queue');
 }
 
 async function testLearningManagerRewritesDefaultAppQueryFromMemory() {
@@ -1459,10 +1556,12 @@ Promise.resolve()
 	.then(testLearningManagerStoresThoroughExecutionPolicy)
 	.then(testLearningManagerTreatsDontHesitateAsThoroughExecutionPolicy)
 	.then(testLearningManagerStoresPresenceReassurancePolicy)
+	.then(testNoisyNepaliListeningPingLearnsPresencePolicy)
 	.then(testBareAssistantNamePingDuringActiveWorkLearnsPresencePolicy)
 	.then(testLearningManagerStoresTaskCreationAccountabilityPolicy)
 	.then(testLearningManagerStoresActionVerificationPolicyAndClustersSpecifically)
 	.then(testEditorSelfImprovementFrictionStoresReusablePolicy)
+	.then(testNepaliNoNeedToAskGuidanceStoresReusablePolicy)
 	.then(testBuildCodingPromptIncludesAutonomousPolicy)
 	.then(testLearningManagerRewritesDefaultAppQueryFromMemory)
 	.then(testLearningManagerCreatesReusableToolSkill)
