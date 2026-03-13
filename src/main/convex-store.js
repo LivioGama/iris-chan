@@ -66,6 +66,28 @@ async function httpRun(functionName, args) {
   }
 }
 
+function extractExtraFieldName(errorMessage) {
+  if (typeof errorMessage !== 'string') return null;
+  const match = errorMessage.match(/extra field `([^`]+)`/i);
+  return match ? match[1] : null;
+}
+
+async function httpRunWithExtraFieldFallback(functionName, args) {
+  const nextArgs = { ...args };
+
+  while (true) {
+    const result = await httpRun(functionName, nextArgs);
+    if (!result?.error) return result;
+
+    const extraField = extractExtraFieldName(result.error);
+    if (!extraField || !(extraField in nextArgs)) {
+      return result;
+    }
+
+    delete nextArgs[extraField];
+  }
+}
+
 function startFlushLoop() {
   if (flushInterval) return;
   flushInterval = setInterval(flushQueue, FLUSH_INTERVAL);
@@ -112,11 +134,64 @@ function cleanText(text) {
   return cleaned;
 }
 
+function normalizeSearchResult(result) {
+  if (!result || typeof result !== 'object') return null;
+  const score = Number(result._score ?? result.score ?? 0);
+  const clean = typeof result.cleanText === 'string' ? result.cleanText.trim() : '';
+  const text = typeof result.text === 'string' ? result.text.trim() : '';
+  const provenance = result.provenance && typeof result.provenance === 'object'
+    ? {
+        sessionId: String(result.provenance.sessionId || result.sessionId || ''),
+        timestamp: Number(result.provenance.timestamp ?? result.timestamp ?? 0),
+        source: String(result.provenance.source || result.source || ''),
+      }
+    : {
+        sessionId: String(result.sessionId || ''),
+        timestamp: Number(result.timestamp ?? 0),
+        source: String(result.source || ''),
+      };
+
+  if (!clean && !text) return null;
+
+  return {
+    ...result,
+    _score: score,
+    cleanText: clean,
+    text,
+    provenance,
+  };
+}
+
+function dedupeSearchResults(results, limit) {
+  const seen = new Set();
+  const deduped = [];
+
+  for (const raw of results) {
+    const result = normalizeSearchResult(raw);
+    if (!result) continue;
+    const dedupeKey = [
+      result.role || '',
+      result.cleanText || result.text,
+      result.provenance.sessionId || '',
+      result.provenance.timestamp || 0,
+    ].join('::');
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    deduped.push(result);
+    if (deduped.length >= limit) break;
+  }
+
+  return deduped;
+}
+
 async function generateEmbedding(text) {
   const config = initConfig();
   if (!config.openrouterKey) {
-    console.warn('[ConvexStore] No OPENROUTER_API_KEY, returning zero embedding');
-    return new Array(1024).fill(0);
+    console.warn('[ConvexStore] No OPENROUTER_API_KEY, embedding unavailable');
+    return {
+      embedding: new Array(1024).fill(0),
+      status: 'unavailable',
+    };
   }
   
   const truncated = text.slice(0, 8000);
@@ -138,10 +213,16 @@ async function generateEmbedding(text) {
       throw new Error(`Embedding API error: ${response.status} ${err}`);
     }
     const data = await response.json();
-    return data.data[0].embedding;
+    return {
+      embedding: data.data[0].embedding,
+      status: 'ready',
+    };
   } catch (err) {
     console.error('[ConvexStore] Embedding generation failed:', err.message);
-    return new Array(1024).fill(0);
+    return {
+      embedding: new Array(1024).fill(0),
+      status: 'failed',
+    };
   }
 }
 
@@ -163,11 +244,13 @@ const convexStore = {
     const clean = cleanText(text);
     const embedding = new Array(1024).fill(0);
     
-    const result = await httpRun('conversations:saveTurn', {
+    const result = await httpRunWithExtraFieldFallback('conversations:saveTurn', {
       role,
       text,
       cleanText: clean,
       embedding,
+      embeddingStatus: clean ? 'pending' : 'unavailable',
+      embeddingUpdatedAt: clean ? undefined : timestamp,
       sessionId,
       timestamp,
       source: 'realtime',
@@ -181,11 +264,13 @@ const convexStore = {
     
     // Convex /api/run returns { value: docId, status: "success" }
     const docId = result?.value;
-    if (docId && typeof docId === 'string') {
-      generateEmbedding(clean).then(emb => {
-        httpRun('conversations:patchEmbedding', {
+    if (docId && typeof docId === 'string' && clean) {
+      generateEmbedding(clean).then(({ embedding: nextEmbedding, status }) => {
+        httpRunWithExtraFieldFallback('conversations:patchEmbedding', {
           id: docId,
-          embedding: emb,
+          embedding: nextEmbedding,
+          embeddingStatus: status,
+          embeddingUpdatedAt: Date.now(),
         }).catch(err => {
           console.error('[ConvexStore] Failed to patch embedding:', err.message);
         });
@@ -212,15 +297,22 @@ const convexStore = {
   async semanticSearch(queryText, limit = 5, roleFilter = null) {
     const config = initConfig();
     if (!config.url) return [];
-    
-    const embedding = await generateEmbedding(queryText);
+
+    const cleanQuery = cleanText(queryText);
+    if (!cleanQuery) return [];
+
+    const { embedding, status } = await generateEmbedding(cleanQuery);
+    if (status !== 'ready') return [];
+
     try {
       const result = await httpRun('search:semanticSearch', {
         embedding,
         limit,
         roleFilter,
+        minScore: 0.35,
       });
-      return result?.value || [];
+      const values = Array.isArray(result?.value) ? result.value : [];
+      return dedupeSearchResults(values, limit);
     } catch (err) {
       console.error('[ConvexStore] semanticSearch error:', err.message);
       return [];
@@ -249,9 +341,7 @@ const convexStore = {
       try {
         await httpRun('conversations:upsertSession', {
           sessionId: currentSessionId,
-          startedAt: 0,
           endedAt: Date.now(),
-          turnCount: 0,
         });
       } catch (err) {
         console.error('[ConvexStore] endSession error:', err.message);
@@ -271,4 +361,11 @@ const convexStore = {
   },
 };
 
-module.exports = convexStore;
+module.exports = {
+  ...convexStore,
+  _private: {
+    cleanText,
+    normalizeSearchResult,
+    dedupeSearchResults,
+  },
+};

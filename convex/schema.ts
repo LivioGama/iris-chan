@@ -7,6 +7,9 @@ export default defineSchema({
     text: v.string(),
     cleanText: v.string(),
     embedding: v.array(v.number()),
+    // Older rows may predate embedding lifecycle metadata.
+    embeddingStatus: v.optional(v.string()),
+    embeddingUpdatedAt: v.optional(v.number()),
     sessionId: v.string(),
     timestamp: v.number(),
     source: v.string(),
@@ -17,7 +20,7 @@ export default defineSchema({
     .vectorIndex("by_embedding", {
       vectorField: "embedding",
       dimensions: 1024,
-      filterFields: ["role"],
+      filterFields: ["role", "embeddingStatus", "source"],
     }),
 
   tool_executions: defineTable({
@@ -91,6 +94,29 @@ export default defineSchema({
     enrichedPrompt: v.optional(v.string()),
     impactedFiles: v.optional(v.array(v.string())),
     complexity: v.optional(v.string()),
+    taskKind: v.optional(v.string()),
+    intake: v.optional(v.object({
+      source: v.optional(v.string()),
+      mode: v.optional(v.string()),
+      appHint: v.optional(v.string()),
+      summary: v.optional(v.string()),
+      dedupeKey: v.optional(v.string()),
+      utterance: v.optional(v.string()),
+      capturedAt: v.optional(v.number()),
+      frustration: v.optional(v.boolean()),
+      frustrationSignals: v.optional(v.array(v.string())),
+      confidence: v.optional(v.number()),
+    })),
+    execution: v.optional(v.object({
+      strategy: v.optional(v.string()),
+      lastEvent: v.optional(v.string()),
+      lastErrorCode: v.optional(v.string()),
+      lastAttemptAt: v.optional(v.number()),
+      startedAt: v.optional(v.number()),
+      completedAt: v.optional(v.number()),
+      fallbackCount: v.optional(v.number()),
+      interruptionCount: v.optional(v.number()),
+    })),
     status: v.string(),
     origin: v.optional(v.string()),
     launchMode: v.optional(v.string()),
