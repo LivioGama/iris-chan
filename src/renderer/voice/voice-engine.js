@@ -16,9 +16,15 @@ import {
 } from '../vocab/recent-seen-store.js';
 import { showBubble, clearBubbles, showStreamingBubble, finalizeStreamingBubble } from '../ui/bubbles.js';
 import { setPresence, clearPresence, clearAllPresence } from '../ui/presence-indicator.js';
-import { updateIndicator } from '../ui/status-indicators.js';
+import { setIndicatorLabel, updateIndicator } from '../ui/status-indicators.js';
 import { refreshWorkspace } from '../ui/workspace-bar.js';
 import { info as logInfo, error as logError } from '../logger.js';
+import {
+	buildReplyPresentation,
+	describeInteractionState,
+	getInteractionBadgeState,
+	normalizeInteractionState,
+} from '../interaction/interaction-policy.js';
 
 const STATES = {
 	IDLE: 'IDLE',
@@ -39,6 +45,14 @@ const DEFAULT_VOICE_CONFIG = Object.freeze({
 	replyCooldownMs: 45000,
 	speechReleaseMs: 160,
 	echoSuppressionGain: 0.8,
+	directTurn: {
+		fastReleaseMs: 90,
+		serverEvidenceGraceMs: 1500,
+		resumeWindowMs: 1200,
+		trailingNoiseRatio: 0.35,
+		trailingNoiseThresholdMultiplier: 1.2,
+		repromptText: 'I did not catch that. Please say it again.',
+	},
 	recentSeen: {
 		ttlMs: 30000,
 		maxTerms: 24,
@@ -53,8 +67,8 @@ const DEFAULT_VOICE_CONFIG = Object.freeze({
 		preRollMs: 450,
 		noiseFloorAttack: 0.22,
 		noiseFloorRelease: 0.05,
-		noiseFloorMultiplier: 1.8,
-		noiseFloorOffset: 0.02,
+		noiseFloorMultiplier: 1.0,
+		noiseFloorOffset: 0,
 		frameMsFallback: 32,
 	},
 	bargeIn: {
@@ -92,6 +106,8 @@ const DEFAULT_SPEECH_PROFILE = Object.freeze({
 	compressorAttackSeconds: 0.003,
 	compressorReleaseSeconds: 0.2,
 });
+
+const DEFAULT_BEHAVIOR_STATE = Object.freeze(normalizeInteractionState());
 
 function normalizeReplyCommandText(value = '') {
 	return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -171,6 +187,10 @@ function buildVoiceConfig(voiceConfig = {}) {
 			...DEFAULT_VOICE_CONFIG.recentSeen,
 			...(overrides.recentSeen || {}),
 		},
+		directTurn: {
+			...DEFAULT_VOICE_CONFIG.directTurn,
+			...(overrides.directTurn || {}),
+		},
 		speechProfile: overrides.speechProfile && typeof overrides.speechProfile === 'object'
 			? {
 				...DEFAULT_SPEECH_PROFILE,
@@ -183,6 +203,27 @@ function buildVoiceConfig(voiceConfig = {}) {
 function getEffectiveModelVoiceName(voiceConfig = {}) {
 	const normalized = String(voiceConfig?.modelVoiceName || '').trim();
 	return normalized || null;
+}
+
+function createDirectTurnState(id = 0) {
+	return {
+		id,
+		phase: 'idle',
+		active: false,
+		awaitingResponse: false,
+		committed: false,
+		hasTranscript: false,
+		serverRecognized: false,
+		startedAt: 0,
+		committedAt: 0,
+		firstTranscriptAt: 0,
+		lastTranscriptAt: 0,
+		firstModelAudioAt: 0,
+		graceScheduledAt: 0,
+		lastSpeechAt: 0,
+		peakVolume: 0,
+		lastSuppressionReason: '',
+	};
 }
 
 export class VoiceEngine extends Emitter {
@@ -223,10 +264,13 @@ export class VoiceEngine extends Emitter {
 		this._speechReleaseTimer = null;
 		this._speechReleaseMs = this.voiceConfig.speechReleaseMs;
 		this._echoSuppressionGain = this.voiceConfig.echoSuppressionGain;
+		this._directTurnConfig = this.voiceConfig.directTurn;
 		this._lastSpeechEnergyAt = 0;
 		this._turnLatency = null;
 		this._benchmarkTurn = null;
+		this._directTurnGraceTimer = null;
 
+		this._behaviorState = { ...DEFAULT_BEHAVIOR_STATE };
 		this._autonomousMode = false;
 		this._autonomousInterval = null;
 		this._consecutiveAutoTurns = 0;
@@ -237,6 +281,8 @@ export class VoiceEngine extends Emitter {
 		this._proactivePromptedAt = 0;
 		this._replySession = null;
 		this._pendingReplyAction = null;
+		this._directTurnCounter = 0;
+		this._directTurn = createDirectTurnState();
 
 		this._matcher = vocab || new VocabMatcher();
 		this._correctionCandidates = new Map();
@@ -303,6 +349,8 @@ export class VoiceEngine extends Emitter {
 		this.volumeThreshold = this.voiceConfig.volumeThreshold;
 		this._speechReleaseMs = this.voiceConfig.speechReleaseMs;
 		this._echoSuppressionGain = this.voiceConfig.echoSuppressionGain;
+		this._directTurnConfig = this.voiceConfig.directTurn;
+		this._clearDirectTurnGraceTimer();
 		this._listeningGate = new ListeningGate({
 			activationThreshold: this.volumeThreshold,
 			...this.voiceConfig.listeningGate,
@@ -365,8 +413,14 @@ export class VoiceEngine extends Emitter {
 
 		this.gemini.on('audio', (data) => {
 			if (this._muted) return;
-			if (this._dropModelOutputUntilTurnComplete) return;
-			if (!this._shouldAcceptModelOutput()) return;
+			if (this._dropModelOutputUntilTurnComplete) {
+				this._noteDirectTurnSuppressed('drop-until-turn-complete');
+				return;
+			}
+			if (!this._shouldAcceptModelOutput()) {
+				this._noteDirectTurnSuppressed('model-output-gate');
+				return;
+			}
 			if (this.state !== STATES.RESPONDING) {
 				if (this._accum.user) {
 					const correctedUser = this._correctTranscript(this._accum.user);
@@ -377,20 +431,28 @@ export class VoiceEngine extends Emitter {
 			}
 			this._setState(STATES.RESPONDING);
 			this._noteFirstModelAudio();
+			this._noteDirectTurnModelAudio();
 			this.playback.enqueue(data);
 		});
 
 		this.gemini.on('inputTranscription', (text) => {
 			if (this._muted) return;
 			this._appendTranscript('user', text);
+			this._noteDirectTurnTranscript(text);
 			this._maybeCaptureReplyCommand();
 			updateIndicator('voice', true);
 		});
 
 		this.gemini.on('outputTranscription', (text) => {
 			if (this._muted) return;
-			if (this._dropModelOutputUntilTurnComplete) return;
-			if (!this._shouldAcceptModelOutput()) return;
+			if (this._dropModelOutputUntilTurnComplete) {
+				this._noteDirectTurnSuppressed('drop-until-turn-complete');
+				return;
+			}
+			if (!this._shouldAcceptModelOutput()) {
+				this._noteDirectTurnSuppressed('model-output-gate');
+				return;
+			}
 			if (shouldDropTranscript(text)) return;
 			this._appendTranscript('model', text);
 		});
@@ -416,6 +478,18 @@ export class VoiceEngine extends Emitter {
 			}
 			if (this._lastUserTurn && this._accum.model) {
 				this._learnCorrections(this._lastUserTurn, this._accum.model);
+			}
+			if (this._directTurn.awaitingResponse) {
+				if (this._accum.model) {
+					this._finishDirectTurn('answered', {
+						hadTranscript: this._directTurn.hasTranscript,
+						hadModel: true,
+					});
+				} else if (!this._directTurn.serverRecognized) {
+					this._finishDirectTurn('aborted_no_server_turn');
+				} else {
+					this._finishDirectTurn('completed_without_playback');
+				}
 			}
 			this._accum.model = '';
 			this._lastUserTurn = '';
@@ -467,6 +541,11 @@ export class VoiceEngine extends Emitter {
 			this._setState(STATES.LISTENING);
 			// Finalize the model bubble on interruption so it doesn't hang
 			finalizeStreamingBubble('stream-model');
+			if (this._directTurn.awaitingResponse && !this._directTurn.firstModelAudioAt) {
+				this._finishDirectTurn(this._directTurn.serverRecognized ? 'server_superseded_before_playback' : 'aborted_no_server_turn');
+				logInfo('Voice', 'Server interrupted pending direct turn before playback');
+				return;
+			}
 			logInfo('Voice', 'User interrupted — playback stopped');
 		});
 
@@ -491,6 +570,10 @@ export class VoiceEngine extends Emitter {
 			if (this._toolExecuting) return;
 			if (this.state === STATES.RESPONDING) {
 				this._bargeIn.bufferChunk(base64);
+				return;
+			}
+			if ((this.state === STATES.LISTENING || this.state === STATES.PROCESSING) && !this._directTurn.committed) {
+				this._listeningGate.bufferChunk(base64);
 				return;
 			}
 			if (this.state !== STATES.IDLE) {
@@ -524,17 +607,45 @@ export class VoiceEngine extends Emitter {
 				return;
 			}
 
-			if (meter.effective > this.volumeThreshold) {
-				this._lastSpeechEnergyAt = now;
-				this._clearSpeechReleaseTimer();
-				if (this.state === STATES.LISTENING || this.state === STATES.PROCESSING) {
-					this._setState(STATES.USER_SPEAKING);
+			if (this.state === STATES.LISTENING || this.state === STATES.PROCESSING) {
+				const gate = this._listeningGate.observeVolume({
+					micVolume: meter.effective,
+					now,
+				});
+				if (gate.confirmed) {
+					this._confirmListeningSpeech('confirmed speech', {
+						heldMs: gate.heldMs,
+						micVolume: meter.effective,
+						rawMicVolume: meter.raw,
+						residualMicVolume: meter.residual,
+						threshold: gate.threshold,
+						noiseFloor: gate.noiseFloor,
+						clippedRatio: meter.clippedRatio,
+					});
 				}
 				return;
 			}
 
 			if (this.state === STATES.USER_SPEAKING) {
-				this._scheduleSpeechRelease(now);
+				this._directTurn.peakVolume = Math.max(this._directTurn.peakVolume || 0, meter.effective || 0);
+				this._directTurn.lastSpeechAt = now;
+				if (meter.effective > this.volumeThreshold && !this._shouldUseDirectTurnFastRelease(meter)) {
+					this._lastSpeechEnergyAt = now;
+					this._clearDirectTurnGraceTimer();
+					this._clearSpeechReleaseTimer();
+					return;
+				}
+				if (!this._directTurn.serverRecognized) {
+					if (this._directTurn.awaitingResponse && !this._directTurnGraceTimer) {
+						logInfo('DirectAsk', `[${this._directTurn.id}] finalization_deferred_waiting_for_transcript`);
+					}
+					this._scheduleDirectTurnGraceTimer();
+					return;
+				}
+				this._scheduleSpeechRelease(
+					now,
+					this._shouldUseDirectTurnFastRelease(meter) ? this._directTurnConfig.fastReleaseMs : this._speechReleaseMs
+				);
 			}
 		});
 
@@ -566,6 +677,7 @@ export class VoiceEngine extends Emitter {
 	}
 
 	_shouldAcceptModelOutput() {
+		if (this._directTurn.awaitingResponse) return true;
 		if (this._proactiveResponseExpected) return true;
 		if (!this._autonomousMode) {
 			if (this._idleMessageSent) return false;
@@ -576,6 +688,116 @@ export class VoiceEngine extends Emitter {
 			if (!this._autonomousResponseExpected && this.state !== STATES.RESPONDING) return false;
 		}
 		return true;
+	}
+
+	_clearDirectTurnGraceTimer() {
+		if (!this._directTurnGraceTimer) return;
+		clearTimeout(this._directTurnGraceTimer);
+		this._directTurnGraceTimer = null;
+	}
+
+	_scheduleDirectTurnGraceTimer() {
+		if (!this._directTurn.awaitingResponse || this._directTurn.serverRecognized) return;
+		if (this._directTurnGraceTimer) return;
+		this._directTurn.graceScheduledAt = Date.now();
+		this._directTurnGraceTimer = setTimeout(() => {
+			this._directTurnGraceTimer = null;
+			if (!this._directTurn.awaitingResponse || this._directTurn.serverRecognized) return;
+			logInfo(
+				'DirectAsk',
+				`[${this._directTurn.id}] grace expired without server evidence (${Date.now() - this._directTurn.committedAt}ms)`
+			);
+			this._finishDirectTurn('aborted_no_server_turn');
+			if (this.state !== STATES.RESPONDING) {
+				this._setState(STATES.LISTENING);
+			}
+			this._speakSystemSentence(this._directTurnConfig.repromptText, 'direct-ask-reprompt');
+		}, this._directTurnConfig.serverEvidenceGraceMs);
+	}
+
+	_noteDirectTurnSuppressed(reason) {
+		if (!this._directTurn.awaitingResponse) return;
+		if (this._directTurn.lastSuppressionReason === reason) return;
+		this._directTurn.lastSuppressionReason = reason;
+		logInfo('DirectAsk', `[${this._directTurn.id}] output suppressed (${reason})`);
+	}
+
+	_beginDirectTurn(kind = 'direct') {
+		if (
+			this._directTurn.awaitingResponse
+			&& this._directTurn.phase !== 'responding'
+			&& kind !== 'barge-in'
+			&& Date.now() - (this._directTurn.lastSpeechAt || this._directTurn.committedAt || this._directTurn.startedAt || 0) <= this._directTurnConfig.resumeWindowMs
+		) {
+			this._clearDirectTurnGraceTimer();
+			this._directTurn.phase = this._directTurn.serverRecognized ? 'server_recognized' : 'pending_local';
+			logInfo('DirectAsk', `[${this._directTurn.id}] merged_local_fragment`);
+			return;
+		}
+		this._directTurn = {
+			...createDirectTurnState(++this._directTurnCounter),
+			active: true,
+			awaitingResponse: true,
+			phase: 'pending_local',
+			startedAt: Date.now(),
+			kind,
+		};
+		logInfo('DirectAsk', `[${this._directTurn.id}] started (${kind})`);
+	}
+
+	_commitDirectTurn(details = {}) {
+		if (!this._directTurn.awaitingResponse || this._directTurn.committed) return;
+		this._directTurn.committed = true;
+		this._directTurn.committedAt = Date.now();
+		this._directTurn.lastSpeechAt = this._directTurn.committedAt;
+		this._directTurn.peakVolume = Math.max(this._directTurn.peakVolume || 0, details.micVolume || 0);
+		logInfo(
+			'DirectAsk',
+			`[${this._directTurn.id}] committed (mic=${(details.micVolume || 0).toFixed(3)}, threshold=${(details.threshold || 0).toFixed(3)})`
+		);
+	}
+
+	_noteDirectTurnTranscript(text = '') {
+		if (!this._directTurn.awaitingResponse) return;
+		if (!String(text || '').trim()) return;
+		const now = Date.now();
+		if (!this._directTurn.hasTranscript) {
+			this._directTurn.hasTranscript = true;
+			this._directTurn.firstTranscriptAt = now;
+			this._directTurn.serverRecognized = true;
+			this._directTurn.phase = 'server_recognized';
+			this._clearDirectTurnGraceTimer();
+			logInfo('DirectAsk', `[${this._directTurn.id}] server_recognized`);
+			if (this.state === STATES.USER_SPEAKING && Date.now() - this._lastSpeechEnergyAt >= this._directTurnConfig.fastReleaseMs) {
+				this._scheduleSpeechRelease(Date.now(), 0);
+			}
+		}
+		this._directTurn.lastTranscriptAt = now;
+	}
+
+	_noteDirectTurnModelAudio() {
+		if (!this._directTurn.awaitingResponse || this._directTurn.firstModelAudioAt) return;
+		this._directTurn.firstModelAudioAt = Date.now();
+		this._directTurn.serverRecognized = true;
+		this._directTurn.phase = 'responding';
+		this._clearDirectTurnGraceTimer();
+		logInfo('DirectAsk', `[${this._directTurn.id}] first model audio`);
+	}
+
+	_finishDirectTurn(outcome, details = {}) {
+		if (!this._directTurn.awaitingResponse) return;
+		this._clearDirectTurnGraceTimer();
+		logInfo('DirectAsk', `[${this._directTurn.id}] ${outcome}${details.reason ? ` (${details.reason})` : ''}`);
+		this._directTurn = createDirectTurnState(this._directTurn.id);
+	}
+
+	_shouldUseDirectTurnFastRelease(meter = {}) {
+		if (!this._directTurn.awaitingResponse || !this._directTurn.committed) return false;
+		const trailingThreshold = Math.max(
+			this.volumeThreshold * this._directTurnConfig.trailingNoiseThresholdMultiplier,
+			(this._directTurn.peakVolume || 0) * this._directTurnConfig.trailingNoiseRatio
+		);
+		return (meter.effective || 0) <= trailingThreshold;
 	}
 
 	_shouldAcceptModelToolCalls() {
@@ -608,6 +830,9 @@ export class VoiceEngine extends Emitter {
 		this._toolHandler?.setUserSpeechActive?.(state === STATES.USER_SPEAKING);
 
 		if (state === STATES.USER_SPEAKING) {
+			if (prev !== STATES.USER_SPEAKING) {
+				this._beginDirectTurn(prev === STATES.RESPONDING ? 'barge-in' : 'direct');
+			}
 			window.electronAPI.stopUiTask?.('User speech interrupted the foreground UI task').catch(() => {});
 			if (prev === STATES.LISTENING || prev === STATES.RESPONDING || prev === STATES.IDLE) {
 				this._beginTurnLatency();
@@ -656,15 +881,18 @@ export class VoiceEngine extends Emitter {
 		}
 	}
 
-	_scheduleSpeechRelease(now = Date.now()) {
+	_scheduleSpeechRelease(now = Date.now(), releaseMs = this._speechReleaseMs) {
 		if (this._speechReleaseTimer) return;
-		const remaining = Math.max(0, this._speechReleaseMs - (now - this._lastSpeechEnergyAt));
+		const remaining = Math.max(0, releaseMs - (now - this._lastSpeechEnergyAt));
 		this._speechReleaseTimer = setTimeout(() => {
 			this._speechReleaseTimer = null;
 			if (this.state !== STATES.USER_SPEAKING) return;
-			if (Date.now() - this._lastSpeechEnergyAt < this._speechReleaseMs) {
-				this._scheduleSpeechRelease();
+			if (Date.now() - this._lastSpeechEnergyAt < releaseMs) {
+				this._scheduleSpeechRelease(Date.now(), releaseMs);
 				return;
+			}
+			if (this._directTurn.awaitingResponse) {
+				logInfo('DirectAsk', `[${this._directTurn.id}] finalizing speech`);
 			}
 			this._setState(STATES.PROCESSING);
 		}, remaining);
@@ -735,6 +963,8 @@ export class VoiceEngine extends Emitter {
 			`Local speech gate opened (${reason}, held=${details.heldMs ?? 0}ms, mic=${(details.micVolume || 0).toFixed(3)}, raw=${(details.rawMicVolume || 0).toFixed(3)}, residual=${(details.residualMicVolume || 0).toFixed(3)}, threshold=${(details.threshold || 0).toFixed(3)}, floor=${(details.noiseFloor || 0).toFixed(3)}, clipped=${(details.clippedRatio || 0).toFixed(3)})`
 		);
 		this._setState(STATES.USER_SPEAKING);
+		this._commitDirectTurn(details);
+		this._lastSpeechEnergyAt = Date.now();
 		this._flushAudioChunks(bufferedChunks);
 	}
 
@@ -742,6 +972,7 @@ export class VoiceEngine extends Emitter {
 		if (this.state !== STATES.RESPONDING) return;
 		const bufferedChunks = this._bargeIn.confirm();
 		this._dropModelOutputUntilTurnComplete = true;
+		this._finishDirectTurn('playback_barge_in', { reason });
 		logInfo(
 			'Voice',
 			`User speaking during response — interrupting (${reason}, held=${details.heldMs ?? 0}ms, mic=${(details.micVolume || 0).toFixed(3)}, raw=${(details.rawMicVolume || 0).toFixed(3)}, residual=${(details.residualMicVolume || 0).toFixed(3)}, playback=${(details.playbackVolume || 0).toFixed(3)}, threshold=${(details.threshold || 0).toFixed(3)}, floor=${(details.noiseFloor || 0).toFixed(3)}, clipped=${(details.clippedRatio || 0).toFixed(3)}, unstableEcho=${details.unstableEcho ? 'yes' : 'no'})`
@@ -963,41 +1194,59 @@ export class VoiceEngine extends Emitter {
 	}
 
 	toggleAutonomous() {
-		this._autonomousMode = !this._autonomousMode;
-		const badge = document.getElementById('auto-badge');
-		if (badge) badge.classList.toggle('visible', this._autonomousMode);
-		updateIndicator('auto', this._autonomousMode);
-		this._screen.setAutonomousMode(this._autonomousMode);
+		const nextMode = this._behaviorState.mode === 'proactive' ? 'silent' : 'proactive';
+		window.electronAPI.setBehaviorState({
+			...this._behaviorState,
+			mode: nextMode,
+		}).catch(() => {});
+	}
+
+	_applyBehaviorState(inputState = {}, { announce = false, source = 'runtime' } = {}) {
+		const nextState = normalizeInteractionState(inputState);
+		const previousMode = this._behaviorState.mode;
+		this._behaviorState = nextState;
+		this.behavior.setState(nextState);
+		this.gemini.setBehaviorState(nextState);
+		this._autonomousMode = nextState.mode === 'proactive';
+		this._screen.setBehaviorMode?.(nextState.mode);
+		this._screen.setAutonomousMode?.(this._autonomousMode);
+		const badgeState = getInteractionBadgeState(nextState);
+		updateIndicator('auto', badgeState.indicatorActive);
+		setIndicatorLabel('auto', badgeState.indicatorLabel);
 
 		if (this._autonomousMode) {
-			logInfo('Voice', 'Autonomous mode ACTIVATED');
-			this._autonomousResponseExpected = true;
-			this.behavior.setMode('autonomous');
-			this.gemini.sendText(
-				'[SYSTEM: MODE CHANGE — AUTONOMOUS MODE ACTIVATED]\n' +
-				'You are now in autonomous coding mode. Confirm with ONE short sentence (e.g. "Autonomous mode on.") then STOP. ' +
-				'Do NOT describe the mode, list capabilities, mention schedules, or say you are idle/waiting/standing by. ' +
-				'IDLE RULES STILL APPLY: after your initial confirmation, remain COMPLETELY SILENT until the user speaks or you receive an [AUTONOMOUS CODING PROMPT] system message. ' +
-				'When you receive [AUTONOMOUS CODING PROMPT], keep active coding work in the background and speak only if there is no active task. ' +
-				'When the user describes a task, call fix_project immediately with a detailed description. ' +
-				'Share Claude Code progress ONLY when the user asks. Do not volunteer logs, background coding updates, or task completion notices.'
-			);
 			if (!this._screen.isRunning && this._active) {
 				this._screen.start();
 			}
-			this._consecutiveAutoTurns = 0;
-			this._startAutonomousLoop();
-		} else {
-			logInfo('Voice', 'Autonomous mode DEACTIVATED');
+			if (previousMode !== 'proactive') {
+				logInfo('Voice', `Interaction mode ACTIVATED: ${describeBehaviorState(nextState)} (${source})`);
+				this._autonomousResponseExpected = true;
+				this._consecutiveAutoTurns = 0;
+				this._startAutonomousLoop();
+				if (announce) {
+					this.gemini.sendText(
+						'[SYSTEM: MODE CHANGE — PROACTIVE MODE ACTIVATED]\n' +
+						'You are now in proactive assistance mode. Confirm with ONE short sentence (e.g. "Proactive mode on.") then STOP. ' +
+						'Do NOT describe the mode, list capabilities, mention schedules, or say you are idle/waiting/standing by. ' +
+						'IDLE RULES STILL APPLY: after your initial confirmation, remain COMPLETELY SILENT until the user speaks or you receive an [AUTONOMOUS CODING PROMPT] system message. ' +
+						'When you receive [AUTONOMOUS CODING PROMPT], keep active coding work in the background and speak only if there is no active task. ' +
+						'When the user describes a task, call fix_project immediately with a detailed description. ' +
+						'Share Claude Code progress ONLY when the user asks. Do not volunteer logs, background coding updates, or task completion notices.'
+					);
+				}
+			}
+		} else if (previousMode === 'proactive') {
+			logInfo('Voice', `Interaction mode DEACTIVATED: proactive -> ${describeBehaviorState(nextState)} (${source})`);
 			this._stopAutonomousLoop();
 			this._consecutiveAutoTurns = 0;
 			this._autonomousResponseExpected = false;
-			this.behavior.setMode('silent');
-			this.gemini.sendText(
-				'[SYSTEM: MODE CHANGE — AUTONOMOUS MODE DEACTIVATED]\n' +
-				'Idle silence rules are RESTORED. Return to normal behavior: only respond when the user speaks to you. ' +
-				'Do NOT proactively speak or ask questions.'
-			);
+			if (announce) {
+				this.gemini.sendText(
+					'[SYSTEM: MODE CHANGE — PROACTIVE MODE DEACTIVATED]\n' +
+					'Idle silence rules are RESTORED. Return to normal behavior: only respond when the user speaks to you. ' +
+					'Do NOT proactively speak or ask questions.'
+				);
+			}
 		}
 	}
 
@@ -1069,24 +1318,22 @@ export class VoiceEngine extends Emitter {
 		});
 
 		// Direct mode: sync initial state and listen for changes
+		window.electronAPI.getBehaviorState().then((state) => {
+			this._applyBehaviorState(state, { source: 'bootstrap' });
+		}).catch(() => {});
 		window.electronAPI.getDirectMode().then((enabled) => {
-			this.gemini.setDirectMode(!!enabled);
+			this._applyBehaviorState({ ...this._behaviorState, directMode: !!enabled }, { source: 'bootstrap:direct' });
 		}).catch(() => {});
-		window.electronAPI.getBehaviorMode().then((mode) => {
-			if (typeof mode === 'string') this.behavior.setMode(mode);
-		}).catch(() => {});
+		window.electronAPI.onBehaviorStateChanged((state) => {
+			this._applyBehaviorState(state, { source: 'ipc' });
+		});
 		window.electronAPI.onBehaviorModeChanged((mode) => {
 			if (typeof mode === 'string') {
-				this.behavior.setMode(mode);
-				this._autonomousMode = mode === 'autonomous';
-				this._screen.setAutonomousMode(this._autonomousMode);
-				updateIndicator('auto', this._autonomousMode);
-				const badge = document.getElementById('auto-badge');
-				if (badge) badge.classList.toggle('visible', this._autonomousMode);
+				this._applyBehaviorState({ ...this._behaviorState, mode }, { source: 'legacy-mode' });
 			}
 		});
 		window.electronAPI.onDirectModeChanged((enabled) => {
-			this.gemini.setDirectMode(!!enabled);
+			this._applyBehaviorState({ ...this._behaviorState, directMode: !!enabled }, { source: 'legacy-direct' });
 			logInfo('Voice', `Direct mode ${enabled ? 'ENABLED' : 'DISABLED'}`);
 		});
 
@@ -1110,14 +1357,15 @@ export class VoiceEngine extends Emitter {
 	deactivate() {
 		this._active = false;
 		this._toolExecuting = false;
+		this._clearDirectTurnGraceTimer();
 		this._clearSpeechReleaseTimer();
 		this._resetTurnLatency();
 		this._stopAutonomousLoop();
+		this._behaviorState = { ...DEFAULT_BEHAVIOR_STATE };
 		this._autonomousMode = false;
 		this._consecutiveAutoTurns = 0;
 		this._proactiveResponseExpected = false;
-		const autoBadge = document.getElementById('auto-badge');
-		if (autoBadge) autoBadge.classList.remove('visible');
+		this._directTurn = createDirectTurnState(this._directTurn.id);
 		updateIndicator('auto', false);
 		if (this._vocabRefreshInterval) {
 			clearInterval(this._vocabRefreshInterval);
@@ -1142,12 +1390,14 @@ export class VoiceEngine extends Emitter {
 
 	async reconnect() {
 		this.needsReconnect = false;
+		this._clearDirectTurnGraceTimer();
 		this._clearSpeechReleaseTimer();
 		this._resetTurnLatency();
 		this._lastUserSpeechTime = Date.now();
 		this._unpromptedTurnCount = 0;
 		this._idleMessageSent = false;
 		this._proactiveResponseExpected = false;
+		this._directTurn = createDirectTurnState(this._directTurn.id);
 		const wasAutonomous = this._autonomousMode;
 		this.capture.stop();
 		this.playback.stop();
@@ -1196,6 +1446,7 @@ export class VoiceEngine extends Emitter {
 		return this._active
 			&& !this._muted
 			&& !this._toolExecuting
+			&& !this._directTurn.awaitingResponse
 			&& !this._proactiveResponseExpected
 			&& this.state === STATES.LISTENING
 			&& this.gemini?.sessionReady;
@@ -1223,12 +1474,12 @@ export class VoiceEngine extends Emitter {
 	}
 
 	presentReplySuggestions(payload = {}) {
-		const options = Array.isArray(payload.replyOptions) ? payload.replyOptions.map((item) => String(item || '').trim()).filter(Boolean) : [];
-		if (!options.length) return false;
+		const presentation = buildReplyPresentation(payload, this._behaviorState);
+		if (!presentation.allowed) return false;
 		const meta = payload.replyAssistant || {};
 		this._replySession = {
-			mode: payload.replyPrompt ? 'prompt' : 'suggestions',
-			options,
+			mode: presentation.sessionMode,
+			options: presentation.options,
 			composerQueries: Array.isArray(meta.composerQueries) ? meta.composerQueries : [],
 			sendQueries: Array.isArray(meta.sendQueries) ? meta.sendQueries : [],
 			contextSummary: String(meta.contextSummary || ''),
@@ -1240,11 +1491,7 @@ export class VoiceEngine extends Emitter {
 			latestDraft: '',
 			selectedOptionIndex: null,
 		};
-
-		const spoken = payload.replyPrompt
-			? 'Want a suggested reply here?'
-			: `Possible replies. ${options.map((option, index) => `Option ${index + 1}: ${option}.`).join(' ')} Say send 1, send 2, send 3, or send 4. Or say instead say and your reply.`;
-		return this._speakSystemSentence(spoken, payload.replyPrompt ? 'reply-prompt' : 'reply');
+		return this._speakSystemSentence(presentation.spoken, presentation.kind);
 	}
 
 	async _runReplyAction(action) {

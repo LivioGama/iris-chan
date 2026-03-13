@@ -5,8 +5,8 @@ const DEFAULTS = {
 	preRollMs: 450,
 	noiseFloorAttack: 0.22,
 	noiseFloorRelease: 0.05,
-	noiseFloorMultiplier: 1.8,
-	noiseFloorOffset: 0.02,
+	noiseFloorMultiplier: 1.0,
+	noiseFloorOffset: 0,
 	frameMsFallback: 32,
 };
 

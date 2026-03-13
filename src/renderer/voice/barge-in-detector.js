@@ -2,6 +2,10 @@ const DEFAULTS = {
 	activationThreshold: 0.015,
 	minRespondingThreshold: 0.04,
 	minSpeechMs: 180,
+	earlyResponseMs: 700,
+	earlyMinRespondingThreshold: 0.08,
+	earlyMinSpeechMs: 260,
+	earlyPlaybackDominanceRatio: 0.65,
 	candidateGapMs: 90,
 	preRollMs: 450,
 	playbackDominanceRatio: 0.35,
@@ -48,7 +52,7 @@ export class BargeInDetector {
 	}
 
 	observeVolume({ micVolume, playbackVolume = 0, unstableEcho = false, now = Date.now() }) {
-		const threshold = this._requiredMicVolume(playbackVolume);
+		const threshold = this._requiredMicVolume(playbackVolume, now);
 		if (!this._active || this._confirmed) {
 			return {
 				confirmed: false,
@@ -91,7 +95,8 @@ export class BargeInDetector {
 			};
 		}
 
-		const effectiveThreshold = this._requiredMicVolume(playbackVolume);
+		const effectiveThreshold = this._requiredMicVolume(playbackVolume, now);
+		const minSpeechMs = this._requiredMinSpeechMs(now);
 		const candidate = micVolume >= effectiveThreshold;
 
 		if (candidate) {
@@ -100,7 +105,7 @@ export class BargeInDetector {
 			}
 			this._candidateMs += delta;
 			this._lastCandidateAt = now;
-			if (this._candidateMs >= this.options.minSpeechMs) {
+			if (this._candidateMs >= minSpeechMs) {
 				this._confirmed = true;
 			}
 		} else if (this._lastCandidateAt && now - this._lastCandidateAt > this.options.candidateGapMs) {
@@ -115,6 +120,7 @@ export class BargeInDetector {
 			candidate,
 			heldMs: this._candidateMs,
 			threshold: effectiveThreshold,
+			minSpeechMs,
 			noiseFloor: this._noiseFloor,
 			settling: false,
 			unstableEcho: false,
@@ -132,13 +138,27 @@ export class BargeInDetector {
 		return chunks;
 	}
 
-	_requiredMicVolume(playbackVolume) {
+	_requiredMicVolume(playbackVolume, now = Date.now()) {
+		const earlyResponse = this._responseStartedAt && now - this._responseStartedAt < this.options.earlyResponseMs;
+		const minRespondingThreshold = earlyResponse
+			? this.options.earlyMinRespondingThreshold
+			: this.options.minRespondingThreshold;
+		const playbackDominanceRatio = earlyResponse
+			? this.options.earlyPlaybackDominanceRatio
+			: this.options.playbackDominanceRatio;
 		return Math.max(
 			this.options.activationThreshold,
-			this.options.minRespondingThreshold,
-			playbackVolume * this.options.playbackDominanceRatio,
+			minRespondingThreshold,
+			playbackVolume * playbackDominanceRatio,
 			this._noiseFloor * this.options.noiseFloorMultiplier + this.options.noiseFloorOffset
 		);
+	}
+
+	_requiredMinSpeechMs(now = Date.now()) {
+		if (this._responseStartedAt && now - this._responseStartedAt < this.options.earlyResponseMs) {
+			return this.options.earlyMinSpeechMs;
+		}
+		return this.options.minSpeechMs;
 	}
 
 	_updateNoiseFloor(micVolume) {

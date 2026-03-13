@@ -154,6 +154,9 @@ function withFakeTime(startAt) {
 	let now = startAt;
 	Date.now = () => now;
 	return {
+		advance(ms) {
+			now += ms;
+		},
 		restore() {
 			Date.now = originalNow;
 		},
@@ -242,7 +245,7 @@ function createVoiceHarness(VoiceEngine) {
 		claudeCodeBatcher,
 	});
 
-	return { voice, gemini, screen };
+	return { voice, gemini, capture, screen };
 }
 
 console.log('Running autonomous loop timer tests...');
@@ -347,6 +350,158 @@ console.log('Running autonomous loop timer tests...');
 		}
 
 		{
+			const { voice } = createVoiceHarness(VoiceEngine);
+			voice._active = true;
+			voice.state = 'LISTENING';
+			voice.gemini.sessionReady = true;
+			voice._idleMessageSent = true;
+			voice._unpromptedTurnCount = 1;
+			voice._beginDirectTurn('direct');
+
+			assert.strictEqual(
+				voice._shouldAcceptModelOutput(),
+				true,
+				'a committed direct ask should bypass idle and unprompted suppression gates',
+			);
+			assert.strictEqual(
+				voice.canEvaluateProactively(),
+				false,
+				'a pending direct ask should block proactive suggestions until the reply is delivered',
+			);
+		}
+
+		{
+			const { voice, capture } = createVoiceHarness(VoiceEngine);
+			capture.emit('started');
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `spoken-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			voice._accum.user = 'Hello Iris';
+			voice._noteDirectTurnTranscript('Hello Iris');
+			clock.advance(32);
+			capture.emit('volume', {
+				effective: 0.01,
+				raw: 0.01,
+				residual: 0.01,
+				clippedRatio: 0,
+				unstableEcho: false,
+			});
+
+			assert.strictEqual(voice.state, 'USER_SPEAKING', 'confirmed speech should still be treated as an active direct turn before release');
+			clock.advance(90);
+			await timers.runNextTimer();
+			assert.strictEqual(voice.state, 'PROCESSING', 'direct turns should finalize quickly once speech falls into trailing-noise territory');
+		}
+
+		{
+			const { voice, capture } = createVoiceHarness(VoiceEngine);
+			voice._active = true;
+			voice.state = 'IDLE';
+			voice.gemini.sessionReady = true;
+			voice._behaviorState = { ...voice._behaviorState, mode: 'proactive' };
+			capture.emit('started');
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `spoken-no-tx-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			const directTurnId = voice._directTurn.id;
+			clock.advance(32);
+			capture.emit('volume', {
+				effective: 0.01,
+				raw: 0.01,
+				residual: 0.01,
+				clippedRatio: 0,
+				unstableEcho: false,
+			});
+			assert.strictEqual(voice._directTurn.awaitingResponse, true, 'without server evidence the turn should stay pending during the grace window');
+			await timers.runNextTimer();
+			assert.strictEqual(voice.state, 'LISTENING', 'grace expiry without transcript should return to listening');
+			assert.strictEqual(voice._directTurn.awaitingResponse, false, 'grace expiry should abort the unresolved direct turn');
+			assert.strictEqual(voice._directTurn.id, directTurnId, 'the aborted turn should reset in place instead of spawning a second turn');
+			assert.ok(
+				voice.gemini.sentTexts.some((text) => /I did not catch that\. Please say it again\./.test(text)),
+				'grace expiry without transcript should trigger a generic reprompt'
+			);
+		}
+
+		{
+			const { voice, capture, gemini } = createVoiceHarness(VoiceEngine);
+			voice._active = true;
+			voice.state = 'IDLE';
+			voice.gemini.sessionReady = true;
+			capture.emit('started');
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `spoken-superseded-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			assert.strictEqual(voice._directTurn.awaitingResponse, true, 'speech confirmation should create a pending direct turn');
+			gemini.emit('interrupted');
+			assert.strictEqual(voice.state, 'LISTENING', 'server interruption before playback should return the engine to listening');
+			assert.strictEqual(voice._directTurn.awaitingResponse, false, 'server interruption before playback should abort the pending direct turn');
+		}
+
+		{
+			const { voice, capture } = createVoiceHarness(VoiceEngine);
+			capture.emit('started');
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `fragment-a-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			const firstTurnId = voice._directTurn.id;
+			clock.advance(32);
+			capture.emit('volume', {
+				effective: 0.01,
+				raw: 0.01,
+				residual: 0.01,
+				clippedRatio: 0,
+				unstableEcho: false,
+			});
+			assert.strictEqual(voice._directTurn.awaitingResponse, true, 'first fragment should keep the direct turn pending');
+			clock.advance(200);
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `fragment-b-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			assert.strictEqual(voice._directTurn.id, firstTurnId, 'adjacent local fragments should merge into the same direct turn');
+		}
+
+		{
 			const { voice, gemini } = createVoiceHarness(VoiceEngine);
 			const toolCalls = [];
 			global.window.electronAPI.executeTool = async (name, args) => {
@@ -356,6 +511,7 @@ console.log('Running autonomous loop timer tests...');
 			voice._active = true;
 			voice.state = 'LISTENING';
 			voice.gemini.sessionReady = true;
+			voice._behaviorState = { ...voice._behaviorState, mode: 'proactive' };
 
 			const shown = voice.presentReplySuggestions({
 				replyOptions: ['Sure, I can reply.', 'I will send it soon.'],
@@ -402,6 +558,7 @@ console.log('Running autonomous loop timer tests...');
 			voice.state = 'LISTENING';
 			voice.gemini.sessionReady = true;
 			voice._apiKey = 'test-key';
+			voice._behaviorState = { ...voice._behaviorState, mode: 'proactive' };
 			voice._reviseReplyDraft = async ({ baseDraft, instruction }) => ({
 				ok: true,
 				draft: `${baseDraft} [${instruction}]`,
@@ -435,6 +592,7 @@ console.log('Running autonomous loop timer tests...');
 			voice.state = 'LISTENING';
 			voice.gemini.sessionReady = true;
 			voice._apiKey = 'test-key';
+			voice._behaviorState = { ...voice._behaviorState, mode: 'proactive' };
 			voice._reviseReplyDraft = async () => ({ ok: false });
 
 			voice.presentReplySuggestions({

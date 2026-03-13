@@ -246,12 +246,14 @@ console.log('Running voice barge-in gate tests...');
 
 			capture.emit('data', 'listening-live-0');
 			capture.emit('data', 'listening-live-1');
-			clock.advance(32);
-			emitMeter(capture, {
-				effective: 0.02,
-				raw: 0.02,
-				residual: 0.02,
-			});
+			for (let i = 0; i < 6; i++) {
+				clock.advance(32);
+				emitMeter(capture, {
+					effective: 0.02,
+					raw: 0.02,
+					residual: 0.02,
+				});
+			}
 
 			assert.strictEqual(capture.echoSuppressionEnabled, true, 'capture should enable echo suppression on start');
 			assert.strictEqual(capture.suppressionGain, 0.8, 'capture should receive the configured suppression gain');
@@ -311,6 +313,26 @@ console.log('Running voice barge-in gate tests...');
 			gemini.emit('audio', 'assistant-turn');
 
 			for (let i = 0; i < 4; i++) {
+				capture.emit('data', `soft-echo-${i}`);
+				clock.advance(32);
+				emitMeter(capture, {
+					effective: 0.055,
+					raw: 0.055,
+					residual: 0.055,
+				});
+			}
+
+			assert.strictEqual(playback.stopCount, 0, 'early weak playback echo should not interrupt a direct answer');
+			assert.deepStrictEqual(gemini.sentAudio, [], 'early weak playback echo should remain buffered');
+			assert.strictEqual(voice.state, 'RESPONDING', 'early weak playback echo should keep the assistant responding');
+		}
+
+		{
+			const { voice, gemini, capture, playback } = createVoiceHarness(VoiceEngine);
+			playback.volume = 0.08;
+			gemini.emit('audio', 'assistant-turn');
+
+			for (let i = 0; i < 4; i++) {
 				clock.advance(32);
 				emitMeter(capture, {
 					effective: 0.02,
@@ -319,7 +341,7 @@ console.log('Running voice barge-in gate tests...');
 				});
 			}
 
-			for (let i = 0; i < 4; i++) {
+			for (let i = 0; i < 5; i++) {
 				capture.emit('data', `preroll-${i}`);
 				clock.advance(32);
 				emitMeter(capture, {
@@ -339,14 +361,14 @@ console.log('Running voice barge-in gate tests...');
 			assert.strictEqual(capture.playbackStopCount, 1, 'capture should be notified when playback is stopped');
 			assert.strictEqual(voice.state, 'USER_SPEAKING', 'confirmed barge-in should transition to USER_SPEAKING');
 			assert.deepStrictEqual(
-				gemini.sentAudio.slice(0, 4),
-				['preroll-0', 'preroll-1', 'preroll-2', 'preroll-3'],
+				gemini.sentAudio.slice(0, 5),
+				['preroll-0', 'preroll-1', 'preroll-2', 'preroll-3', 'preroll-4'],
 				'buffered pre-roll audio should flush once barge-in is confirmed'
 			);
 
 			capture.emit('data', 'live-after-confirm');
 			assert.strictEqual(
-				gemini.sentAudio[4],
+				gemini.sentAudio[5],
 				'live-after-confirm',
 				'live mic audio should stream immediately after confirmation'
 			);
