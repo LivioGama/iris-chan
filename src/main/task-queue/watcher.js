@@ -9,15 +9,31 @@ const {
 	getTaskIdentifier,
 	inferDependencies,
 } = require('./dependency-manager');
+const { createExecutionMetadata } = require('./service');
 
 const POLL_INTERVAL_NORMAL_MS = 3000;
 const POLL_INTERVAL_DIRECT_MS = 1000;
+const EXECUTION_LANE_CAPACITY = Object.freeze({
+	core: 2,
+	skill: 4,
+	memory: 2,
+	safety: 2,
+	'research-observability': 2,
+});
+const EXECUTION_LANE_PRIORITY = Object.freeze({
+	safety: 0,
+	core: 1,
+	memory: 2,
+	'research-observability': 3,
+	skill: 4,
+});
 
 let pollTimer = null;
 let convex = null;
 let behaviorEngineRef = null;
 let polling = false;
 const activeTaskIds = new Set();
+const activeTaskLanes = new Map();
 
 function broadcastTaskUpdate(update) {
 	const seen = new Set();
@@ -39,6 +55,28 @@ function buildPrompt(task) {
 
 function isTerminalStatus(status = '') {
 	return ['completed', 'failed', 'cancelled'].includes(String(status).toLowerCase());
+}
+
+function buildExecutionPatch(task = {}, updates = {}) {
+	return createExecutionMetadata({
+		...(task.execution || {}),
+		taskKind: task.taskKind,
+		executionLane: task.executionLane || task.execution?.executionLane,
+		hireableProfile: task.hireableProfile || task.execution?.hireableProfile,
+		...updates,
+	});
+}
+
+function getExecutionLane(task = {}) {
+	return String(task.executionLane || task.execution?.executionLane || 'skill').toLowerCase();
+}
+
+function countActiveTasksByLane() {
+	const counts = new Map();
+	for (const lane of activeTaskLanes.values()) {
+		counts.set(lane, (counts.get(lane) || 0) + 1);
+	}
+	return counts;
 }
 
 async function syncDependencyStates(tasks = []) {
@@ -67,6 +105,10 @@ async function syncDependencyStates(tasks = []) {
 			inferredDependencies,
 			blockedBy,
 			dependencyState,
+			execution: buildExecutionPatch(task, {
+				lastEvent: shouldBlock ? 'dependency_blocked' : 'dependency_ready',
+				lastAttemptAt: Date.now(),
+			}),
 			updatedAt: Date.now(),
 		});
 			task.status = nextStatus;
@@ -85,33 +127,56 @@ async function syncDependencyStates(tasks = []) {
 }
 
 async function dispatchRunnableTasks(tasks = []) {
-	const runnable = tasks.filter((task) => {
-		const taskId = getTaskIdentifier(task);
-		const status = String(task.status || '').toLowerCase();
-		return taskId
-			&& READY_STATUSES.has(status)
-			&& !activeTaskIds.has(taskId)
-			&& String(task.dependencyState || 'ready') === 'ready';
-	});
+	const laneActiveCounts = countActiveTasksByLane();
+	const runnable = tasks
+		.filter((task) => {
+			const taskId = getTaskIdentifier(task);
+			const status = String(task.status || '').toLowerCase();
+			const executionLane = getExecutionLane(task);
+			const laneCapacity = EXECUTION_LANE_CAPACITY[executionLane] || EXECUTION_LANE_CAPACITY.skill;
+			return taskId
+				&& READY_STATUSES.has(status)
+				&& !activeTaskIds.has(taskId)
+				&& String(task.dependencyState || 'ready') === 'ready'
+				&& (laneActiveCounts.get(executionLane) || 0) < laneCapacity;
+		})
+		.sort((left, right) => {
+			const lanePriority = (EXECUTION_LANE_PRIORITY[getExecutionLane(left)] || 99)
+				- (EXECUTION_LANE_PRIORITY[getExecutionLane(right)] || 99);
+			if (lanePriority !== 0) return lanePriority;
+			return Number(left.createdAt || 0) - Number(right.createdAt || 0);
+		});
 
 	for (const task of runnable) {
 		const taskId = getTaskIdentifier(task);
 		const currentStatus = String(task.status || '').toLowerCase();
+		const executionLane = getExecutionLane(task);
+		const laneCapacity = EXECUTION_LANE_CAPACITY[executionLane] || EXECUTION_LANE_CAPACITY.skill;
+		if ((laneActiveCounts.get(executionLane) || 0) >= laneCapacity) continue;
 		const claim = await convex.claimQueueTask(task._id, [currentStatus], {
 			status: 'running',
 			startedAt: task.startedAt || Date.now(),
 			resumedAt: currentStatus === 'resuming' ? Date.now() : undefined,
+			execution: buildExecutionPatch(task, {
+				strategy: 'watcher-executor',
+				lastEvent: currentStatus === 'resuming' ? 'resumed' : 'started',
+				startedAt: task.startedAt || Date.now(),
+				lastAttemptAt: Date.now(),
+			}),
 			updatedAt: Date.now(),
 		});
 			if (!claim.ok || claim.value?.ok === false) continue;
 
 			activeTaskIds.add(taskId);
+			activeTaskLanes.set(taskId, executionLane);
+			laneActiveCounts.set(executionLane, (laneActiveCounts.get(executionLane) || 0) + 1);
 			broadcastTaskUpdate({
 				taskId,
 				status: 'running',
 				startedAt: task.startedAt || Date.now(),
+				executionLane,
 			});
-			log.info('TaskQueue', `Dispatching task ${taskId} (${currentStatus}) for ${task.projectPath}`);
+			log.info('TaskQueue', `Dispatching task ${taskId} (${currentStatus}, lane=${executionLane}) for ${task.projectPath}`);
 
 		(async () => {
 			try {
@@ -123,6 +188,12 @@ async function dispatchRunnableTasks(tasks = []) {
 						status: (result.status || '').toUpperCase() === 'COMPLETED' ? 'completed' : 'failed',
 						result: result.summary || '',
 						dependencyState: 'ready',
+						execution: buildExecutionPatch(task, {
+							strategy: 'watcher-executor',
+							lastEvent: (result.status || '').toUpperCase() === 'COMPLETED' ? 'completed' : 'failed',
+							completedAt: Date.now(),
+							lastAttemptAt: Date.now(),
+						}),
 						updatedAt: Date.now(),
 					});
 					broadcastTaskUpdate({
@@ -137,6 +208,13 @@ async function dispatchRunnableTasks(tasks = []) {
 						status: 'failed',
 						errorMessage: err.message,
 						dependencyState: 'ready',
+						execution: buildExecutionPatch(task, {
+							strategy: 'watcher-executor',
+							lastEvent: 'failed',
+							lastErrorCode: err.code || 'task_failed',
+							completedAt: Date.now(),
+							lastAttemptAt: Date.now(),
+						}),
 						updatedAt: Date.now(),
 					}).catch(() => {});
 					broadcastTaskUpdate({
@@ -147,6 +225,7 @@ async function dispatchRunnableTasks(tasks = []) {
 					});
 				} finally {
 					activeTaskIds.delete(taskId);
+					activeTaskLanes.delete(taskId);
 				}
 		})();
 	}
@@ -161,6 +240,12 @@ async function recoverInterruptedTasks() {
 		await convex.updateQueueTask(task._id, {
 			status: 'resuming',
 			resumeCount: Number(task.resumeCount || 0) + 1,
+			execution: buildExecutionPatch(task, {
+				strategy: 'watcher-executor',
+				lastEvent: 'interrupted_recovered',
+				interruptionCount: Number(task.execution?.interruptionCount || 0) + 1,
+				lastAttemptAt: Date.now(),
+			}),
 			updatedAt: Date.now(),
 		});
 		broadcastTaskUpdate({
@@ -221,6 +306,7 @@ function stop() {
 		pollTimer = null;
 	}
 	activeTaskIds.clear();
+	activeTaskLanes.clear();
 	log.info('TaskQueue', 'Watcher stopped');
 }
 

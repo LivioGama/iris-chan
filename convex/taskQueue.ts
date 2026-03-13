@@ -1,6 +1,30 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
+const intakeValidator = v.object({
+  source: v.optional(v.string()),
+  mode: v.optional(v.string()),
+  appHint: v.optional(v.string()),
+  summary: v.optional(v.string()),
+  dedupeKey: v.optional(v.string()),
+  utterance: v.optional(v.string()),
+  capturedAt: v.optional(v.number()),
+  frustration: v.optional(v.boolean()),
+  frustrationSignals: v.optional(v.array(v.string())),
+  confidence: v.optional(v.number()),
+});
+
+const executionValidator = v.object({
+  strategy: v.optional(v.string()),
+  lastEvent: v.optional(v.string()),
+  lastErrorCode: v.optional(v.string()),
+  lastAttemptAt: v.optional(v.number()),
+  startedAt: v.optional(v.number()),
+  completedAt: v.optional(v.number()),
+  fallbackCount: v.optional(v.number()),
+  interruptionCount: v.optional(v.number()),
+});
+
 export const createTask = mutation({
   args: {
     task: v.object({
@@ -9,6 +33,9 @@ export const createTask = mutation({
       enrichedPrompt: v.optional(v.string()),
       impactedFiles: v.optional(v.array(v.string())),
       complexity: v.optional(v.string()),
+      taskKind: v.optional(v.string()),
+      intake: v.optional(intakeValidator),
+      execution: v.optional(executionValidator),
       status: v.string(),
       origin: v.optional(v.string()),
       launchMode: v.optional(v.string()),
@@ -49,6 +76,9 @@ export const updateTask = mutation({
       enrichedPrompt: v.optional(v.string()),
       impactedFiles: v.optional(v.array(v.string())),
       complexity: v.optional(v.string()),
+      taskKind: v.optional(v.string()),
+      intake: v.optional(intakeValidator),
+      execution: v.optional(executionValidator),
       status: v.optional(v.string()),
       origin: v.optional(v.string()),
       launchMode: v.optional(v.string()),
@@ -78,6 +108,7 @@ export const claimTask = mutation({
       status: v.string(),
       startedAt: v.optional(v.number()),
       resumedAt: v.optional(v.number()),
+      execution: v.optional(executionValidator),
       updatedAt: v.optional(v.number()),
     }),
   },

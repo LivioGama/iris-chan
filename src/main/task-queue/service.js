@@ -10,6 +10,11 @@ const QUEUE_TASK_FIELDS = new Set([
 	'enrichedPrompt',
 	'impactedFiles',
 	'complexity',
+	'taskKind',
+	'executionLane',
+	'hireableProfile',
+	'intake',
+	'execution',
 	'status',
 	'origin',
 	'launchMode',
@@ -30,6 +35,23 @@ const QUEUE_TASK_FIELDS = new Set([
 let convexClient = null;
 let behaviorEngineRef = null;
 const countdowns = new Map();
+const EXECUTION_LANE_ALIASES = Object.freeze({
+	core: 'core',
+	skill: 'skill',
+	memory: 'memory',
+	safety: 'safety',
+	research: 'research-observability',
+	observability: 'research-observability',
+	'research-observability': 'research-observability',
+	research_observability: 'research-observability',
+	'research/observability': 'research-observability',
+});
+const EXECUTION_LANE_DEFAULTS = Object.freeze({
+	coding: Object.freeze({ lane: 'skill', profile: 'workflow-generalist', queueBucket: 'implementation' }),
+	ui: Object.freeze({ lane: 'safety', profile: 'safety-guardian', queueBucket: 'safety-review' }),
+	voice: Object.freeze({ lane: 'memory', profile: 'memory-architect', queueBucket: 'memory-intake' }),
+	frustration: Object.freeze({ lane: 'research-observability', profile: 'observability-researcher', queueBucket: 'friction-research' }),
+});
 
 function setConvexClient(client) {
 	convexClient = client;
@@ -51,6 +73,98 @@ function sanitizeQueueTaskFields(record = {}) {
 	return Object.fromEntries(
 		Object.entries(record).filter(([key, value]) => QUEUE_TASK_FIELDS.has(key) && value !== undefined)
 	);
+}
+
+function normalizeText(value = '') {
+	return String(value || '').trim();
+}
+
+function normalizeStringList(values) {
+	if (!Array.isArray(values)) return [];
+	return values
+		.map((value) => normalizeText(value))
+		.filter(Boolean);
+}
+
+function normalizeTaskKind(taskKind = '') {
+	const normalized = normalizeText(taskKind).toLowerCase();
+	return normalized || 'coding';
+}
+
+function inferExecutionLaneFromContent({ rawPrompt = '', intake = {}, taskKind = 'coding' } = {}) {
+	const normalizedTaskKind = normalizeTaskKind(taskKind);
+	if (normalizedTaskKind !== 'coding') {
+		return EXECUTION_LANE_DEFAULTS[normalizedTaskKind]?.lane || 'skill';
+	}
+	const text = normalizeText([rawPrompt, intake?.summary, intake?.utterance].filter(Boolean).join(' ')).toLowerCase();
+	if (/\bmemory|remember|policy|context|history|recall\b/.test(text)) return 'memory';
+	if (/\bsafety|guardrail|permission|verify|verification|risk|danger|destructive\b/.test(text)) return 'safety';
+	if (/\bresearch|observability|instrument|telemetry|runtime|logs?|metrics|benchmark|evidence|debug\b/.test(text)) return 'research-observability';
+	return 'skill';
+}
+
+function normalizeExecutionLane(value = '', taskKind = 'coding') {
+	const normalized = normalizeText(value).replace(/\s+/g, '-');
+	if (normalized && EXECUTION_LANE_ALIASES[normalized]) return EXECUTION_LANE_ALIASES[normalized];
+	return EXECUTION_LANE_DEFAULTS[normalizeTaskKind(taskKind)]?.lane || 'skill';
+}
+
+function normalizeHireableProfile(value = '', taskKind = 'coding', executionLane = '') {
+	const normalized = normalizeText(value).toLowerCase();
+	if (normalized) return normalized;
+	const lane = normalizeExecutionLane(executionLane, taskKind);
+	const laneDefault = Object.values(EXECUTION_LANE_DEFAULTS).find((entry) => entry.lane === lane);
+	return laneDefault?.profile || EXECUTION_LANE_DEFAULTS[normalizeTaskKind(taskKind)]?.profile || 'workflow-generalist';
+}
+
+function normalizeQueueBucket(value = '', taskKind = 'coding', executionLane = '') {
+	const normalized = normalizeText(value).toLowerCase();
+	if (normalized) return normalized;
+	const lane = normalizeExecutionLane(executionLane, taskKind);
+	const laneDefault = Object.values(EXECUTION_LANE_DEFAULTS).find((entry) => entry.lane === lane);
+	return laneDefault?.queueBucket || EXECUTION_LANE_DEFAULTS[normalizeTaskKind(taskKind)]?.queueBucket || 'implementation';
+}
+
+function normalizeIntakeMetadata(intake = {}, rawPrompt = '') {
+	if (!intake || typeof intake !== 'object' || Array.isArray(intake)) return undefined;
+	const normalized = {
+		source: normalizeText(intake.source || intake.channel || ''),
+		mode: normalizeText(intake.mode || ''),
+		appHint: normalizeText(intake.appHint || ''),
+		summary: normalizeText(intake.summary || rawPrompt || ''),
+		dedupeKey: normalizeText(intake.dedupeKey || ''),
+		utterance: normalizeText(intake.utterance || ''),
+		capturedAt: Number.isFinite(Number(intake.capturedAt)) ? Number(intake.capturedAt) : undefined,
+		frustration: intake.frustration === true,
+		frustrationSignals: normalizeStringList(intake.frustrationSignals),
+		confidence: Number.isFinite(Number(intake.confidence)) ? Number(intake.confidence) : undefined,
+	};
+	return Object.values(normalized).some((value) => {
+		if (Array.isArray(value)) return value.length > 0;
+		return value !== undefined && value !== '' && value !== false;
+	}) ? normalized : undefined;
+}
+
+function createExecutionMetadata(execution = {}) {
+	const fallbackCount = Math.max(0, Number(execution.fallbackCount || 0));
+	const interruptionCount = Math.max(0, Number(execution.interruptionCount || 0));
+	const strategy = normalizeText(execution.strategy || 'queued');
+	const executionLane = normalizeExecutionLane(execution.executionLane || execution.lane, execution.taskKind);
+	const hireableProfile = normalizeHireableProfile(execution.hireableProfile || execution.profile, execution.taskKind, executionLane);
+	const queueBucket = normalizeQueueBucket(execution.queueBucket, execution.taskKind, executionLane);
+	return {
+		strategy,
+		lastEvent: normalizeText(execution.lastEvent || 'created'),
+		lastErrorCode: normalizeText(execution.lastErrorCode || ''),
+		lastAttemptAt: Number.isFinite(Number(execution.lastAttemptAt)) ? Number(execution.lastAttemptAt) : undefined,
+		startedAt: Number.isFinite(Number(execution.startedAt)) ? Number(execution.startedAt) : undefined,
+		completedAt: Number.isFinite(Number(execution.completedAt)) ? Number(execution.completedAt) : undefined,
+		executionLane,
+		hireableProfile,
+		queueBucket,
+		fallbackCount,
+		interruptionCount,
+	};
 }
 
 function getBroadcastTargets() {
@@ -153,6 +267,8 @@ async function createQueuedTask(options) {
 		projectPath,
 		resolveProjectPath: resolver,
 		origin,
+		taskKind,
+		intake,
 		dependencies = [],
 		extraTaskFields = {},
 		buildEnrichmentPatch,
@@ -166,9 +282,27 @@ async function createQueuedTask(options) {
 
 	const resolvedPath = await resolveProjectPath({ projectPath, resolveProjectPath: resolver });
 	const createdAt = Date.now();
+	const normalizedTaskKind = normalizeTaskKind(taskKind || extraTaskFields.taskKind);
+	const normalizedIntake = normalizeIntakeMetadata(intake || extraTaskFields.intake, rawPrompt);
+	const inferredExecutionLane = inferExecutionLaneFromContent({
+		rawPrompt,
+		intake: normalizedIntake,
+		taskKind: normalizedTaskKind,
+	});
 	const taskRecord = {
 		projectPath: resolvedPath,
 		rawPrompt,
+		taskKind: normalizedTaskKind,
+		executionLane: normalizeExecutionLane(options.executionLane || extraTaskFields.executionLane || inferredExecutionLane, normalizedTaskKind),
+		hireableProfile: normalizeHireableProfile(options.hireableProfile || extraTaskFields.hireableProfile, normalizedTaskKind, options.executionLane || extraTaskFields.executionLane || inferredExecutionLane),
+		intake: normalizedIntake,
+		execution: createExecutionMetadata({
+			...extraTaskFields.execution,
+			taskKind: normalizedTaskKind,
+			executionLane: options.executionLane || extraTaskFields.executionLane || inferredExecutionLane,
+			hireableProfile: options.hireableProfile || extraTaskFields.hireableProfile,
+			queueBucket: options.queueBucket || extraTaskFields.queueBucket,
+		}),
 		status: 'draft',
 		origin,
 		launchMode: 'queued',
@@ -239,6 +373,59 @@ async function createQueuedTask(options) {
 	return { taskId, projectPath: resolvedPath };
 }
 
+async function createVoiceQueuedTask(options = {}) {
+	const utterance = normalizeText(options.utterance || options.rawPrompt);
+	const summary = normalizeText(options.summary || options.rawPrompt || utterance);
+	if (!summary) {
+		throw new Error('No voice task summary provided');
+	}
+	return createQueuedTask({
+		...options,
+		rawPrompt: summary,
+		taskKind: 'voice',
+		executionLane: options.executionLane || 'memory',
+		hireableProfile: options.hireableProfile || 'memory-architect',
+		queueBucket: options.queueBucket || 'memory-intake',
+		intake: {
+			...options.intake,
+			source: options.intake?.source || 'voice',
+			mode: options.intake?.mode || 'extracted-task',
+			summary,
+			utterance,
+			appHint: options.appHint || options.intake?.appHint || '',
+			confidence: options.confidence ?? options.intake?.confidence,
+			capturedAt: options.capturedAt || options.intake?.capturedAt || Date.now(),
+		},
+	});
+}
+
+async function createFrustrationQueuedTask(options = {}) {
+	const summary = normalizeText(options.summary || options.rawPrompt);
+	if (!summary) {
+		throw new Error('No frustration task summary provided');
+	}
+	return createQueuedTask({
+		...options,
+		rawPrompt: summary,
+		taskKind: 'frustration',
+		executionLane: options.executionLane || 'research-observability',
+		hireableProfile: options.hireableProfile || 'observability-researcher',
+		queueBucket: options.queueBucket || 'friction-research',
+		intake: {
+			...options.intake,
+			source: options.intake?.source || 'voice',
+			mode: options.intake?.mode || 'frustration-capture',
+			summary,
+			utterance: options.utterance || options.intake?.utterance || '',
+			frustration: true,
+			frustrationSignals: options.signals || options.intake?.frustrationSignals || [],
+			appHint: options.appHint || options.intake?.appHint || '',
+			confidence: options.confidence ?? options.intake?.confidence,
+			capturedAt: options.capturedAt || options.intake?.capturedAt || Date.now(),
+		},
+	});
+}
+
 module.exports = {
 	setConvexClient,
 	setBehaviorEngine,
@@ -247,8 +434,14 @@ module.exports = {
 	broadcastTaskUpdate,
 	broadcastCountdown,
 	createQueuedTask,
+	createVoiceQueuedTask,
+	createFrustrationQueuedTask,
 	approveQueuedTask,
 	cancelQueuedTask,
 	clearCountdown,
 	startCountdown,
+	createExecutionMetadata,
+	normalizeExecutionLane,
+	normalizeHireableProfile,
+	normalizeIntakeMetadata,
 };
