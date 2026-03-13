@@ -31,12 +31,22 @@ async function main() {
 			/\.iris\/settings\.json/,
 			'update_settings tool description should point at the unified settings file',
 		);
+		assert.match(
+			updateSettingsTool.description,
+			/voice presets|pitch|compression/i,
+			'update_settings tool description should advertise preset queries and tuning changes',
+		);
 
 		const selfFixTool = toolDeclarations.find((tool) => tool.name === 'self_fix');
 		assert.match(
 			selfFixTool.description,
 			/Prefer update_settings/,
 			'self_fix tool description should defer to update_settings for existing tunable behaviors',
+		);
+		assert.match(
+			systemPrompt,
+			/Voice presets, voice model selection, and voice shaping changes/i,
+			'system prompt should explicitly block self_fix for voice preset and voice shaping requests',
 		);
 	} finally {
 		if (originalWindow === undefined) {

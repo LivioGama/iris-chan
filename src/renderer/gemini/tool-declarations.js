@@ -204,12 +204,12 @@ export const toolDeclarations = [
 	},
 	{
 		name: 'update_settings',
-		description: 'Update existing runtime-tunable Iris settings in ~/.iris/settings.json without modifying source code. Prefer this over self_fix when the requested behavior is already covered by a stable setting such as voice, avatar, behavior mode, or logging.',
+		description: 'Update existing runtime-tunable Iris settings in ~/.iris/settings.json without modifying source code. Prefer this over self_fix whenever the request is already covered by stable settings. Supports querying and changing voice presets, switching voices by preset name, and tuning voice characteristics like pitch, playback rate, EQ warmth/brightness, and compression, along with other settings-backed behavior such as avatar, behavior mode, direct mode, and logging.',
 		parameters: { type: 'OBJECT', properties: {
 			patch: { type: 'STRING', description: 'Optional JSON object patch for ~/.iris/settings.json.' },
 			key: { type: 'STRING', description: 'Optional single settings key path like voice.modelVoiceName.' },
 			value: { type: 'STRING', description: 'Optional value paired with key.' },
-			request: { type: 'STRING', description: 'Optional natural-language settings change request.' },
+			request: { type: 'STRING', description: 'Optional natural-language settings request, including list/query operations like "what voice presets do you have" and mutations like "switch to soft bloom" or "make it warmer and slower".' },
 		} },
 	},
 	{

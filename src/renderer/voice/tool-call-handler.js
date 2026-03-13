@@ -27,6 +27,20 @@ const SAME_TURN_POINTER_RETRY_MESSAGE = 'Ignored repeated pointer retries in the
 const MAX_POINTER_ONLY_BATCHES_PER_SPEECH = 2;
 const NAVIGATIONAL_UI_INTENT_PATTERN = /\b(click|open|go to|goto|select|search|find|navigate|visit|follow|choose)\b/i;
 const DESTRUCTIVE_UI_INTENT_PATTERN = /\b(delete|remove|trash|discard|send|submit|purchase|buy|pay|confirm|replace|overwrite)\b/i;
+const SETTINGS_CAPABILITY_PATTERNS = [
+	/\bvoice preset(s)?\b/i,
+	/\b(?:model )?voice\b/i,
+	/\bpitch\b/i,
+	/\bplayback(?: rate)?\b/i,
+	/\bwarm(?:er|th)\b/i,
+	/\bbrighter\b|\bdarker\b/i,
+	/\beq\b/i,
+	/\bcompress(?:ed|ion)?\b/i,
+	/\bavatar\b/i,
+	/\bbehavior mode\b|\battentive mode\b|\bautonomous mode\b|\bsilent mode\b/i,
+	/\bdirect mode\b/i,
+	/\blog(?:ging| level)?\b/i,
+];
 
 function isSearchTool(name, args) {
 	if (name === 'web_search' || name === 'ask_chatgpt' || name === 'research') return true;
@@ -51,6 +65,9 @@ function searchLabel(name, args) {
 
 export function formatToolResponseText(result) {
 	if (!result || typeof result !== 'object') return 'done';
+	if (typeof result.summary === 'string' && result.summary.trim()) {
+		return result.summary.trim();
+	}
 	const text = result.result || 'done';
 	return result.ok === false ? `Error: ${text}` : text;
 }
@@ -103,6 +120,8 @@ export function createToolCallHandler({
 	let pointerOnlyBatchesThisSpeech = 0;
 	let toolCallChain = Promise.resolve();
 	let shouldAcceptToolCalls = () => true;
+	let lastRouteIntent = '';
+	let lastRouteDecision = null;
 	const readLastUserIntent = typeof getLastUserIntent === 'function' ? getLastUserIntent : () => '';
 	const readSelfFixContext = typeof getSelfFixContext === 'function' ? getSelfFixContext : () => ({});
 	const notifySelfFixAccepted = typeof onSelfFixAccepted === 'function' ? onSelfFixAccepted : () => {};
@@ -166,31 +185,33 @@ export function createToolCallHandler({
 
 	const _executeOne = async (name, args, id, index, total, options = {}) => {
 		const { allowAutoEscalation = true } = options;
-		const toolArgs = attachPointerCaptureId(name, args);
+		const dispatchName = options.dispatchName || name;
+		const responseName = options.responseName || name;
+		const toolArgs = attachPointerCaptureId(dispatchName, args);
 		activeToolCount++;
-		updateToolPresence(name, toolArgs, index, total);
-		showToolStart(name, toolArgs, index, total);
-		logInfo('Tool', `Executing: ${name}(${JSON.stringify(toolArgs || {})})`.slice(0, 500));
+		updateToolPresence(dispatchName, toolArgs, index, total);
+		showToolStart(dispatchName, toolArgs, index, total);
+		logInfo('Tool', `Executing: ${dispatchName}(${JSON.stringify(toolArgs || {})})`.slice(0, 500));
 
-		const isSearch = isSearchTool(name, toolArgs);
+		const isSearch = isSearchTool(dispatchName, toolArgs);
 		if (isSearch) {
-			window.electronAPI.searchSpinner(searchLabel(name, toolArgs));
+			window.electronAPI.searchSpinner(searchLabel(dispatchName, toolArgs));
 		}
 
 		const toolStart = Date.now();
 		try {
-			let result = await window.electronAPI.executeTool(name, toolArgs);
+			let result = await window.electronAPI.executeTool(dispatchName, toolArgs);
 			const escalationGoal = normalizeAutoEscalationIntent(readLastUserIntent());
-			if (allowAutoEscalation && shouldAutoEscalateTool(name, result, escalationGoal)) {
+			if (allowAutoEscalation && shouldAutoEscalateTool(dispatchName, result, escalationGoal)) {
 				const failureReason = result?.result || 'unknown failure';
-				logInfo('Tool', `Auto-escalating ${name} → run_ui_task. goal="${escalationGoal}" reason="${failureReason}"`);
+				logInfo('Tool', `Auto-escalating ${dispatchName} → run_ui_task. goal="${escalationGoal}" reason="${failureReason}"`);
 				markUiTaskDispatched('run_ui_task');
 				const escalatedResult = await window.electronAPI.executeTool('run_ui_task', { goal: escalationGoal });
 				const escalatedText = formatToolResponseText(escalatedResult);
 				logInfo('Tool', `Auto-escalation outcome: source=${name} escalated=${escalatedResult.ok !== false ? 'OK' : 'FAIL'} result=${escalatedText.slice(0, 300)}`);
 				result = {
 					...escalatedResult,
-					autoEscalatedFrom: name,
+					autoEscalatedFrom: dispatchName,
 					autoEscalationGoal: escalationGoal,
 					autoEscalationReason: failureReason,
 					autoEscalationSourceOk: result.ok !== false,
@@ -200,28 +221,28 @@ export function createToolCallHandler({
 				};
 			}
 			const toolResponseText = formatToolResponseText(result);
-			if (name === 'self_fix' && result?.ok !== false) {
-				notifySelfFixAccepted({ name, args: toolArgs, result });
+			if (dispatchName === 'self_fix' && result?.ok !== false) {
+				notifySelfFixAccepted({ name: dispatchName, args: toolArgs, result });
 			}
-			if (screen && shouldRefreshScreenAfterTool(name, result)) {
+			if (screen && shouldRefreshScreenAfterTool(dispatchName, result)) {
 				await screen.capture({ passive: false, force: true });
 			}
-			showToolDone(name, index, result.ok !== false);
-			updateIfWorkspaceTool(name);
-			logInfo('Tool', `Result: ${name} → ${result.ok !== false ? 'OK' : 'FAIL'}: ${toolResponseText.slice(0, 300)}`);
-			gemini.sendToolResponse(id, name, toolResponseText);
-			window.electronAPI.saveToolExecution(name, toolArgs, toolResponseText, result.ok !== false, Date.now() - toolStart);
+			showToolDone(dispatchName, index, result.ok !== false);
+			updateIfWorkspaceTool(dispatchName);
+			logInfo('Tool', `Result: ${dispatchName} → ${result.ok !== false ? 'OK' : 'FAIL'}: ${toolResponseText.slice(0, 300)}`);
+			gemini.sendToolResponse(id, responseName, toolResponseText);
+			window.electronAPI.saveToolExecution(dispatchName, toolArgs, toolResponseText, result.ok !== false, Date.now() - toolStart);
 
 			if (isSearch) {
-				window.electronAPI.searchResult(searchLabel(name, toolArgs), result.ok ? toolResponseText : toolResponseText);
+				window.electronAPI.searchResult(searchLabel(dispatchName, toolArgs), result.ok ? toolResponseText : toolResponseText);
 			}
 		} catch (err) {
-			showToolDone(name, index, false);
-			logError('Tool', `Error: ${name} → ${err.message}`);
-			gemini.sendToolResponse(id, name, 'Error: ' + err.message);
-			window.electronAPI.saveToolExecution(name, toolArgs, err.message, false, Date.now() - toolStart);
+			showToolDone(dispatchName, index, false);
+			logError('Tool', `Error: ${dispatchName} → ${err.message}`);
+			gemini.sendToolResponse(id, responseName, 'Error: ' + err.message);
+			window.electronAPI.saveToolExecution(dispatchName, toolArgs, err.message, false, Date.now() - toolStart);
 			if (isSearch) {
-				window.electronAPI.searchResult(searchLabel(name, toolArgs), 'Error: ' + err.message);
+				window.electronAPI.searchResult(searchLabel(dispatchName, toolArgs), 'Error: ' + err.message);
 			}
 		} finally {
 			activeToolCount = Math.max(0, activeToolCount - 1);
@@ -299,15 +320,77 @@ export function createToolCallHandler({
 		return null;
 	}
 
+	function deriveSettingsRequestFromSelfFixCall(call) {
+		if (call?.name !== 'self_fix') return null;
+		const candidates = [
+			normalizeAutoEscalationIntent(readLastUserIntent()),
+			normalizeAutoEscalationIntent(call.args?.description || ''),
+		].filter(Boolean);
+		return candidates.find((text) => SETTINGS_CAPABILITY_PATTERNS.some((pattern) => pattern.test(text))) || null;
+	}
+
+	async function routeCurrentIntent() {
+		const intentText = normalizeAutoEscalationIntent(readLastUserIntent());
+		if (!intentText) return { ok: true, route: null };
+		if (intentText === lastRouteIntent && lastRouteDecision) {
+			return { ok: true, route: lastRouteDecision };
+		}
+		const result = await window.electronAPI.executeTool('route_request', { request: intentText });
+		if (!result?.ok) {
+			return { ok: false, error: result?.result || 'Routing unavailable right now.' };
+		}
+		let parsed = null;
+		try {
+			parsed = JSON.parse(result.result || '{}');
+		} catch {
+			return { ok: false, error: 'Routing unavailable right now: invalid route payload.' };
+		}
+		lastRouteIntent = intentText;
+		lastRouteDecision = parsed;
+		return { ok: true, route: parsed };
+	}
+
+	function rejectRoutingFailure(calls, message) {
+		logInfo('Tool', `Rejecting ${calls.length} tool call(s) because routing failed: ${message}`);
+		for (const call of calls) {
+			gemini.sendToolResponse(call.id, call.name, `Error: ${message}`);
+		}
+	}
+
 	const _processToolCalls = async (calls) => {
 		if (!shouldAcceptToolCalls(calls)) {
 			rejectSuppressedToolCalls(calls);
 			return;
 		}
+		const routeState = await routeCurrentIntent();
+		if (!routeState.ok) {
+			rejectRoutingFailure(calls, routeState.error);
+			return;
+		}
+		const routedIntent = normalizeAutoEscalationIntent(readLastUserIntent());
+		const route = routeState.route;
+		if (route?.route === 'settings_query' || route?.route === 'settings_mutation') {
+			calls = [{
+				...calls[0],
+				name: 'update_settings',
+				args: { request: routedIntent },
+				__responseName: calls[0]?.name || 'update_settings',
+			}];
+		}
 
 		const deferredCalls = [];
 		const executableCalls = [];
 		for (const call of calls) {
+			const settingsRequest = deriveSettingsRequestFromSelfFixCall(call);
+			if (settingsRequest) {
+				executableCalls.push({
+					...call,
+					name: 'update_settings',
+					args: { request: settingsRequest },
+					__responseName: call.name,
+				});
+				continue;
+			}
 			const selfFixRejection = shouldRejectSelfFixCall(call);
 			if (selfFixRejection) {
 				gemini.sendToolResponse(call.id, call.name, selfFixRejection);
@@ -363,9 +446,9 @@ export function createToolCallHandler({
 		if (bgCalls.length > 0) {
 			logInfo('Tool', `Dispatching ${bgCalls.length} background tool(s) without blocking voice`);
 			for (let i = 0; i < bgCalls.length; i++) {
-				const { name, args, id } = bgCalls[i];
+				const { name, args, id, __responseName } = bgCalls[i];
 				// Execute asynchronously — do NOT await, do NOT set TOOL_EXECUTING
-				_executeOne(name, args, id, i, bgCalls.length).catch(err => {
+				_executeOne(name, args, id, i, bgCalls.length, { responseName: __responseName || name }).catch(err => {
 					logError('Tool', `Background tool ${name} dispatch error: ${err.message}`);
 				});
 			}
@@ -376,9 +459,9 @@ export function createToolCallHandler({
 			onStateChange('TOOL_EXECUTING', true);
 
 			for (let i = 0; i < blockingCalls.length; i++) {
-				const { name, args, id } = blockingCalls[i];
+				const { name, args, id, __responseName } = blockingCalls[i];
 				markUiTaskDispatched(name);
-				await _executeOne(name, args, id, i, blockingCalls.length);
+				await _executeOne(name, args, id, i, blockingCalls.length, { responseName: __responseName || name });
 			}
 
 			onStateChange('TOOL_EXECUTING', false);
@@ -412,6 +495,8 @@ export function createToolCallHandler({
 			speechGeneration += 1;
 			lastUiTaskSpeechGeneration = null;
 			pointerOnlyBatchesThisSpeech = 0;
+			lastRouteIntent = '';
+			lastRouteDecision = null;
 			supersedePendingUiCall('Deferred UI task cancelled because the user kept speaking');
 			return;
 		}

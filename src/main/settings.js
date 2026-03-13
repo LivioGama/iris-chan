@@ -10,6 +10,7 @@ const LEGACY_LOG_SETTINGS_PATH = process.env.IRIS_LOG_SETTINGS_PATH || path.join
 const LEVEL_RANK = { info: 0, warn: 1, error: 2, silent: 3 };
 const AVATAR_VALUES = new Set(['original', 'tripo3d']);
 const MODE_VALUES = new Set(['silent', 'attentive', 'autonomous']);
+const VOICE_PRESETS = Object.freeze(deepClone(config.voicePresets || []));
 
 const DEFAULT_SETTINGS = Object.freeze({
 	voice: {
@@ -55,6 +56,7 @@ const DEFAULT_SETTINGS = Object.freeze({
 			runtime: true,
 			ui: true,
 			system: true,
+			metrics: true,
 			other: true,
 		},
 	},
@@ -64,18 +66,42 @@ const REGISTRY = Object.freeze({
 	voice: {
 		liveApply: true,
 		normalize: normalizeVoiceSettings,
+		capabilities: {
+			queryIntents: ['list voice presets', 'what voice presets are available', 'what voice options do you have'],
+			mutationIntents: ['switch voice preset', 'change voice', 'adjust pitch', 'adjust playback rate', 'adjust EQ warmth/brightness', 'adjust compression'],
+			examples: ['list available voice presets', 'switch to soft bloom', 'make it warmer and slower'],
+			keyPaths: ['voice.modelVoiceName', 'voice.speechProfile.*'],
+		},
 	},
 	avatar: {
 		liveApply: true,
 		normalize: normalizeAvatarSettings,
+		capabilities: {
+			queryIntents: ['what avatar is selected'],
+			mutationIntents: ['switch avatar', 'change avatar'],
+			examples: ['set avatar to tripo3d'],
+			keyPaths: ['avatar.current'],
+		},
 	},
 	behavior: {
 		liveApply: true,
 		normalize: normalizeBehaviorSettings,
+		capabilities: {
+			queryIntents: ['what mode are you in', 'is direct mode on'],
+			mutationIntents: ['change behavior mode', 'toggle direct mode', 'set attentive mode'],
+			examples: ['turn direct mode on', 'set mode to attentive'],
+			keyPaths: ['behavior.mode', 'behavior.directMode'],
+		},
 	},
 	logging: {
 		liveApply: true,
 		normalize: normalizeLoggingSettings,
+		capabilities: {
+			queryIntents: ['what logging level are you using'],
+			mutationIntents: ['change logging level', 'turn logging off'],
+			examples: ['set logging.console.level = warn'],
+			keyPaths: ['logging.console.*', 'logging.persist.*', 'logging.sources.*', 'logging.categories.*'],
+		},
 	},
 });
 
@@ -203,6 +229,34 @@ function normalizeVoiceSettings(input = {}) {
 		merged.speechProfile[key] = clampNumber(merged.speechProfile[key], fallback, min, max);
 	}
 	return merged;
+}
+
+function normalizePresetName(value = '') {
+	return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function getVoicePresets() {
+	return deepClone(VOICE_PRESETS);
+}
+
+function resolveVoicePreset(name = '') {
+	const target = normalizePresetName(name);
+	if (!target) return null;
+	return VOICE_PRESETS.find((preset) => {
+		if (normalizePresetName(preset.name) === target) return true;
+		return Array.isArray(preset.aliases) && preset.aliases.some((alias) => normalizePresetName(alias) === target);
+	}) || null;
+}
+
+function buildVoicePresetPatch(name = '') {
+	const preset = resolveVoicePreset(name);
+	if (!preset) return null;
+	return {
+		voice: {
+			modelVoiceName: preset.modelVoiceName,
+			speechProfile: deepClone(preset.speechProfile),
+		},
+	};
 }
 
 function normalizeAvatarSettings(input = {}) {
@@ -462,7 +516,11 @@ function getMetadata() {
 		registry: deepClone(Object.fromEntries(
 			Object.entries(REGISTRY).map(([namespace, value]) => [
 				namespace,
-				{ liveApply: !!value.liveApply },
+				{
+					liveApply: !!value.liveApply,
+					restartRequired: !value.liveApply,
+					capabilities: deepClone(value.capabilities || {}),
+				},
 			]),
 		)),
 	};
@@ -481,6 +539,9 @@ module.exports = {
 	setSettingsBroadcaster,
 	registerApplyHandler,
 	getMetadata,
+	getVoicePresets,
+	resolveVoicePreset,
+	buildVoicePresetPatch,
 	normalizeSettings,
 	normalizeLoggingSettings,
 	normalizeVoiceSettings,

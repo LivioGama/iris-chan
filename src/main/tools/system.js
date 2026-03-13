@@ -84,9 +84,64 @@ function setPath(target, keyPath, rawValue) {
 function derivePatchFromRequest(request = '') {
 	const text = String(request || '').trim();
 	if (!text) return null;
+	const lower = text.toLowerCase();
 	const patch = {};
+	const currentVoice = settings.getSettings()?.voice || settings.DEFAULT_SETTINGS.voice;
+
+	const tweakPatch = { voice: { speechProfile: {} } };
+	let hasTweak = false;
+	const applyTweak = (key, value) => {
+		tweakPatch.voice.speechProfile[key] = value;
+		hasTweak = true;
+	};
+
+	if (/\bwarmer\b/i.test(text)) {
+		applyTweak('warmthGainDb', Number(currentVoice.speechProfile.warmthGainDb || 0) + 0.8);
+		applyTweak('lowShelfGainDb', Number(currentVoice.speechProfile.lowShelfGainDb || 0) + 0.4);
+	}
+	if (/\bbrighter\b/i.test(text)) {
+		applyTweak('presenceGainDb', Number(currentVoice.speechProfile.presenceGainDb || 0) + 0.7);
+		applyTweak('highShelfGainDb', Number(currentVoice.speechProfile.highShelfGainDb || 0) + 0.6);
+	}
+	if (/\bdarker\b/i.test(text)) {
+		applyTweak('presenceGainDb', Number(currentVoice.speechProfile.presenceGainDb || 0) - 0.7);
+		applyTweak('highShelfGainDb', Number(currentVoice.speechProfile.highShelfGainDb || 0) - 0.6);
+	}
+	if (/\bslower\b/i.test(text)) {
+		applyTweak('playbackRate', Number(currentVoice.speechProfile.playbackRate || 1) - 0.03);
+	}
+	if (/\bfaster\b/i.test(text)) {
+		applyTweak('playbackRate', Number(currentVoice.speechProfile.playbackRate || 1) + 0.03);
+	}
+	if (/\bhigher pitch\b|\braise(?: the)? pitch\b|\bmore feminine\b/i.test(text)) {
+		applyTweak('pitchSemitones', Number(currentVoice.speechProfile.pitchSemitones || 0) + 1);
+	}
+	if (/\blower pitch\b|\bdeeper\b/i.test(text)) {
+		applyTweak('pitchSemitones', Number(currentVoice.speechProfile.pitchSemitones || 0) - 1);
+	}
+	if (/\bless compressed\b|\bless compression\b/i.test(text)) {
+		applyTweak('compressorRatio', Number(currentVoice.speechProfile.compressorRatio || 2.2) - 0.3);
+		applyTweak('compressorThresholdDb', Number(currentVoice.speechProfile.compressorThresholdDb || -24) + 1);
+	}
+	if (/\bmore compressed\b|\bmore compression\b/i.test(text)) {
+		applyTweak('compressorRatio', Number(currentVoice.speechProfile.compressorRatio || 2.2) + 0.3);
+		applyTweak('compressorThresholdDb', Number(currentVoice.speechProfile.compressorThresholdDb || -24) - 1);
+	}
+
+	const presetCandidates = settings.getVoicePresets();
+	const matchedPreset = presetCandidates.find((preset) => {
+		const names = [preset.name].concat(Array.isArray(preset.aliases) ? preset.aliases : []);
+		return names.some((name) => lower.includes(String(name).toLowerCase()));
+	});
+	if (matchedPreset && /\b(?:preset|switch to|use|try)\b/i.test(text)) {
+		const presetPatch = settings.buildVoicePresetPatch(matchedPreset.name);
+		if (presetPatch) {
+			Object.assign(patch, presetPatch);
+		}
+	}
+
 	const voiceMatch = text.match(/\bvoice(?: name)?\s+(?:to|is)\s+["']?([a-z0-9 _-]+)["']?/i);
-	if (voiceMatch) {
+	if (voiceMatch && !matchedPreset) {
 		setPath(patch, 'voice.modelVoiceName', voiceMatch[1].trim());
 	}
 	const avatarMatch = text.match(/\bavatar\s+(?:to|is)\s+(original|tripo3d)\b/i);
@@ -103,7 +158,56 @@ function derivePatchFromRequest(request = '') {
 	if (keyValueMatch) {
 		setPath(patch, keyValueMatch[1], keyValueMatch[2].trim());
 	}
+	if (hasTweak) {
+		patch.voice = patch.voice || {};
+		patch.voice.speechProfile = {
+			...(patch.voice.speechProfile || {}),
+			...tweakPatch.voice.speechProfile,
+		};
+	}
 	return Object.keys(patch).length ? patch : null;
+}
+
+function listVoicePresets() {
+	const presets = settings.getVoicePresets().map((preset) => ({
+		name: preset.name,
+		description: preset.description,
+		modelVoiceName: preset.modelVoiceName,
+	}));
+	const summary = presets.length
+		? `Available voice presets: ${presets.map((preset) => `${preset.name} — ${preset.description}`).join('; ')}.`
+		: 'No voice presets are currently available.';
+	return {
+		ok: true,
+		applied: false,
+		restartRequired: false,
+		changedKeys: [],
+		queryKind: 'voice_preset_list',
+		summary,
+		data: { presets },
+		result: JSON.stringify({
+			queryKind: 'voice_preset_list',
+			summary,
+			data: { presets },
+		}),
+	};
+}
+
+function buildRoutingRegistrySummary() {
+	const metadata = settings.getMetadata();
+	return Object.fromEntries(
+		Object.entries(metadata.registry || {}).map(([namespace, value]) => [
+			namespace,
+			{
+				liveApply: !!value.liveApply,
+				restartRequired: !!value.restartRequired,
+				queryIntents: value.capabilities?.queryIntents || [],
+				mutationIntents: value.capabilities?.mutationIntents || [],
+				examples: value.capabilities?.examples || [],
+				keyPaths: value.capabilities?.keyPaths || [],
+			},
+		]),
+	);
 }
 
 async function groqPatchFromRequest(request = '') {
@@ -137,7 +241,74 @@ async function groqPatchFromRequest(request = '') {
 	return null;
 }
 
+function validateRoutePayload(payload) {
+	if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+	const route = String(payload.route || '').trim();
+	if (!['settings_query', 'settings_mutation', 'self_fix', 'ui_task', 'project_fix', 'answer_only'].includes(route)) {
+		return null;
+	}
+	return {
+		route,
+		settingsNamespace: String(payload.settingsNamespace || '').trim(),
+		settingsCapable: payload.settingsCapable === true,
+	};
+}
+
+async function route_request(args = {}) {
+	const request = String(args.request || '').trim();
+	if (!request) return { ok: false, result: 'Routing unavailable right now: empty request.' };
+	if (!process.env.GROQ_API_KEY || typeof fetch !== 'function') {
+		return { ok: false, result: 'Routing unavailable right now.' };
+	}
+	const registrySummary = buildRoutingRegistrySummary();
+	const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+		},
+		body: JSON.stringify({
+			model: 'llama-3.3-70b-versatile',
+			temperature: 0,
+			response_format: { type: 'json_object' },
+			messages: [
+				{
+					role: 'system',
+					content: 'Route the user request into one of these routes only: settings_query, settings_mutation, self_fix, ui_task, project_fix, answer_only. Use the provided settings registry to decide whether the request is already satisfiable through settings. Return only JSON with keys: route, settingsNamespace, settingsCapable.',
+				},
+				{
+					role: 'user',
+					content: JSON.stringify({
+						request,
+						settingsRegistry: registrySummary,
+					}),
+				},
+			],
+		}),
+	});
+	if (!response.ok) {
+		throw new Error(`Groq route translation failed (${response.status})`);
+	}
+	const data = await response.json();
+	const content = data?.choices?.[0]?.message?.content;
+	const parsed = parsePatchInput(content);
+	const validated = validateRoutePayload(parsed);
+	if (!validated) {
+		return { ok: false, result: 'Routing unavailable right now: invalid Groq route output.' };
+	}
+	return {
+		ok: true,
+		result: JSON.stringify(validated),
+		route: validated,
+	};
+}
+
 async function update_settings(args = {}) {
+	const requestText = String(args.request || '').trim();
+	if (/\blist\b.*\bvoice preset(s)?\b/i.test(requestText) || /\bwhat presets\b/i.test(requestText)) {
+		return listVoicePresets();
+	}
+	const requestedPresetIntent = /\b(?:voice preset|preset)\b/i.test(requestText) || /\b(?:switch to|use|try)\b.+\b(?:voice|preset)\b/i.test(requestText);
 	const explicitPatch = parsePatchInput(args.patch);
 	let patch = explicitPatch;
 	let translator = 'none';
@@ -159,6 +330,10 @@ async function update_settings(args = {}) {
 		if (patch) translator = 'deterministic';
 	}
 	if (!patch) {
+		if (requestedPresetIntent) {
+			const available = settings.getVoicePresets().map((preset) => preset.name).join(', ');
+			return { ok: false, result: `Unknown voice preset. Available presets: ${available}` };
+		}
 		return { ok: false, result: 'No valid settings patch provided. Pass patch JSON, key/value, or a supported request string.' };
 	}
 	const result = settings.updateSettings(patch, { source: 'tool:update_settings', translator });
@@ -229,4 +404,4 @@ async function run_terminal_command(args) {
 	});
 }
 
-module.exports = { set_volume, notify, run_terminal_command, check_permissions, update_settings };
+module.exports = { set_volume, notify, run_terminal_command, check_permissions, update_settings, route_request };

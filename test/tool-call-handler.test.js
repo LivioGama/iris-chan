@@ -69,6 +69,12 @@ assert.strictEqual(
 );
 
 assert.strictEqual(
+	formatToolResponseText({ ok: true, queryKind: 'voice_preset_list', summary: 'Available voice presets: soft bloom — soft and airy.' }),
+	'Available voice presets: soft bloom — soft and airy.',
+	'structured settings query results should prefer their natural-language summary'
+);
+
+assert.strictEqual(
 	shouldRefreshScreenAfterTool('click_at'),
 	true,
 	'physical action tools should force a fresh screenshot'
@@ -374,6 +380,9 @@ async function testFailedNavigationalClickAutoEscalatesToUiTask() {
 	global.window = {
 		electronAPI: {
 			executeTool: async (name, args) => {
+				if (name === 'route_request') {
+					return { ok: true, result: JSON.stringify({ route: 'ui_task', settingsCapable: false }) };
+				}
 				executed.push({ name, args });
 				if (name === 'click_at') {
 					return { ok: false, result: 'Pointer fallback is blocked until native/app-specific and accessibility attempts fail.' };
@@ -430,6 +439,9 @@ async function testFailedPointerOnlyActionDoesNotAutoEscalateWithoutNavigational
 	global.window = {
 		electronAPI: {
 			executeTool: async (name, args) => {
+				if (name === 'route_request') {
+					return { ok: true, result: JSON.stringify({ route: 'ui_task', settingsCapable: false }) };
+				}
 				executed.push({ name, args });
 				return { ok: false, result: 'Could not click requested coordinates' };
 			},
@@ -475,6 +487,9 @@ async function testFailedNavigationalClickEscalatesOnlyOnce() {
 	global.window = {
 		electronAPI: {
 			executeTool: async (name, args) => {
+				if (name === 'route_request') {
+					return { ok: true, result: JSON.stringify({ route: 'ui_task', settingsCapable: false }) };
+				}
 				executed.push({ name, args });
 				if (name === 'click_at') {
 					return { ok: false, result: 'Pointer fallback is blocked until native/app-specific and accessibility attempts fail.' };
@@ -524,6 +539,9 @@ async function testSelfFixPreambleBlocksDispatch() {
 	global.window = {
 		electronAPI: {
 			executeTool: async (name, args) => {
+				if (name === 'route_request') {
+					return { ok: true, result: JSON.stringify({ route: 'self_fix', settingsCapable: false }) };
+				}
 				executed.push({ name, args });
 				return { ok: true, result: 'started' };
 			},
@@ -563,6 +581,85 @@ async function testSelfFixPreambleBlocksDispatch() {
 	global.window = originalWindow;
 }
 
+async function testSettingsCapableSelfFixReroutesToUpdateSettings() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				if (name === 'route_request') {
+					return { ok: true, result: JSON.stringify({ route: 'settings_query', settingsCapable: true, settingsNamespace: 'voice' }) };
+				}
+				executed.push({ name, args });
+				return { ok: true, result: 'Available presets: soft bloom, clear guide, velvet dusk, bright spark' };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: { capture: async () => {} },
+		getLastUserIntent: () => 'What voice presets do you have available',
+	});
+
+	await handler.handleToolCalls([{ name: 'self_fix', args: { description: 'Enumerate the available voice presets.' }, id: 'call-1' }]);
+
+	assert.deepStrictEqual(
+		executed,
+		[{ name: 'update_settings', args: { request: 'What voice presets do you have available' } }],
+		'settings-capable self-fix requests should reroute to update_settings'
+	);
+	assert.strictEqual(responses[0]?.name, 'self_fix', 'rerouted calls should still satisfy the original tool response contract');
+	assert.match(responses[0]?.result || '', /Available presets:/, 'rerouted settings response should flow back to the model');
+
+	global.window = originalWindow;
+}
+
+async function testRoutingFailureFailsClosed() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				if (name === 'route_request') {
+					return { ok: false, result: 'Routing unavailable right now.' };
+				}
+				executed.push({ name, args });
+				return { ok: true, result: 'should not run' };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: { capture: async () => {} },
+		getLastUserIntent: () => 'What voice presets do you have available',
+	});
+
+	await handler.handleToolCalls([{ name: 'update_settings', args: { request: 'What voice presets do you have available' }, id: 'call-1' }]);
+
+	assert.deepStrictEqual(executed, [], 'no tool should execute when Groq routing fails closed');
+	assert.match(responses[0]?.result || '', /Routing unavailable right now/, 'routing failures should surface a clear error');
+
+	global.window = originalWindow;
+}
+
 Promise.resolve()
 	.then(testDeferredUiTaskFlushesOnce)
 	.then(testDeferredUiTaskSupersedesOlderTranscript)
@@ -574,6 +671,8 @@ Promise.resolve()
 	.then(testFailedPointerOnlyActionDoesNotAutoEscalateWithoutNavigationalIntent)
 	.then(testFailedNavigationalClickEscalatesOnlyOnce)
 	.then(testSelfFixPreambleBlocksDispatch)
+	.then(testSettingsCapableSelfFixReroutesToUpdateSettings)
+	.then(testRoutingFailureFailsClosed)
 	.then(() => {
 		console.log('Tool call handler tests passed.');
 	})

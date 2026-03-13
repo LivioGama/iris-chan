@@ -37,6 +37,13 @@ async function main() {
 	assert.strictEqual(diskSettings.voice.modelVoiceName, 'Kore', 'voice updates should persist to disk');
 	assert.strictEqual(diskSettings.avatar.current, 'tripo3d', 'avatar settings should persist to disk');
 
+	const presetPatch = settings.buildVoicePresetPatch('soft bloom');
+	assert.ok(presetPatch, 'settings should expose built-in preset helpers');
+	const presetApplied = settings.updateSettings(presetPatch, { source: 'test:preset' });
+	assert.strictEqual(presetApplied.ok, true, 'flattened preset patch should apply cleanly');
+	assert.strictEqual(settings.getSettings().voice.modelVoiceName, 'Aoede', 'preset helper should resolve the bundled model voice');
+	assert.strictEqual(settings.getSettings().voice.speechProfile.playbackRate, 0.98, 'preset helper should resolve the bundled speech profile');
+
 	let watched = null;
 	const unsubscribe = settings.onChange((nextSettings, meta) => {
 		watched = { nextSettings, meta };

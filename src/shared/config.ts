@@ -83,6 +83,32 @@ export interface Config {
 			frameMsFallback: number;
 		};
 	};
+	voicePresets: Array<{
+		name: string;
+		description: string;
+		aliases?: string[];
+		modelVoiceName: string;
+		speechProfile: {
+			playbackRate: number;
+			pitchSemitones: number;
+			lowShelfFrequencyHz: number;
+			lowShelfGainDb: number;
+			warmthFrequencyHz: number;
+			warmthGainDb: number;
+			warmthQ: number;
+			presenceFrequencyHz: number;
+			presenceGainDb: number;
+			presenceQ: number;
+			highShelfFrequencyHz: number;
+			highShelfGainDb: number;
+			outputGain: number;
+			compressorThresholdDb: number;
+			compressorKneeDb: number;
+			compressorRatio: number;
+			compressorAttackSeconds: number;
+			compressorReleaseSeconds: number;
+		};
+	}>;
 	vocab: {
 		hotPromoteCount: number;
 		hotExpireMs: number;
@@ -211,6 +237,112 @@ const config: Config = {
 			frameMsFallback: 32,
 		},
 	},
+	voicePresets: [
+		{
+			name: 'soft bloom',
+			description: 'Soft, airy, feminine-leaning voice with a gentle high-end sheen.',
+			aliases: ['bloom'],
+			modelVoiceName: 'Aoede',
+			speechProfile: {
+				playbackRate: 0.98,
+				pitchSemitones: -0.5,
+				lowShelfFrequencyHz: 170,
+				lowShelfGainDb: 0.8,
+				warmthFrequencyHz: 280,
+				warmthGainDb: 1.6,
+				warmthQ: 0.9,
+				presenceFrequencyHz: 2600,
+				presenceGainDb: 1.5,
+				presenceQ: 0.7,
+				highShelfFrequencyHz: 5600,
+				highShelfGainDb: 0.9,
+				outputGain: 1,
+				compressorThresholdDb: -22,
+				compressorKneeDb: 8,
+				compressorRatio: 2.0,
+				compressorAttackSeconds: 0.003,
+				compressorReleaseSeconds: 0.2,
+			},
+		},
+		{
+			name: 'clear guide',
+			description: 'Balanced, articulate preset for neutral guidance and instruction.',
+			aliases: ['guide'],
+			modelVoiceName: 'Kore',
+			speechProfile: {
+				playbackRate: 0.97,
+				pitchSemitones: -1.1,
+				lowShelfFrequencyHz: 170,
+				lowShelfGainDb: 1.2,
+				warmthFrequencyHz: 280,
+				warmthGainDb: 1.4,
+				warmthQ: 0.9,
+				presenceFrequencyHz: 2400,
+				presenceGainDb: 1.3,
+				presenceQ: 0.7,
+				highShelfFrequencyHz: 5200,
+				highShelfGainDb: 0.4,
+				outputGain: 1,
+				compressorThresholdDb: -23,
+				compressorKneeDb: 8,
+				compressorRatio: 2.1,
+				compressorAttackSeconds: 0.003,
+				compressorReleaseSeconds: 0.2,
+			},
+		},
+		{
+			name: 'velvet dusk',
+			description: 'Warmer, darker, more intimate preset with softer presence.',
+			aliases: ['dusk', 'velvet'],
+			modelVoiceName: 'Charon',
+			speechProfile: {
+				playbackRate: 0.92,
+				pitchSemitones: -2.1,
+				lowShelfFrequencyHz: 170,
+				lowShelfGainDb: 2.6,
+				warmthFrequencyHz: 280,
+				warmthGainDb: 2.8,
+				warmthQ: 0.9,
+				presenceFrequencyHz: 1900,
+				presenceGainDb: 0.2,
+				presenceQ: 0.7,
+				highShelfFrequencyHz: 4700,
+				highShelfGainDb: -0.4,
+				outputGain: 1,
+				compressorThresholdDb: -24,
+				compressorKneeDb: 8,
+				compressorRatio: 2.4,
+				compressorAttackSeconds: 0.003,
+				compressorReleaseSeconds: 0.2,
+			},
+		},
+		{
+			name: 'bright spark',
+			description: 'Faster, brighter, more energetic preset with extra presence.',
+			aliases: ['spark'],
+			modelVoiceName: 'Aoede',
+			speechProfile: {
+				playbackRate: 1.01,
+				pitchSemitones: 0.2,
+				lowShelfFrequencyHz: 170,
+				lowShelfGainDb: 0.4,
+				warmthFrequencyHz: 280,
+				warmthGainDb: 0.8,
+				warmthQ: 0.9,
+				presenceFrequencyHz: 3000,
+				presenceGainDb: 1.9,
+				presenceQ: 0.7,
+				highShelfFrequencyHz: 6200,
+				highShelfGainDb: 1.2,
+				outputGain: 1,
+				compressorThresholdDb: -21,
+				compressorKneeDb: 8,
+				compressorRatio: 2.0,
+				compressorAttackSeconds: 0.003,
+				compressorReleaseSeconds: 0.2,
+			},
+		},
+	],
 	vocab: {
 		hotPromoteCount: 5,
 		hotExpireMs: 3600000,
