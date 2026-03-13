@@ -162,6 +162,20 @@ async function main() {
 		corrected = voice._correctTranscript('एनसी में एक रेंट स्क्रीन');
 		assert.strictEqual(corrected, 'can you see my current screen', 'noisy multilingual screen-reference phrase should normalize to the intended screen guidance');
 
+		corrected = voice._correctTranscript('चेंज योर वॉइस टू ब्लूम बट वार्म');
+		assert.strictEqual(
+			corrected,
+			'switch to bloom voice preset and make it warmer',
+			'transliterated bloom/warm voice requests should normalize to the deterministic settings phrasing'
+		);
+
+		corrected = voice._correctTranscript('change your voice to bloom but warm');
+		assert.strictEqual(
+			corrected,
+			'switch to bloom voice preset and make it warmer',
+			'hybrid bloom/warm voice requests should normalize to the deterministic settings phrasing'
+		);
+
 		console.log('Voice screen-context correction tests passed.');
 	} finally {
 		restoreDom();

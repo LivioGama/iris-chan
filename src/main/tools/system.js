@@ -81,6 +81,52 @@ function setPath(target, keyPath, rawValue) {
 	return true;
 }
 
+function hasVoiceKeyword(text = '') {
+	return /\bvoice\b|\bpreset\b|\bpitch\b|\bplayback(?: rate)?\b|\bwarm(?:er|th)?\b|\bbrighter\b|\bdarker\b|\beq\b|\bcompress(?:ed|ion)?\b/i.test(text)
+		|| /(वॉइस|भोइस|आवाज|भ्वाइस|ভয়েস|ভয়েস|আওয়াজ)/i.test(text);
+}
+
+function chooseVoicePresetByIntent({ text = '', lower = '', currentVoiceName = '' } = {}) {
+	const presets = settings.getVoicePresets();
+	if (!presets.length) return null;
+	const currentPresetIndex = presets.findIndex((preset) => String(preset.modelVoiceName || '').toLowerCase() === currentVoiceName);
+	const currentPreset = currentPresetIndex >= 0 ? presets[currentPresetIndex] : null;
+	const intentMatchers = [
+		{
+			pattern: /\b(deeper|deep|lower|low(?:er)? pitch|dark(?:er)?|warm(?:er)?|intimate|husky)\b/i,
+			nonAsciiPattern: /(डीप|डिप|लोअर|लो\s*पिच|डार्क|वार्म|गहिरो|गहिरो\s*आवाज|भारी)/i,
+			presetName: 'velvet dusk',
+		},
+		{
+			pattern: /\b(soft(?:er)?|gentle|bloom|airy|feminine|lighter)\b/i,
+			nonAsciiPattern: /(सफ्ट|सफ्टर|जेन्टल|ब्लुम|एयरी|फेमिनिन|हल्का)/i,
+			presetName: 'soft bloom',
+		},
+		{
+			pattern: /\b(clear(?:er)?|neutral|guide|balanced)\b/i,
+			nonAsciiPattern: /(क्लियर|न्यूट्रल|गाइड|ब्यालेन्स्ड)/i,
+			presetName: 'clear guide',
+		},
+		{
+			pattern: /\b(bright(?:er)?|spark|energetic|faster)\b/i,
+			nonAsciiPattern: /(ब्राइट|स्पार्क|एनर्जेटिक|फास्टर|छिटो)/i,
+			presetName: 'bright spark',
+		},
+	];
+	for (const matcher of intentMatchers) {
+		if (matcher.pattern.test(text) || matcher.nonAsciiPattern.test(text)) {
+			const matched = presets.find((preset) => String(preset.name || '').trim().toLowerCase() === matcher.presetName);
+			if (matched) return matched;
+		}
+	}
+
+	const asksForAlternate = /\b(different|another|new|else|change)\b/i.test(text)
+		|| /(डिफरेंट|डिफ्रेण्ट|अर्को|फरक|नयाँ|चेंज|चेन्ज)/i.test(text);
+	if (!asksForAlternate) return null;
+	if (!currentPreset) return presets[0];
+	return presets[(currentPresetIndex + 1) % presets.length];
+}
+
 function derivePatchFromRequest(request = '') {
 	const text = String(request || '').trim();
 	if (!text) return null;
@@ -139,21 +185,38 @@ function derivePatchFromRequest(request = '') {
 			Object.assign(patch, presetPatch);
 		}
 	}
+	if (!matchedPreset && hasVoiceKeyword(text)) {
+		const inferredPreset = chooseVoicePresetByIntent({
+			text,
+			lower,
+			currentVoiceName: String(currentVoice.modelVoiceName || '').toLowerCase(),
+		});
+		if (inferredPreset) {
+			const presetPatch = settings.buildVoicePresetPatch(inferredPreset.name);
+			if (presetPatch) {
+				Object.assign(patch, presetPatch);
+			}
+		}
+	}
 
 	const voiceMatch = text.match(/\bvoice(?: name)?\s+(?:to|is)\s+["']?([a-z0-9 _-]+)["']?/i);
-	if (voiceMatch && !matchedPreset) {
+	if (voiceMatch && !matchedPreset && !patch.voice?.modelVoiceName) {
 		setPath(patch, 'voice.modelVoiceName', voiceMatch[1].trim());
 	}
 	const avatarMatch = text.match(/\bavatar\s+(?:to|is)\s+(original|tripo3d)\b/i);
 	if (avatarMatch) {
 		setPath(patch, 'avatar.current', avatarMatch[1].toLowerCase());
 	}
-	const modeMatch = text.match(/\bmode\s+(?:to|is)\s+(silent|attentive|autonomous)\b/i);
+	const modeMatch = text.match(/\bmode\s+(?:to|is)\s+(silent|attentive|passive|autonomous|proactive)\b/i);
 	if (modeMatch) {
 		setPath(patch, 'behavior.mode', modeMatch[1].toLowerCase());
 	}
 	if (/\bdirect mode\b.*\bon\b/i.test(text)) setPath(patch, 'behavior.directMode', true);
 	if (/\bdirect mode\b.*\boff\b/i.test(text)) setPath(patch, 'behavior.directMode', false);
+	if (/\bfeedback mode\b.*\bon\b/i.test(text)) setPath(patch, 'behavior.feedbackEnabled', true);
+	if (/\bfeedback mode\b.*\boff\b/i.test(text)) setPath(patch, 'behavior.feedbackEnabled', false);
+	if (/\bintroversion mode\b.*\bon\b/i.test(text)) setPath(patch, 'behavior.introversionEnabled', true);
+	if (/\bintroversion mode\b.*\boff\b/i.test(text)) setPath(patch, 'behavior.introversionEnabled', false);
 	const keyValueMatch = text.match(/\b([a-z]+(?:\.[a-zA-Z0-9_]+)+)\s*=\s*([^\n]+)$/);
 	if (keyValueMatch) {
 		setPath(patch, keyValueMatch[1], keyValueMatch[2].trim());
@@ -170,7 +233,7 @@ function derivePatchFromRequest(request = '') {
 
 function isVoiceRequest(request = '') {
 	const text = String(request || '');
-	if (/\bvoice\b|\bpreset\b|\bpitch\b|\bplayback(?: rate)?\b|\bwarm(?:er|th)?\b|\bbrighter\b|\bdarker\b|\beq\b|\bcompress(?:ed|ion)?\b/i.test(text)) {
+	if (hasVoiceKeyword(text)) {
 		return true;
 	}
 	const lower = text.toLowerCase();

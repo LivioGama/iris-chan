@@ -41,6 +41,30 @@ async function main() {
 	assert.strictEqual(requestResult.ok, true, 'update_settings should support deterministic request parsing without GROQ');
 	assert.strictEqual(settings.getSettings().voice.modelVoiceName, 'Aoede', 'deterministic request parsing should map onto stable setting keys');
 
+	const proactiveModeResult = await update_settings({
+		request: 'set mode to autonomous',
+	});
+	assert.strictEqual(proactiveModeResult.ok, true, 'legacy autonomous mode requests should still succeed');
+	assert.strictEqual(settings.getSettings().behavior.mode, 'proactive', 'legacy autonomous should normalize to proactive');
+
+	const passiveModeResult = await update_settings({
+		request: 'set mode to attentive',
+	});
+	assert.strictEqual(passiveModeResult.ok, true, 'legacy attentive mode requests should still succeed');
+	assert.strictEqual(settings.getSettings().behavior.mode, 'passive', 'legacy attentive should normalize to passive');
+
+	const feedbackModeResult = await update_settings({
+		request: 'turn feedback mode on',
+	});
+	assert.strictEqual(feedbackModeResult.ok, true, 'feedback mode requests should succeed');
+	assert.strictEqual(settings.getSettings().behavior.feedbackEnabled, true, 'feedback mode should persist in behavior settings');
+
+	const introversionModeResult = await update_settings({
+		request: 'turn introversion mode on',
+	});
+	assert.strictEqual(introversionModeResult.ok, true, 'introversion mode requests should succeed');
+	assert.strictEqual(settings.getSettings().behavior.introversionEnabled, true, 'introversion mode should persist in behavior settings');
+
 	const presetListResult = await update_settings({
 		request: 'list available voice presets',
 	});
@@ -116,6 +140,27 @@ async function main() {
 	assert.strictEqual(tweakResult.ok, true, 'preset-aware tweak request should succeed');
 	assert.ok(settings.getSettings().voice.speechProfile.warmthGainDb > 1.6, 'warmer tweak should raise warmth gain on top of the preset base');
 	assert.ok(settings.getSettings().voice.speechProfile.playbackRate < 0.98, 'slower tweak should reduce playback rate on top of the preset base');
+
+	settings.updateSettings({
+		voice: settings.DEFAULT_SETTINGS.voice,
+	}, { source: 'test:reset-before-different-voice' });
+	const differentVoiceResult = await update_settings({
+		request: 'चेंज यो वॉइस टू डिफरेंट',
+	});
+	assert.strictEqual(differentVoiceResult.ok, true, 'mixed Nepali/English change-voice requests should resolve deterministically');
+	assert.strictEqual(differentVoiceResult.translator, 'deterministic', 'mixed-language voice changes should stay on the local parser path');
+	assert.notStrictEqual(settings.getSettings().voice.modelVoiceName, 'Charon', 'generic different-voice request should pick a non-current preset');
+	assert.ok(differentVoiceResult.changedKeys.includes('voice.modelVoiceName'), 'different-voice requests should expose the concrete changed voice key');
+
+	settings.updateSettings({
+		voice: settings.DEFAULT_SETTINGS.voice,
+	}, { source: 'test:reset-before-deeper-voice' });
+	const deeperVoiceResult = await update_settings({
+		request: 'change yo voice to deeper',
+	});
+	assert.strictEqual(deeperVoiceResult.ok, true, 'deeper voice requests should map to a bundled preset');
+	assert.strictEqual(settings.getSettings().voice.modelVoiceName, 'Charon', 'deeper voice intent should land on the deeper velvet dusk path');
+	assert.ok(settings.getSettings().voice.speechProfile.playbackRate <= 0.92, 'deeper voice preset should slow playback enough to lower perceived voice');
 
 	const missingPresetResult = await update_settings({
 		request: 'switch to moonlight voice preset',

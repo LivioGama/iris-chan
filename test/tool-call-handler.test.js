@@ -23,6 +23,7 @@ function loadToolHandlerModule(filePath) {
 		'setPresence',
 		'clearPresence',
 		'updateIfWorkspaceTool',
+		'shouldAutoEscalateFromToolFailure',
 		'logInfo',
 		'logError',
 		`${src}\nreturn { createToolCallHandler, shouldDeferForegroundUiTool, shouldRefreshScreenAfterTool, formatToolResponseText };`
@@ -36,6 +37,13 @@ function loadToolHandlerModule(filePath) {
 		() => {},
 		() => {},
 		() => {},
+		({ toolName, result, intentText }) => {
+			if (toolName === 'run_ui_task') return false;
+			if (!['click_at', 'double_click', 'press_key', 'type_text'].includes(toolName)) return false;
+			if (!result || result.ok !== false) return false;
+			if (/\b(delete|remove|trash|discard|send|submit|purchase|buy|pay|confirm|replace|overwrite)\b/i.test(intentText || '')) return false;
+			return /\b(click|open|go to|goto|select|search|find|navigate|visit|follow|choose)\b/i.test(intentText || '');
+		},
 		() => {},
 		() => {},
 	);

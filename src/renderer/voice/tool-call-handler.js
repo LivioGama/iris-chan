@@ -3,6 +3,7 @@ import { showToolStart, showToolDone, hideToolLog, getToolDisplay } from '../ui/
 import { setPresence, clearPresence } from '../ui/presence-indicator.js';
 import { updateIfWorkspaceTool } from '../ui/workspace-bar.js';
 import { info as logInfo, error as logError } from '../logger.js';
+import { shouldAutoEscalateFromToolFailure } from '../interaction/interaction-policy.js';
 
 // Tools that return immediately (fire-and-forget in main process).
 // These must NOT block voice capture or enter TOOL_EXECUTING state.
@@ -20,7 +21,6 @@ const SCREEN_REFRESH_TOOLS = new Set([
 	'activate_app',
 ]);
 const POINTER_TOOLS = new Set(['click_at', 'double_click', 'mouse_move', 'drag']);
-const AUTO_ESCALATE_SOURCE_TOOLS = new Set(['click_at', 'double_click', 'press_key', 'type_text']);
 const FOREGROUND_UI_STABILIZE_MS = 350;
 const SAME_TURN_UI_TASK_MESSAGE = 'Ignored repeated UI task in the same spoken turn';
 const SAME_TURN_POINTER_RETRY_MESSAGE = 'Ignored repeated pointer retries in the same spoken turn';
@@ -37,7 +37,7 @@ const SETTINGS_CAPABILITY_PATTERNS = [
 	/\beq\b/i,
 	/\bcompress(?:ed|ion)?\b/i,
 	/\bavatar\b/i,
-	/\bbehavior mode\b|\battentive mode\b|\bautonomous mode\b|\bsilent mode\b/i,
+	/\bbehavior mode\b|\battentive mode\b|\bpassive mode\b|\bautonomous mode\b|\bproactive mode\b|\bsilent mode\b|\bfeedback mode\b|\bintroversion mode\b/i,
 	/\bdirect mode\b/i,
 	/\blog(?:ging| level)?\b/i,
 ];
@@ -92,13 +92,6 @@ function isNavigationalUiIntent(intentText = '') {
 	if (!text) return false;
 	if (DESTRUCTIVE_UI_INTENT_PATTERN.test(text)) return false;
 	return NAVIGATIONAL_UI_INTENT_PATTERN.test(text);
-}
-
-function shouldAutoEscalateTool(name, result, intentText = '') {
-	if (name === 'run_ui_task') return false;
-	if (!AUTO_ESCALATE_SOURCE_TOOLS.has(name)) return false;
-	if (!result || result.ok !== false) return false;
-	return isNavigationalUiIntent(intentText);
 }
 
 export function createToolCallHandler({
@@ -202,7 +195,11 @@ export function createToolCallHandler({
 		try {
 			let result = await window.electronAPI.executeTool(dispatchName, toolArgs);
 			const escalationGoal = normalizeAutoEscalationIntent(readLastUserIntent());
-			if (allowAutoEscalation && shouldAutoEscalateTool(dispatchName, result, escalationGoal)) {
+			if (allowAutoEscalation && shouldAutoEscalateFromToolFailure({
+				toolName: dispatchName,
+				result,
+				intentText: escalationGoal,
+			})) {
 				const failureReason = result?.result || 'unknown failure';
 				logInfo('Tool', `Auto-escalating ${dispatchName} → run_ui_task. goal="${escalationGoal}" reason="${failureReason}"`);
 				markUiTaskDispatched('run_ui_task');

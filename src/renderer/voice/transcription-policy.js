@@ -17,6 +17,17 @@ const FRENCH_PHRASE_NORMALIZATIONS = {
 	'juh vay tuh shahn zhay': 'je vais te changer',
 };
 
+const MULTILINGUAL_PHRASE_NORMALIZATIONS = {
+	'डू यू सी माय स्क्रीन': 'do you see my screen',
+	'एनसी में एक रेंट स्क्रीन': 'can you see my current screen',
+	'change your voice to bloom but warm': 'switch to bloom voice preset and make it warmer',
+	'change your voice to bloom and warm': 'switch to bloom voice preset and make it warmer',
+	'चेंज योर वॉइस टू ब्लूम बट वार्म': 'switch to bloom voice preset and make it warmer',
+	'चेंज योर वॉइस टू ब्लूम एंड वार्म': 'switch to bloom voice preset and make it warmer',
+	'चेंज योर वॉयस टू ब्लूम बट वार्म': 'switch to bloom voice preset and make it warmer',
+	'चेंज योर वॉयस टू ब्लूम एंड वार्म': 'switch to bloom voice preset and make it warmer',
+};
+
 const FILLER_PATTERNS = [
 	/^\s*(uh+|um+|hmm+|mm+)\s*$/i,
 	/^\s*(thanks|thank you|okay|ok)\s*$/i,
@@ -43,6 +54,10 @@ export function cleanTranscript(text, corrections = {}, hints = {}) {
 	}
 	// Normalize French phrase fragments before word-level remapping
 	for (const [wrong, right] of Object.entries(FRENCH_PHRASE_NORMALIZATIONS)) {
+		const re = new RegExp(escapeRegExp(wrong), 'gi');
+		out = out.replace(re, right);
+	}
+	for (const [wrong, right] of Object.entries(MULTILINGUAL_PHRASE_NORMALIZATIONS)) {
 		const re = new RegExp(escapeRegExp(wrong), 'gi');
 		out = out.replace(re, right);
 	}
