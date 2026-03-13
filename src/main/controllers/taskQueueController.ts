@@ -1,7 +1,6 @@
 import { ipcMain } from 'electron';
 import * as log from '../logger';
-import * as avatarWindow from '../windows/avatar-window';
-import * as kanbanWindow from '../windows/kanban-window';
+const taskQueueService = require('../task-queue/service');
 
 const TQ_CHANNELS = {
 	CREATE_TASK: 'tq:create-task',
@@ -14,138 +13,32 @@ const TQ_CHANNELS = {
 	COUNTDOWN_STATE: 'tq:countdown-state',
 };
 
-// Countdown timers by task ID
-const countdowns = new Map<string, { timer: ReturnType<typeof setInterval>; remaining: number }>();
-
-function broadcastCountdown(taskId: string, remaining: number) {
-	const targets = [avatarWindow.get(), kanbanWindow.get()].filter((win, index, all) => {
-		return Boolean(win) && all.findIndex((candidate) => candidate?.webContents?.id === win?.webContents?.id) === index;
-	});
-	targets.forEach((win: any) => {
-		if (win && !win.isDestroyed()) {
-			win.webContents.send(TQ_CHANNELS.COUNTDOWN_STATE, { taskId, remaining });
-		}
-	});
-}
-
-function broadcastTaskUpdate(update: any) {
-	const targets = [avatarWindow.get(), kanbanWindow.get()].filter((win, index, all) => {
-		return Boolean(win) && all.findIndex((candidate) => candidate?.webContents?.id === win?.webContents?.id) === index;
-	});
-	targets.forEach((win: any) => {
-		if (win && !win.isDestroyed()) {
-			win.webContents.send(TQ_CHANNELS.TASK_UPDATE, update);
-		}
-	});
-}
-
-let convexClient: any = null;
-let behaviorEngineRef: any = null;
-
 export function setConvexClient(client: any) {
-	convexClient = client;
+	taskQueueService.setConvexClient(client);
 }
 
 export function setBehaviorEngine(engine: any) {
-	behaviorEngineRef = engine;
+	taskQueueService.setBehaviorEngine(engine);
 }
 
 export function register() {
 	// Create a new task: detect path, create draft, enrich, start countdown
 	ipcMain.handle(TQ_CHANNELS.CREATE_TASK, async (_, rawPrompt: string, projectPathOverride?: string) => {
 		try {
-			let projectPath = projectPathOverride;
-
-			if (!projectPath) {
-				const { detectHoveredPath } = require('../task-queue/path-detector');
-				const detection = await detectHoveredPath();
-				if (!detection.ok) {
-					return { ok: false, error: detection.error || 'Could not detect project path' };
-				}
-				projectPath = detection.projectPath;
-			}
-
-			if (!convexClient) {
-				return { ok: false, error: 'Convex client not initialized' };
-			}
-
-			// Create draft task in Convex
-			const idempotencyKey = `tq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-			const result = await convexClient.createQueueTask({
-				projectPath,
+			const created = await taskQueueService.createQueuedTask({
 				rawPrompt,
-				status: 'draft',
+				projectPath: projectPathOverride,
 				origin: 'ipc:create-task',
-				launchMode: 'queued',
-				resumable: true,
-				resumeCount: 0,
-				dependencyState: 'pending',
-				dependencies: [],
-				inferredDependencies: [],
-				blockedBy: [],
-				createdAt: Date.now(),
-				updatedAt: Date.now(),
-			}, idempotencyKey);
-
-			if (!result.ok) {
-				return { ok: false, error: result.error || 'Failed to create task' };
-			}
-
-			const taskId = result.value;
-			broadcastTaskUpdate({
-				taskId,
-				created: true,
-				status: 'draft',
-				task: {
-					_id: taskId,
-					projectPath,
-					rawPrompt,
-					status: 'draft',
-					origin: 'ipc:create-task',
-					launchMode: 'queued',
-					resumable: true,
-					resumeCount: 0,
-					dependencyState: 'pending',
-					dependencies: [],
-					inferredDependencies: [],
-					blockedBy: [],
-					createdAt: Date.now(),
-					updatedAt: Date.now(),
+				resolveProjectPath: async () => {
+					const { detectHoveredPath } = require('../task-queue/path-detector');
+					const detection = await detectHoveredPath();
+					if (!detection.ok) {
+						throw new Error(detection.error || 'Could not detect project path');
+					}
+					return detection.projectPath;
 				},
 			});
-
-			const isDirectMode = behaviorEngineRef?.getDirectMode?.() ?? false;
-
-			// Start enrichment async
-			(async () => {
-				try {
-					const { enrichPrompt } = require('../task-queue/enricher');
-					const enriched = await enrichPrompt(rawPrompt, projectPath!);
-					await convexClient.updateQueueTask(taskId, {
-						enrichedPrompt: enriched.enrichedPrompt,
-						impactedFiles: enriched.impactedFiles,
-						complexity: enriched.complexity,
-						dependencyState: 'ready',
-						updatedAt: Date.now(),
-					});
-					broadcastTaskUpdate({ taskId, enriched: true, ...enriched });
-					log.info('TaskQueue', `Enriched task ${taskId}: ${enriched.complexity}`);
-				} catch (err: any) {
-					log.warn('TaskQueue', `Enrichment failed for ${taskId}: ${err.message}`);
-				}
-
-				if (isDirectMode) {
-					// Direct mode: skip countdown, queue immediately
-					log.info('TaskQueue', `Direct mode: auto-queuing task ${taskId} (no countdown)`);
-					await convexClient.updateQueueTask(taskId, { status: 'queued', dependencyState: 'ready', updatedAt: Date.now() });
-					broadcastTaskUpdate({ taskId, status: 'queued' });
-				} else {
-					// Normal mode: start countdown after enrichment (or enrichment failure)
-					startCountdown(taskId);
-				}
-			})();
-
-			return { ok: true, taskId, projectPath };
+			return { ok: true, taskId: created.taskId, projectPath: created.projectPath };
 		} catch (err: any) {
 			log.error('TaskQueue', `Create task error: ${err.message}`);
 			return { ok: false, error: err.message };
@@ -154,20 +47,12 @@ export function register() {
 
 	// Approve task immediately (skip countdown)
 	ipcMain.handle(TQ_CHANNELS.APPROVE_TASK, async (_, taskId: string) => {
-		clearCountdown(taskId);
-		if (!convexClient) return { ok: false, error: 'No Convex client' };
-		const result = await convexClient.updateQueueTask(taskId, { status: 'queued', dependencyState: 'ready', updatedAt: Date.now() });
-		broadcastTaskUpdate({ taskId, status: 'queued' });
-		return { ok: result.ok };
+		return taskQueueService.approveQueuedTask(taskId);
 	});
 
 	// Cancel task
 	ipcMain.handle(TQ_CHANNELS.CANCEL_TASK, async (_, taskId: string) => {
-		clearCountdown(taskId);
-		if (!convexClient) return { ok: false, error: 'No Convex client' };
-		const result = await convexClient.updateQueueTask(taskId, { status: 'cancelled', errorMessage: 'Cancelled by user', updatedAt: Date.now() });
-		broadcastTaskUpdate({ taskId, status: 'cancelled' });
-		return { ok: result.ok };
+		return taskQueueService.cancelQueuedTask(taskId);
 	});
 
 	// Detect hovered path
@@ -178,55 +63,17 @@ export function register() {
 
 	// Get all tasks
 	ipcMain.handle(TQ_CHANNELS.GET_ALL, async () => {
+		const convexClient = taskQueueService.getConvexClient();
 		if (!convexClient) return { ok: false, error: 'No Convex client' };
 		return convexClient.getAllQueueTasks();
 	});
 
 	// Get by project
 	ipcMain.handle(TQ_CHANNELS.GET_BY_PROJECT, async (_, projectPath: string) => {
+		const convexClient = taskQueueService.getConvexClient();
 		if (!convexClient) return { ok: false, error: 'No Convex client' };
 		return convexClient.getQueueTasksByProject(projectPath);
 	});
-}
-
-function startCountdown(taskId: string) {
-	clearCountdown(taskId);
-	let remaining = 10;
-
-	const timer = setInterval(async () => {
-		remaining--;
-		broadcastCountdown(taskId, remaining);
-
-		if (remaining <= 0) {
-			clearCountdown(taskId);
-			// Auto-approve only if still in draft state (don't resurrect cancelled tasks)
-			if (convexClient) {
-				try {
-					const allTasks = await convexClient.getAllQueueTasks();
-					const current = allTasks.ok && allTasks.value?.find((t: any) => String(t._id) === String(taskId));
-					if (current && current.status === 'draft') {
-						await convexClient.updateQueueTask(taskId, { status: 'queued', dependencyState: 'ready', updatedAt: Date.now() });
-						broadcastTaskUpdate({ taskId, status: 'queued' });
-						log.info('TaskQueue', `Auto-approved task ${taskId}`);
-					} else {
-						log.info('TaskQueue', `Skipped auto-approve for ${taskId} (status: ${current?.status || 'not found'})`);
-					}
-				} catch (err: any) {
-					log.warn('TaskQueue', `Auto-approve check failed: ${err.message}`);
-				}
-			}
-		}
-	}, 1000);
-
-	countdowns.set(taskId, { timer, remaining });
-}
-
-function clearCountdown(taskId: string) {
-	const cd = countdowns.get(taskId);
-	if (cd) {
-		clearInterval(cd.timer);
-		countdowns.delete(taskId);
-	}
 }
 
 export { TQ_CHANNELS };

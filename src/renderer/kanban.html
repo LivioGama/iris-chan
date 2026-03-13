@@ -485,6 +485,61 @@
 				return raw.split('\n')[0].slice(0, 140) || 'Queued task';
 			}
 
+			function normalizeComparableTaskText(value) {
+				return String(value || '')
+					.trim()
+					.toLowerCase()
+					.replace(/\s+/g, ' ');
+			}
+
+			function queueTaskComparableTexts(taskLike = {}) {
+				const texts = [
+					taskLike.title,
+					taskLike.rawPrompt,
+					taskLike.enrichedPrompt,
+					taskLike.prompt,
+					inferQueueTaskTitle(taskLike),
+				];
+				return new Set(
+					texts
+						.map((value) => normalizeComparableTaskText(value))
+						.filter(Boolean)
+				);
+			}
+
+			function kanbanTaskComparableTexts(taskLike = {}) {
+				const texts = [
+					taskLike.title,
+					taskLike.description,
+					taskLike.prompt,
+				];
+				return new Set(
+					texts
+						.map((value) => normalizeComparableTaskText(value))
+						.filter(Boolean)
+				);
+			}
+
+			function findExistingQueueTaskIndex(queueTask, taskList = tasks) {
+				const queueTaskId = queueTaskIdOf(queueTask);
+				if (queueTaskId) {
+					const directIndex = taskList.findIndex((task) => queueTaskIdOf(task) === queueTaskId);
+					if (directIndex >= 0) return directIndex;
+				}
+
+				const queueTexts = queueTaskComparableTexts(queueTask);
+				if (queueTexts.size === 0) return -1;
+				return taskList.findIndex((task) => {
+					if (isQueueTask(task)) return false;
+					if (!['TODO', 'IN_PROGRESS'].includes(String(task.status || '').toUpperCase())) return false;
+					const taskTexts = kanbanTaskComparableTexts(task);
+					for (const value of taskTexts) {
+						if (queueTexts.has(value)) return true;
+					}
+					return false;
+				});
+			}
+
 			function normalizeQueueTask(queueTask = {}, existingTask = null) {
 				const queueTaskId = queueTaskIdOf(queueTask);
 				if (!queueTaskId) return null;
@@ -531,7 +586,7 @@
 			function upsertQueueTask(queueTask) {
 				const queueTaskId = queueTaskIdOf(queueTask);
 				if (!queueTaskId || dismissedQueueTaskIds.has(queueTaskId)) return null;
-				const existingIndex = tasks.findIndex((task) => queueTaskIdOf(task) === queueTaskId);
+				const existingIndex = findExistingQueueTaskIndex(queueTask, tasks);
 				const normalized = normalizeQueueTask(queueTask, existingIndex >= 0 ? tasks[existingIndex] : null);
 				if (!normalized) return null;
 				if (existingIndex >= 0) tasks[existingIndex] = normalized;
@@ -555,7 +610,7 @@
 					if (!isQueueTask(task)) return;
 					const queueTaskId = queueTaskIdOf(task);
 					if (!queueTaskId || dismissedQueueTaskIds.has(queueTaskId)) return;
-					const existingIndex = merged.findIndex((candidate) => queueTaskIdOf(candidate) === queueTaskId);
+					const existingIndex = findExistingQueueTaskIndex(task, merged);
 					const normalized = normalizeQueueTask(task, existingIndex >= 0 ? merged[existingIndex] : null);
 					if (!normalized) return;
 					if (existingIndex >= 0) merged[existingIndex] = normalized;
