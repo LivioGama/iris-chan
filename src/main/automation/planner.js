@@ -9,6 +9,7 @@ function createCheckpoint(step, index, total) {
 	if (step.type === 'mediaControl') return { kind: 'final', reason: 'media-control' };
 	if (step.type === 'editorCommand') return { kind: 'final', reason: 'editor-command' };
 	if (step.type === 'resolveSystemDefault') return { kind: 'final', reason: 'system-query' };
+	if (step.type === 'cleanupInstallArtifact') return { kind: 'final', reason: 'install-cleanup' };
 	return null;
 }
 
@@ -26,6 +27,7 @@ function toExecutionStep(step, index, total) {
 		action: step.action || '',
 		kind: step.kind || '',
 		key: step.key || '',
+		target: step.target || '',
 		position: step.position || 0,
 		selector: step.selector || null,
 		checkpoint: createCheckpoint(step, index, total),

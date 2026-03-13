@@ -315,6 +315,61 @@ async function testSystemDefaultQueryUsesNativeResolver() {
 	assert.strictEqual(result.resolverId, 'system.query', 'system default query should annotate system query resolver');
 }
 
+async function testInstallCleanupUsesDedicatedVerifiedFlow() {
+	const service = new UITaskService();
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	const filesModule = require('../src/main/tools/files');
+	const originalCleanup = filesModule.cleanup_install_artifact;
+	filesModule.cleanup_install_artifact = async ({ target }) => ({
+		ok: true,
+		result: `Moved installer artifact ${target} to the Trash`,
+		path: `/Users/abhi/Downloads/${target}`,
+		kind: 'disk-image',
+		cleanupAction: 'trash',
+		verificationMode: 'path-missing',
+	});
+
+	try {
+		const result = await service.runTask({
+			goal: 'Clean up the installer dmg',
+			app_hint: 'Finder',
+		});
+		assert.strictEqual(result.ok, true, 'verified installer cleanup should succeed');
+		assert.match(result.result, /installer artifact/i, 'cleanup result should describe the verified installer cleanup');
+	} finally {
+		filesModule.cleanup_install_artifact = originalCleanup;
+	}
+}
+
+async function testGenericDestructiveClickIsBlocked() {
+	const service = new UITaskService();
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	service._executeStep = async () => ({
+		ok: true,
+		tier: 'ax_dom',
+		domain: 'general',
+		resolverId: 'ax.press',
+		verificationMode: 'accessibility',
+		successType: 'true_success',
+		result: 'Clicked Delete',
+	});
+
+	const outcome = await service._runPlannedTask({
+		goal: 'Delete the selected file',
+		plan: {
+			goal: 'Delete the selected file',
+			appHint: 'Finder',
+			successSignal: '',
+			steps: [{ id: 'step_1', type: 'clickElement', appHint: 'Finder', selector: { text: 'Delete' }, checkpoint: { kind: 'final' } }],
+		},
+	});
+
+	assert.strictEqual(outcome.ok, false, 'generic destructive GUI clicks should fail closed');
+	assert.match(outcome.result, /blocked destructive ui action/i, 'failure should explain the safety boundary');
+}
+
 async function testTarsPointerRescueExecutesWhenValidated() {
 	const service = new UITaskService({
 		deps: {
@@ -361,6 +416,115 @@ async function testTarsPointerRescueExecutesWhenValidated() {
 	assert.strictEqual(result.ok, true, 'validated TARS rescue should allow the task to complete');
 	assert.strictEqual(verifyCount, 1, 'rescue should still run the normal checkpoint verification');
 	assert.strictEqual(service.lastCompletedTask.ok, true, 'successful rescue should mark the task as completed');
+}
+
+async function testPrimaryTarsRunsBeforeSemanticPointerStep() {
+	const service = new UITaskService({
+		deps: {
+			screenCapture: {
+				capture: async () => ({
+					ok: true,
+					data: 'base64-image',
+					context: { captureId: 'cap_1', imageWidth: 1000, imageHeight: 800 },
+				}),
+			},
+			requestTarsAction: async () => ({
+				ok: true,
+				actionType: 'click',
+				x: 120,
+				y: 220,
+				thought: 'Click target',
+				latencyMs: 1234,
+				raw: { action_type: 'click', x: 120, y: 220 },
+			}),
+			validateTarsImagePoint: (response) => response,
+			mapRescuePoint: (x, y) => ({ x, y }),
+			performRescueClick: async () => ({ ok: true, result: 'clicked' }),
+			getTarsConfig: () => ({ enabled: true, endpoint: 'https://example.com', apiKey: 'secret' }),
+		},
+	});
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	service._executeStep = async () => {
+		throw new Error('semantic path should not execute when primary TARS succeeds');
+	};
+	service._verifyCheckpoint = async () => {};
+
+	const outcome = await service._executeStepWithContract({
+		taskId: 'ui_1',
+		plan: { goal: 'Click the CTA', appHint: 'Safari', steps: [] },
+		step: { type: 'clickElement', selector: { text: 'Continue' }, checkpoint: { kind: 'final' } },
+		executionContract: {
+			safetyClass: 'pointer',
+			checkpointKind: 'final',
+			primaryTier: 'tars',
+			fallbackTiers: ['tars', 'semantic'],
+		},
+		signal: null,
+	});
+
+	assert.strictEqual(outcome.ok, true, 'primary TARS path should succeed');
+	assert.strictEqual(outcome.tier, 'tars_primary', 'pointer step should resolve through primary TARS');
+	assert.deepStrictEqual(outcome.fallbackTrail, [], 'successful primary TARS should not record a fallback');
+}
+
+async function testPrimaryTarsFallsBackToSemanticExecution() {
+	const service = new UITaskService({
+		deps: {
+			screenCapture: {
+				capture: async () => ({
+					ok: true,
+					data: 'base64-image',
+					context: { captureId: 'cap_1', imageWidth: 1000, imageHeight: 800 },
+				}),
+			},
+			requestTarsAction: async () => ({
+				ok: true,
+				actionType: 'click',
+				x: 4000,
+				y: 220,
+				thought: 'Bad point',
+				latencyMs: 12,
+				raw: { action_type: 'click', x: 4000, y: 220 },
+			}),
+			validateTarsImagePoint: () => ({
+				ok: false,
+				code: 'tars_out_of_bounds',
+				error: 'outside image bounds',
+			}),
+			getTarsConfig: () => ({ enabled: true, endpoint: 'https://example.com', apiKey: 'secret' }),
+		},
+	});
+	service.inputMonitor.start = async () => {};
+	service.inputMonitor.stop = () => {};
+	service._executeStep = async () => ({
+		ok: true,
+		tier: 'ax_dom',
+		domain: 'general',
+		resolverId: 'ax.press',
+		verificationMode: 'accessibility',
+		successType: 'true_success',
+		result: 'Activated Continue',
+	});
+	service._verifyCheckpoint = async () => {};
+
+	const outcome = await service._executeStepWithContract({
+		taskId: 'ui_2',
+		plan: { goal: 'Click the CTA', appHint: 'Safari', steps: [] },
+		step: { type: 'clickElement', selector: { text: 'Continue' }, checkpoint: { kind: 'final' } },
+		executionContract: {
+			safetyClass: 'pointer',
+			checkpointKind: 'final',
+			primaryTier: 'tars',
+			fallbackTiers: ['tars', 'semantic'],
+		},
+		signal: null,
+	});
+
+	assert.strictEqual(outcome.ok, true, 'semantic fallback should still succeed');
+	assert.strictEqual(outcome.tier, 'ax_dom', 'semantic fallback outcome should be returned');
+	assert.strictEqual(outcome.fallbackTrail.length, 1, 'failed primary TARS should be recorded in fallback trail');
+	assert.strictEqual(outcome.fallbackTrail[0].code, 'tars_out_of_bounds');
 }
 
 async function testTarsOutOfBoundsDoesNotAuthorizePointerFallback() {
@@ -456,7 +620,11 @@ Promise.resolve()
 	.then(testEditorCommandCheckpointRequiresExpectedApp)
 	.then(testOpenUrlAnnotatesResolverMetadata)
 	.then(testSystemDefaultQueryUsesNativeResolver)
+	.then(testInstallCleanupUsesDedicatedVerifiedFlow)
+	.then(testGenericDestructiveClickIsBlocked)
 	.then(testTarsPointerRescueExecutesWhenValidated)
+	.then(testPrimaryTarsRunsBeforeSemanticPointerStep)
+	.then(testPrimaryTarsFallsBackToSemanticExecution)
 	.then(testTarsOutOfBoundsDoesNotAuthorizePointerFallback)
 	.then(testDisabledTarsPreservesPointerFallbackAuthorization)
 	.then(() => {

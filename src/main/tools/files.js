@@ -98,6 +98,35 @@ function runFinderAppleScript(script, timeout = 5000) {
 	return result;
 }
 
+function classifyInstallArtifactPath(targetPath) {
+	const resolved = path.resolve(String(targetPath || ''));
+	if (!resolved) return null;
+	const lower = resolved.toLowerCase();
+	if (lower.startsWith('/volumes/')) {
+		return { kind: 'mounted-volume', cleanupAction: 'eject', path: resolved };
+	}
+	if (lower.endsWith('.dmg')) {
+		return { kind: 'disk-image', cleanupAction: 'trash', path: resolved };
+	}
+	if (lower.endsWith('.pkg')) {
+		return { kind: 'installer-package', cleanupAction: 'trash', path: resolved };
+	}
+	return null;
+}
+
+function finderResolveItemByName(name) {
+	return runFinderAppleScript(`
+		tell application "Finder"
+			activate
+			if (count of windows) is 0 then error "No Finder window open"
+			set targetFolder to target of front window
+			set matches to every item of targetFolder whose name is "${String(name || '').replace(/"/g, '\\"')}"
+			if (count of matches) is 0 then error "No Finder item matched ${String(name || '').replace(/"/g, '\\"')}"
+			return POSIX path of ((item 1 of matches) as alias)
+		end tell
+	`);
+}
+
 async function finder_select_item(args) {
 	const name = String(args?.name || '').trim();
 	if (!name) return { ok: false, result: 'No Finder item name provided' };
@@ -137,6 +166,79 @@ async function finder_open_item(args) {
 		return { ok: true, result: `Opened Finder item "${name}"`, path: result };
 	} catch (err) {
 		return { ok: false, result: `Error opening Finder item: ${err.message}` };
+	}
+}
+
+async function resolve_install_cleanup_target(args = {}) {
+	const explicitPath = String(args.path || '').trim();
+	if (explicitPath) {
+		const target = classifyInstallArtifactPath(explicitPath);
+		if (!target) return { ok: false, result: `Refusing to clean up non-installer target: ${explicitPath}` };
+		if (!fs.existsSync(target.path)) return { ok: false, result: `Cleanup target does not exist: ${target.path}` };
+		return { ok: true, ...target };
+	}
+
+	const explicitName = String(args.name || args.target || '').trim();
+	if (explicitName) {
+		try {
+			const finderPath = finderResolveItemByName(explicitName);
+			const target = classifyInstallArtifactPath(finderPath);
+			if (!target) return { ok: false, result: `Refusing to clean up non-installer Finder target: ${finderPath}` };
+			return { ok: true, ...target };
+		} catch (err) {
+			return { ok: false, result: `Error resolving Finder cleanup target: ${err.message}` };
+		}
+	}
+
+	const selection = await get_finder_selection();
+	if (!selection.ok) return selection;
+	const selectedPath = String(selection.result || '').split('\n').map((item) => item.trim()).filter(Boolean);
+	if (selectedPath.length !== 1) {
+		return { ok: false, result: 'Select exactly one installer artifact in Finder before cleanup.' };
+	}
+	const target = classifyInstallArtifactPath(selectedPath[0]);
+	if (!target) return { ok: false, result: `Refusing to clean up non-installer selection: ${selectedPath[0]}` };
+	return { ok: true, ...target };
+}
+
+async function cleanup_install_artifact(args = {}) {
+	const resolved = await resolve_install_cleanup_target(args);
+	if (!resolved.ok) return resolved;
+
+	try {
+		if (resolved.cleanupAction === 'eject') {
+			execSync(`hdiutil detach "${resolved.path.replace(/"/g, '\\"')}"`, { timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] });
+			if (fs.existsSync(resolved.path)) {
+				return { ok: false, result: `Mounted volume is still present after eject attempt: ${resolved.path}` };
+			}
+			return {
+				ok: true,
+				result: `Ejected installer volume ${path.basename(resolved.path)}`,
+				path: resolved.path,
+				kind: resolved.kind,
+				cleanupAction: resolved.cleanupAction,
+				verificationMode: 'volume-detached',
+			};
+		}
+
+		runFinderAppleScript(`
+			tell application "Finder"
+				delete POSIX file "${resolved.path.replace(/"/g, '\\"')}"
+			end tell
+		`);
+		if (fs.existsSync(resolved.path)) {
+			return { ok: false, result: `Installer artifact is still present after trash attempt: ${resolved.path}` };
+		}
+		return {
+			ok: true,
+			result: `Moved installer artifact ${path.basename(resolved.path)} to the Trash`,
+			path: resolved.path,
+			kind: resolved.kind,
+			cleanupAction: resolved.cleanupAction,
+			verificationMode: 'path-missing',
+		};
+	} catch (err) {
+		return { ok: false, result: `Error cleaning installer artifact: ${err.message}` };
 	}
 }
 
@@ -244,4 +346,16 @@ async function download_browser_image(args) {
 	}
 }
 
-module.exports = { read_file, write_file, list_directory, move_file, get_finder_selection, finder_select_item, finder_open_item, download_browser_image };
+module.exports = {
+	read_file,
+	write_file,
+	list_directory,
+	move_file,
+	get_finder_selection,
+	finder_select_item,
+	finder_open_item,
+	resolve_install_cleanup_target,
+	cleanup_install_artifact,
+	classifyInstallArtifactPath,
+	download_browser_image,
+};

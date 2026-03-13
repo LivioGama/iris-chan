@@ -223,6 +223,23 @@ function parseSelectionClause(clause, appHint) {
 	};
 }
 
+function parseInstallCleanupClause(clause, appHint) {
+	const match = clause.match(/^(clean(?:\s+up)?|remove|delete|trash|eject|detach)\s+(.+)$/i);
+	if (!match) return null;
+	const action = match[1].toLowerCase();
+	const target = cleanupTargetText(match[2] || '');
+	if (!target) return null;
+	if (!/\b(dmg|disk image|installer|install file|pkg|package|mounted volume|volume)\b/i.test(target)) {
+		return null;
+	}
+	return {
+		type: 'cleanupInstallArtifact',
+		appHint: appHint || 'Finder',
+		action,
+		target,
+	};
+}
+
 function parseOpenClause(clause, appHint, steps) {
 	const lower = clause.toLowerCase();
 	if (!/^(?:open|launch|start)\b/i.test(lower)) return null;
@@ -304,6 +321,12 @@ function routeGoal(goal, explicitAppHint = '') {
 			continue;
 		}
 
+		const installCleanupStep = parseInstallCleanupClause(clause, appHint);
+		if (installCleanupStep) {
+			steps.push(installCleanupStep);
+			continue;
+		}
+
 		const selection = parseSelectionClause(clause, appHint);
 		if (selection) {
 			steps.push(selection);
@@ -335,6 +358,7 @@ module.exports = {
 	parseSystemQueryClause,
 	parseSearchClause,
 	parseSearchResultClause,
+	parseInstallCleanupClause,
 	normalizeSearchQuery,
 	routeGoal,
 	splitClauses,

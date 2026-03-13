@@ -148,6 +148,75 @@ function classifyOpenAppDomain(appName = '', resolverId = '') {
 	return 'general';
 }
 
+const DESTRUCTIVE_TARGET_PATTERN = /\b(delete|remove|trash|discard|erase|overwrite|replace|eject|detach|empty trash)\b/i;
+const EXPLICIT_DESTRUCTIVE_INTENT_PATTERN = /\b(delete|remove|trash|discard|erase|overwrite|replace|eject|detach|clean(?:\s+up)?)\b/i;
+
+function isDestructiveSelectionStep(step = {}) {
+	return ['clickElement', 'selectItemByText', 'clickSearchResult'].includes(step.type)
+		&& DESTRUCTIVE_TARGET_PATTERN.test(String(step.selector?.text || step.resultKind || ''));
+}
+
+function classifySafetyClass(plan = {}, step = {}) {
+	if (step.type === 'cleanupInstallArtifact') {
+		return 'install_cleanup';
+	}
+	if (isDestructiveSelectionStep(step)) {
+		return 'destructive';
+	}
+	switch (step.type) {
+		case 'openApp':
+		case 'resolveSystemDefault':
+		case 'openUrl':
+		case 'navigateHistory':
+			return 'deterministic';
+		case 'setElementValue':
+		case 'editorCommand':
+		case 'mediaControl':
+			return 'guarded';
+		case 'clickElement':
+		case 'selectItemByText':
+		case 'clickSearchResult':
+		case 'scrollUntilVisible':
+			return 'pointer';
+		default:
+			return 'standard';
+	}
+}
+
+function supportsPrimaryTars(step = {}) {
+	return ['clickElement', 'selectItemByText', 'clickSearchResult'].includes(step.type);
+}
+
+function buildExecutionContract(plan = {}, step = {}, tarsEnabled = false) {
+	const safetyClass = classifySafetyClass(plan, step);
+	const fallbackTiers = [];
+	const blocksPointerAutomation = safetyClass === 'destructive' || safetyClass === 'install_cleanup';
+	if (!blocksPointerAutomation && tarsEnabled && supportsPrimaryTars(step)) {
+		fallbackTiers.push('tars', 'semantic');
+	} else {
+		fallbackTiers.push('semantic');
+		if (!blocksPointerAutomation && (step.type === 'clickElement' || step.type === 'selectItemByText' || step.type === 'clickSearchResult' || step.type === 'scrollUntilVisible')) {
+			fallbackTiers.push('tars-rescue');
+		}
+	}
+	return {
+		safetyClass,
+		checkpointKind: step.checkpoint?.kind || (plan.successSignal ? 'success-signal' : 'none'),
+		confirmationPolicy: safetyClass === 'install_cleanup'
+			? 'explicit-install-cleanup-intent'
+			: safetyClass === 'destructive'
+				? 'explicit-destructive-intent'
+				: 'none',
+		verificationPolicy: safetyClass === 'install_cleanup'
+			? 'artifact-removed-or-detached'
+			: safetyClass === 'destructive'
+				? 'blocked-without-dedicated-flow'
+				: 'standard',
+		primaryTier: fallbackTiers[0] || 'semantic',
+		fallbackTiers,
+	};
+}
+
 class UITaskService extends EventEmitter {
 	constructor({ eventBus, selfImprovementManager = null, nativeFallbackManager = null, episodeRecorder = null, deps = {} } = {}) {
 		super();
@@ -430,32 +499,28 @@ class UITaskService extends EventEmitter {
 		for (let i = 0; i < plan.steps.length; i++) {
 			throwIfAborted(controller.signal);
 			const step = plan.steps[i];
+			const executionContract = buildExecutionContract(plan, step, this._isTarsRescueEnabled());
+			this._enforceSafetyContract(plan, step, executionContract);
 			activeTask.currentStepIndex = i;
 			this._emitMilestone(taskId, `Step ${i + 1}/${plan.steps.length}: ${stepLabel(step)}`, {
 				step,
 				stepIndex: i,
+				executionContract,
 			});
-			let outcome;
-			try {
-				outcome = await this._executeStep(step, controller.signal);
-				if (step.checkpoint) {
-					await this._verifyCheckpoint(plan, step, outcome, controller.signal);
-				}
-			} catch (err) {
-				const rescued = await this._attemptTarsRescue({
-					taskId,
-					plan,
-					step,
-					error: err,
-					signal: controller.signal,
-				});
-				if (!rescued.ok) throw rescued.error;
-				outcome = rescued.outcome;
-			}
+			const outcome = await this._executeStepWithContract({
+				taskId,
+				plan,
+				step,
+				executionContract,
+				signal: controller.signal,
+			});
 			log.info('Learning', `Step outcome: task=${taskId} step=${step.type} tier=${outcome.tier || 'unknown'} domain=${outcome.domain || 'general'} resolver=${outcome.resolverId || 'n/a'} successType=${outcome.successType || 'true_success'}`);
 			activeTask.trace.push({
 				stepId: step.id,
 				type: step.type,
+				safetyClass: executionContract.safetyClass,
+				checkpointKind: executionContract.checkpointKind,
+				fallbackTiers: executionContract.fallbackTiers,
 				tier: outcome.tier || 'unknown',
 				domain: outcome.domain || 'general',
 				resolverId: outcome.resolverId || '',
@@ -463,17 +528,20 @@ class UITaskService extends EventEmitter {
 				successType: outcome.successType || 'true_success',
 				resolutionMethod: outcome.resolutionMethod || 'input',
 				result: outcome.result,
+				fallbackTrail: outcome.fallbackTrail || [],
 				tarsRescue: outcome.tarsRescue || null,
 			});
 			this.episodeRecorder?.recordAttempt?.(taskId, {
 				stepId: step.id,
 				type: step.type,
+				safetyClass: executionContract.safetyClass,
 				tier: outcome.tier || 'unknown',
 				domain: outcome.domain || 'general',
 				resolverId: outcome.resolverId || '',
 				verificationMode: outcome.verificationMode || '',
 				successType: outcome.successType || 'true_success',
 				result: outcome.result,
+				fallbackTrail: outcome.fallbackTrail || [],
 				tarsRescue: outcome.tarsRescue || null,
 			});
 			this.worldState.invalidate();
@@ -485,6 +553,70 @@ class UITaskService extends EventEmitter {
 
 		const lastTrace = activeTask.trace[activeTask.trace.length - 1];
 		return lastTrace?.result || `Completed UI task: ${plan.goal}`;
+	}
+
+	async _executeStepWithContract({ taskId, plan, step, executionContract, signal }) {
+		const fallbackTrail = [];
+		if (executionContract.primaryTier === 'tars') {
+			const tarsAttempt = await this._attemptPrimaryTars({
+				taskId,
+				plan,
+				step,
+				signal,
+			});
+			if (tarsAttempt.ok) {
+				return {
+					...tarsAttempt.outcome,
+					fallbackTrail,
+				};
+			}
+			fallbackTrail.push({
+				tier: 'tars',
+				status: 'failed',
+				code: tarsAttempt.error?.code || 'tars_primary_failed',
+				reason: tarsAttempt.error?.message || 'Primary TARS attempt failed',
+			});
+			this._emitMilestone(taskId, `Primary TARS attempt failed for ${stepLabel(step)}; falling back to semantic execution`, {
+				importance: 'medium',
+				status: 'running',
+				step,
+				fallbackTrail,
+			});
+		}
+
+		try {
+			const outcome = await this._executeStep(step, signal);
+			if (step.checkpoint) {
+				await this._verifyCheckpoint(plan, step, outcome, signal);
+			}
+			return {
+				...outcome,
+				fallbackTrail,
+			};
+		} catch (err) {
+			if (executionContract.primaryTier === 'tars') {
+				const gatedError = makeTaskError(err.message || 'Semantic fallback failed after primary TARS execution', err.code || 'ui_task_failed', {
+					fallbackTrail,
+				});
+				if (err.tarsRescue) gatedError.tarsRescue = err.tarsRescue;
+				throw gatedError;
+			}
+			const rescued = await this._attemptTarsRescue({
+				taskId,
+				plan,
+				step,
+				error: err,
+				signal,
+			});
+			if (!rescued.ok) {
+				rescued.error.fallbackTrail = fallbackTrail;
+				throw rescued.error;
+			}
+			return {
+				...rescued.outcome,
+				fallbackTrail,
+			};
+		}
 	}
 
 	async _executeStep(step, signal) {
@@ -512,8 +644,28 @@ class UITaskService extends EventEmitter {
 				return this._executeMediaControl(step, signal);
 			case 'editorCommand':
 				return this._executeEditorCommand(step, signal);
+			case 'cleanupInstallArtifact':
+				return this._executeCleanupInstallArtifact(step, signal);
 			default:
 				throw makeTaskError(`Unsupported UI step: ${step.type}`, 'unsupported_step');
+		}
+	}
+
+	_enforceSafetyContract(plan, step, executionContract) {
+		if (executionContract.safetyClass === 'destructive') {
+			throw makeTaskError(
+				`Blocked destructive UI action for "${step.selector?.text || step.resultKind || step.type}". Use a dedicated verified flow instead of a generic GUI click.`,
+				'safety_confirmation_required'
+			);
+		}
+		if (executionContract.safetyClass !== 'install_cleanup') {
+			return;
+		}
+		if (!EXPLICIT_DESTRUCTIVE_INTENT_PATTERN.test(String(plan.goal || ''))) {
+			throw makeTaskError(
+				'Install cleanup requires explicit user intent before removing or ejecting installer artifacts.',
+				'safety_confirmation_required'
+			);
 		}
 	}
 
@@ -841,6 +993,32 @@ class UITaskService extends EventEmitter {
 		};
 	}
 
+	async _executeCleanupInstallArtifact(step, signal) {
+		throwIfAborted(signal);
+		const cleanup = await filesTools.cleanup_install_artifact({
+			target: step.target || '',
+			action: step.action || '',
+			name: step.target || '',
+		});
+		if (cleanup.ok === false) {
+			throw makeTaskError(cleanup.result || 'Installer cleanup failed', 'install_cleanup_failed');
+		}
+		await wait(120, signal);
+		return {
+			ok: true,
+			tier: 'native',
+			domain: 'finder',
+			resolverId: 'finder.install_cleanup',
+			verificationMode: cleanup.verificationMode || 'filesystem',
+			successType: 'true_success',
+			resolutionMethod: 'native',
+			result: cleanup.result,
+			cleanupAction: cleanup.cleanupAction || '',
+			cleanupKind: cleanup.kind || '',
+			path: cleanup.path || '',
+		};
+	}
+
 	async _executeNavigateHistory(step, signal) {
 		throwIfAborted(signal);
 		const direction = step.direction === 'forward' ? 'forward' : 'back';
@@ -930,6 +1108,82 @@ class UITaskService extends EventEmitter {
 	_isTarsRescueEnabled() {
 		const tars = this._getTarsConfig();
 		return tars.enabled && Boolean(tars.endpoint) && Boolean(tars.apiKey);
+	}
+
+	async _attemptPrimaryTars({ taskId, plan, step, signal }) {
+		if (!this._isTarsRescueEnabled() || !supportsPrimaryTars(step)) {
+			return { ok: false, error: makeTaskError('Primary TARS execution is unavailable', 'tars_unavailable') };
+		}
+
+		const captureResult = await this._screenCapture.capture();
+		if (!captureResult?.ok || !captureResult.data || !captureResult.context?.captureId) {
+			return { ok: false, error: makeTaskError(captureResult?.error || 'Screen capture failed before TARS execution', 'tars_capture_failed') };
+		}
+
+		const instruction = this._buildTarsInstruction({
+			plan,
+			step,
+			error: null,
+			attempt: 1,
+		});
+		const tarsResponse = await this._requestTarsAction({
+			screenshotBase64: captureResult.data,
+			instruction,
+		});
+		const normalized = this._validateTarsImagePoint(tarsResponse, captureResult.context);
+		if (!normalized.ok) {
+			return { ok: false, error: makeTaskError(normalized.error || 'TARS response could not be validated', normalized.code || 'tars_invalid_response') };
+		}
+
+		const point = this._mapRescuePoint(normalized.x, normalized.y, captureResult.context.captureId);
+		if (!point) {
+			return { ok: false, error: makeTaskError(`Missing capture mapping for ${captureResult.context.captureId}`, 'tars_mapping_missing') };
+		}
+
+		const clickResult = await this._performRescueClick(point);
+		if (clickResult.ok === false) {
+			return { ok: false, error: makeTaskError(clickResult.result || 'Primary TARS click failed', 'tars_click_failed') };
+		}
+		await wait(180, signal);
+
+		const outcome = {
+			ok: true,
+			tier: 'tars_primary',
+			domain: 'general',
+			resolverId: `tars.${step.type || 'click'}`,
+			verificationMode: 'checkpoint',
+			successType: 'technical_success',
+			resolutionMethod: 'tars_primary',
+			result: `TARS clicked for ${stepLabel(step)}`,
+			tarsRescue: {
+				attempts: [{
+					attempt: 1,
+					status: 'clicked',
+					instruction,
+					captureId: captureResult.context.captureId,
+					captureImageWidth: captureResult.context.imageWidth,
+					captureImageHeight: captureResult.context.imageHeight,
+					normalizedX: normalized.x,
+					normalizedY: normalized.y,
+					screenX: point.x,
+					screenY: point.y,
+					thought: normalized.thought || '',
+					latencyMs: normalized.latencyMs,
+					rawResponse: tarsResponse.raw || tarsResponse.rawText || null,
+				}],
+			},
+		};
+
+		try {
+			if (step.checkpoint) {
+				await this._verifyCheckpoint(plan, step, outcome, signal);
+			}
+			outcome.successType = 'true_success';
+			outcome.result = `Completed ${stepLabel(step)} via primary TARS execution`;
+			return { ok: true, outcome };
+		} catch (err) {
+			return { ok: false, error: makeTaskError(err.message || 'Primary TARS verification failed', err.code || 'tars_verification_failed') };
+		}
 	}
 
 	_buildTarsInstruction({ plan, step, error, attempt }) {
