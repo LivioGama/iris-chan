@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createScene } from './avatar/scene.js';
+import { createScene, createScenePerformanceProbe } from './avatar/scene.js';
 import { loadAvatar } from './avatar/loader.js';
 import { applyOverlays } from './avatar/overlays.js';
 import { GeminiClient } from './gemini/client.js';
@@ -13,13 +13,78 @@ import { createClaudeCodeBatcher } from './voice/claude-code-batcher.js';
 import { onRuntimeEvent } from './app-init.js';
 import { eventBusWeb } from '../shared/event-bus-web.js';
 import { initLogger, getLogSettings } from './logger.js';
+import { createPerformanceMonitor } from './performance-monitor.js';
 
-const avatarConfig = window.getAvatarConfig ? await window.getAvatarConfig() : null;
+const BENCHMARKING_ENABLED = false;
+const DEFAULT_PRESENTATION_MODEL_VOICE = 'Charon';
+const DEFAULT_PRESENTATION_SPEECH_PROFILE = Object.freeze({
+	playbackRate: 0.93,
+	pitchSemitones: -2.6,
+	lowShelfFrequencyHz: 170,
+	lowShelfGainDb: 3.4,
+	warmthFrequencyHz: 280,
+	warmthGainDb: 2.6,
+	warmthQ: 0.9,
+	presenceFrequencyHz: 2100,
+	presenceGainDb: 0.9,
+	presenceQ: 0.7,
+	highShelfFrequencyHz: 4800,
+	highShelfGainDb: 0,
+	outputGain: 1,
+	compressorThresholdDb: -24,
+	compressorKneeDb: 8,
+	compressorRatio: 2.2,
+	compressorAttackSeconds: 0.003,
+	compressorReleaseSeconds: 0.2,
+});
+
+function normalizeVoiceConfigForDefaultSound(voice = null) {
+	if (!voice || typeof voice !== 'object') return voice;
+	const next = {
+		...voice,
+		recentSeen: voice.recentSeen ? { ...voice.recentSeen } : voice.recentSeen,
+		listeningGate: voice.listeningGate ? { ...voice.listeningGate } : voice.listeningGate,
+		bargeIn: voice.bargeIn ? { ...voice.bargeIn } : voice.bargeIn,
+	};
+
+	const voiceName = String(next.modelVoiceName || '').trim();
+	if (voiceName === DEFAULT_PRESENTATION_MODEL_VOICE) {
+		delete next.modelVoiceName;
+	}
+
+	const profile = next.speechProfile && typeof next.speechProfile === 'object' ? next.speechProfile : null;
+	if (profile) {
+		const isDefaultProfile = Object.entries(DEFAULT_PRESENTATION_SPEECH_PROFILE).every(
+			([key, value]) => profile[key] === value
+		);
+		if (isDefaultProfile) {
+			delete next.speechProfile;
+		} else {
+			next.speechProfile = { ...profile };
+		}
+	}
+
+	return next;
+}
+
+const runtimeSettings = await window.electronAPI.getSettings?.().catch(() => null);
+const avatarConfig = runtimeSettings?.avatar || await window.getAvatarConfig?.().catch(() => null);
 const avatarType = avatarConfig?.current || 'tripo3d';
-const voiceConfig = await window.electronAPI.getVoiceConfig?.().catch(() => null);
+const rawVoiceConfig = runtimeSettings?.voice || await window.electronAPI.getVoiceConfig?.().catch(() => null);
+const voiceConfig = normalizeVoiceConfigForDefaultSound(rawVoiceConfig);
 await initLogger();
 
+const performanceMonitor = BENCHMARKING_ENABLED
+	? createPerformanceMonitor({
+		getResourceMetrics: () => window.electronAPI.getBenchmarkProcessMetrics?.(),
+		pingIpc: () => window.electronAPI.benchmarkRuntimeEventPing?.(),
+	})
+	: null;
+performanceMonitor?.exposeGlobal(window);
+performanceMonitor?.startBackgroundSampling();
+
 const { renderer, camera, scene } = createScene();
+const scenePerformanceProbe = createScenePerformanceProbe({ renderer, performanceMonitor });
 const { vrm, mixer, glowMaterials = [] } = await loadAvatar(scene, avatarType);
 
 const gemini = new GeminiClient();
@@ -38,7 +103,7 @@ const eventBus = {
 
 const voice = new VoiceEngine({
 	gemini, capture, playback, behavior,
-	eventBus, screen, claudeCodeBatcher, voiceConfig,
+	eventBus, screen, claudeCodeBatcher, voiceConfig, performanceMonitor,
 });
 const proactive = new ProactiveEngine({
 	behavior,
@@ -49,6 +114,13 @@ const proactive = new ProactiveEngine({
 window._voicePipeline = voice;
 await voice.start();
 await proactive.start();
+
+window.electronAPI.onSettingsChanged?.((nextSettings) => {
+	const nextVoice = nextSettings?.voice;
+	if (nextVoice) {
+		voice.applyVoiceConfig?.(normalizeVoiceConfigForDefaultSound(nextVoice));
+	}
+});
 
 const muteBadge = document.getElementById('mute-badge');
 const raycaster = new THREE.Raycaster();
@@ -90,6 +162,7 @@ window.electronAPI.onTaskStream?.((data) => {
 });
 window.addEventListener('beforeunload', () => {
 	proactive.stop();
+	performanceMonitor?.stopBackgroundSampling();
 	window.electronAPI.unsubscribeEvents?.().catch(() => {});
 });
 
@@ -106,6 +179,7 @@ function animate() {
 	requestAnimationFrame(animate);
 	const delta = clock.getDelta();
 	elapsedTime += delta;
+	scenePerformanceProbe.recordFrame(delta);
 	mixer.update(delta);
 	applyOverlays(vrm, elapsedTime, () => voice.getSpeakingVolume());
 	vrm.update(delta);

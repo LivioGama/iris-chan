@@ -41,3 +41,27 @@ export function createScene() {
 
 	return { renderer, camera, scene };
 }
+
+export function createScenePerformanceProbe({ renderer, performanceMonitor }) {
+	return {
+		recordFrame(deltaSeconds) {
+			if (!performanceMonitor || !renderer) return;
+			const canvas = renderer.domElement;
+			const rect = typeof canvas?.getBoundingClientRect === 'function'
+				? canvas.getBoundingClientRect()
+				: { width: 0, height: 0 };
+			const style = canvas ? window.getComputedStyle(canvas) : null;
+			const avatarVisible = !!canvas
+				&& canvas.isConnected
+				&& rect.width > 0
+				&& rect.height > 0
+				&& style?.display !== 'none'
+				&& style?.visibility !== 'hidden';
+			performanceMonitor.recordFrame({
+				deltaMs: deltaSeconds * 1000,
+				avatarVisible,
+				documentHidden: document.hidden,
+			});
+		},
+	};
+}

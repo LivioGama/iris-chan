@@ -89,6 +89,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	onTqTaskUpdate: (cb) => ipcRenderer.on(CHANNELS.TQ_TASK_UPDATE, (_, data) => cb(data)),
 	onTqCountdownState: (cb) => ipcRenderer.on(CHANNELS.TQ_COUNTDOWN_STATE, (_, data) => cb(data)),
 	getRuntimeHealth: () => ipcRenderer.invoke(RUNTIME_CHANNELS.RUNTIME_GET_HEALTH),
+	getBenchmarkProcessMetrics: async () => {
+		const processMemory = typeof process.getProcessMemoryInfo === 'function'
+			? await process.getProcessMemoryInfo().catch(() => null)
+			: null;
+		const nodeMemory = typeof process.memoryUsage === 'function' ? process.memoryUsage() : null;
+		const cpuRaw = typeof process.getCPUUsage === 'function' ? process.getCPUUsage() : null;
+		return {
+			sampledAt: Date.now(),
+			processMemory,
+			nodeMemory,
+			cpu: cpuRaw ? {
+				percentCPUUsage: cpuRaw.percentCPUUsage,
+				cumulativeCPUUsage: cpuRaw.cumulativeCPUUsage,
+				timestampMicros: Math.round(performance.now() * 1000),
+			} : null,
+			rendererPerformanceMemory: globalThis.performance?.memory || null,
+		};
+	},
+	benchmarkRuntimeEventPing: async () => {
+		const startedAt = performance.now();
+		const result = await ipcRenderer.invoke(RUNTIME_CHANNELS.EVENTS_BENCHMARK_PING);
+		return {
+			...result,
+			rendererRoundTripMs: performance.now() - startedAt,
+		};
+	},
 	getBehaviorMode: () => ipcRenderer.invoke(RUNTIME_CHANNELS.BEHAVIOR_GET_MODE),
 	setBehaviorMode: (mode) => ipcRenderer.invoke(RUNTIME_CHANNELS.BEHAVIOR_SET_MODE, mode),
 	onBehaviorModeChanged: (cb) => ipcRenderer.on('mode-changed', (_, mode) => cb(mode)),

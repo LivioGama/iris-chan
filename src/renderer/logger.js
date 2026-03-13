@@ -21,6 +21,7 @@ const DEFAULT_SETTINGS = {
 		runtime: true,
 		ui: true,
 		system: true,
+		metrics: true,
 		other: true,
 	},
 };
@@ -29,6 +30,8 @@ const LEVEL_RANK = { info: 0, warn: 1, error: 2, silent: 3 };
 
 let currentSettings = structuredClone(DEFAULT_SETTINGS);
 let initialized = false;
+const pendingMetricFlush = new Map();
+let metricFlushTimer = null;
 
 function fmt(args) {
 	return args.map((arg) => {
@@ -46,6 +49,7 @@ function normalizeLevel(level) {
 
 function deriveCategory(tag = '') {
 	const normalized = String(tag || '').toLowerCase();
+	if (normalized.includes('metric') || normalized.includes('benchmark')) return 'metrics';
 	if (normalized.includes('conversation')) return 'conversation';
 	if (normalized.includes('voice') || normalized.includes('playback')) return 'voice';
 	if (normalized.includes('gemini')) return 'gemini';
@@ -93,11 +97,12 @@ export async function initLogger() {
 	if (initialized) return currentSettings;
 	initialized = true;
 	try {
-		const settings = await window.electronAPI?.getLogSettings?.();
+		const api = globalThis.window?.electronAPI;
+		const settings = await api?.getLogSettings?.();
 		setSettings(settings);
-		window.electronAPI?.onLogSettingsChanged?.((nextSettings) => {
+		api?.onLogSettingsChanged?.((nextSettings) => {
 			setSettings(nextSettings);
-			window.dispatchEvent(new CustomEvent('iris-log-settings-changed', { detail: currentSettings }));
+			globalThis.window?.dispatchEvent?.(new CustomEvent('iris-log-settings-changed', { detail: currentSettings }));
 		});
 	} catch {}
 	return currentSettings;
@@ -120,7 +125,15 @@ function write(level, tag, args) {
 		const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log';
 		console[method](`[${tag}]`, ...args);
 	}
-	window.electronAPI?.logToFile(level, tag, fmt(args));
+	globalThis.window?.electronAPI?.logToFile?.(level, tag, fmt(args));
+}
+
+function flushMetrics() {
+	metricFlushTimer = null;
+	for (const [tag, entry] of pendingMetricFlush.entries()) {
+		write(entry.level, `${tag}Metric`, [entry.payload]);
+	}
+	pendingMetricFlush.clear();
 }
 
 export function info(tag, ...args) {
@@ -133,4 +146,10 @@ export function warn(tag, ...args) {
 
 export function error(tag, ...args) {
 	write('error', tag, args);
+}
+
+export function metric(tag, payload, { level = 'info', flushMs = 5000 } = {}) {
+	pendingMetricFlush.set(tag, { level, payload });
+	if (metricFlushTimer) return;
+	metricFlushTimer = setTimeout(flushMetrics, flushMs);
 }

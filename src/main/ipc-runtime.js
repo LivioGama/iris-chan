@@ -1,4 +1,5 @@
 const { ipcMain } = require('electron');
+const { performance } = require('node:perf_hooks');
 const { RUNTIME_CHANNELS } = require('../shared/ipc-contracts.js');
 const geometryStore = require('./runtime/geometry-store');
 const avatarWindow = require('./windows/avatar-window');
@@ -37,6 +38,21 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTa
 		});
 		return { ok: true };
 	});
+
+	ipcMain.handle(RUNTIME_CHANNELS.EVENTS_BENCHMARK_PING, () => new Promise((resolve) => {
+		const id = `bench-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+		const startedAt = performance.now();
+		const listener = (runtimeEvent) => {
+			if (runtimeEvent?.type !== '__IRIS_BENCHMARK_PING__') return;
+			if (runtimeEvent?.payload?.id !== id) return;
+			eventBus.off('event', listener);
+			resolve({
+				mainEventBusRoundTripMs: performance.now() - startedAt,
+			});
+		};
+		eventBus.on('event', listener);
+		eventBus.emitEvent('__IRIS_BENCHMARK_PING__', { id }, 'benchmark');
+	}));
 
 	ipcMain.handle(RUNTIME_CHANNELS.EVENTS_UNSUBSCRIBE, (evt) => {
 		const webContentsId = evt.sender.id;

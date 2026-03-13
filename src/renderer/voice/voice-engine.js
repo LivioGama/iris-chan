@@ -181,7 +181,7 @@ function buildVoiceConfig(voiceConfig = {}) {
 }
 
 export class VoiceEngine extends Emitter {
-	constructor({ gemini, capture, playback, behavior, eventBus, vocab, screen, claudeCodeBatcher, voiceConfig }) {
+	constructor({ gemini, capture, playback, behavior, eventBus, vocab, screen, claudeCodeBatcher, voiceConfig, performanceMonitor = null }) {
 		super();
 		this.gemini = gemini;
 		this.capture = capture;
@@ -189,6 +189,7 @@ export class VoiceEngine extends Emitter {
 		this.behavior = behavior;
 		this.eventBus = eventBus;
 		this.voiceConfig = buildVoiceConfig(voiceConfig);
+		this._performanceMonitor = performanceMonitor || null;
 		this.state = STATES.IDLE;
 		this._active = false;
 		this._apiKey = null;
@@ -219,6 +220,7 @@ export class VoiceEngine extends Emitter {
 		this._echoSuppressionGain = this.voiceConfig.echoSuppressionGain;
 		this._lastSpeechEnergyAt = 0;
 		this._turnLatency = null;
+		this._benchmarkTurn = null;
 
 		this._autonomousMode = false;
 		this._autonomousInterval = null;
@@ -274,8 +276,37 @@ export class VoiceEngine extends Emitter {
 		this.playback.setReferenceCallback((float32Samples) => {
 			this.capture.sendReferenceSignal(float32Samples);
 		});
+		this._applyVoicePresentationConfig();
 
 		this._bind();
+	}
+
+	_applyVoicePresentationConfig() {
+		const voiceName = String(this.voiceConfig?.modelVoiceName || '').trim();
+		if (voiceName && typeof this.gemini?.setVoiceName === 'function') {
+			this.gemini.setVoiceName(voiceName);
+		}
+		if (this.voiceConfig?.speechProfile && typeof this.playback?.setSpeechProfile === 'function') {
+			this.playback.setSpeechProfile(this.voiceConfig.speechProfile);
+		}
+	}
+
+	applyVoiceConfig(nextVoiceConfig = {}) {
+		this.voiceConfig = buildVoiceConfig(nextVoiceConfig);
+		this._newTurnThresholdMs = this.voiceConfig.newTurnThresholdMs;
+		this.volumeThreshold = this.voiceConfig.volumeThreshold;
+		this._speechReleaseMs = this.voiceConfig.speechReleaseMs;
+		this._echoSuppressionGain = this.voiceConfig.echoSuppressionGain;
+		this._listeningGate = new ListeningGate({
+			activationThreshold: this.volumeThreshold,
+			...this.voiceConfig.listeningGate,
+		});
+		this._bargeIn = new BargeInDetector({
+			activationThreshold: this.volumeThreshold,
+			...this.voiceConfig.bargeIn,
+		});
+		configureRecentSeenStore(this.voiceConfig.recentSeen);
+		this._applyVoicePresentationConfig();
 	}
 
 	_bind() {
@@ -311,6 +342,7 @@ export class VoiceEngine extends Emitter {
 			finalizeStreamingBubble('stream-user');
 			this._clearSpeechReleaseTimer();
 			this._resetTurnLatency();
+			this._cancelBenchmarkTurn();
 			this._setState(STATES.IDLE);
 		});
 
@@ -418,6 +450,7 @@ export class VoiceEngine extends Emitter {
 			this.playback.stop();
 			this._clearSpeechReleaseTimer();
 			this._resetTurnLatency();
+			this._cancelBenchmarkTurn();
 			this._setState(STATES.LISTENING);
 			// Finalize the model bubble on interruption so it doesn't hang
 			finalizeStreamingBubble('stream-model');
@@ -497,7 +530,10 @@ export class VoiceEngine extends Emitter {
 			updateIndicator('send', false);
 		});
 
-		this.playback.on('started', () => updateIndicator('speak', true));
+		this.playback.on('started', () => {
+			updateIndicator('speak', true);
+			this._notePlaybackStarted();
+		});
 
 		this.playback.on('ended', () => {
 			updateIndicator('speak', false);
@@ -632,6 +668,7 @@ export class VoiceEngine extends Emitter {
 			userSpeechStartedAt: Date.now(),
 			firstModelAudioAt: 0,
 		};
+		this._benchmarkTurn = this._performanceMonitor?.beginVoiceTurn?.({ source: 'user' }) || null;
 	}
 
 	_noteFirstModelAudio() {
@@ -641,6 +678,26 @@ export class VoiceEngine extends Emitter {
 			'Latency',
 			`Speech -> first audio chunk: ${this._turnLatency.firstModelAudioAt - this._turnLatency.userSpeechStartedAt}ms`
 		);
+		this._noteFirstModelChunk('audio');
+	}
+
+	_noteFirstModelChunk(type = 'audio') {
+		if (!this._benchmarkTurn || this._benchmarkTurn.firstChunkAt) return;
+		this._benchmarkTurn.firstChunkAt = performance.now();
+		this._benchmarkTurn.firstChunkType = type;
+	}
+
+	_notePlaybackStarted() {
+		if (!this._benchmarkTurn) return;
+		this._benchmarkTurn.playbackStartedAt = performance.now();
+		this._performanceMonitor?.completeVoiceTurn?.(this._benchmarkTurn);
+		this._benchmarkTurn = null;
+	}
+
+	_cancelBenchmarkTurn() {
+		if (!this._benchmarkTurn) return;
+		this._performanceMonitor?.cancelVoiceTurn?.(this._benchmarkTurn);
+		this._benchmarkTurn = null;
 	}
 
 	_resetTurnLatency() {
