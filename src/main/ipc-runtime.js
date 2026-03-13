@@ -11,14 +11,29 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTa
 
 	ipcMain.handle(RUNTIME_CHANNELS.RUNTIME_GET_HEALTH, async () => healthService.getHealth());
 
+	ipcMain.handle(RUNTIME_CHANNELS.BEHAVIOR_GET_STATE, () => behaviorEngine.getState());
+	ipcMain.handle(RUNTIME_CHANNELS.BEHAVIOR_SET_STATE, (_, statePatch = {}) => {
+		const result = settings.updateSettings({ behavior: { ...(statePatch || {}) } }, { source: 'ipc:behavior:set-state' });
+		const state = settings.getNamespace('behavior') || behaviorEngine.getState();
+		const win = avatarWindow.get();
+		if (result?.ok && win && !win.isDestroyed()) {
+			win.webContents.send('behavior-state-changed', state);
+			win.webContents.send('mode-changed', state.mode);
+			win.webContents.send('direct-mode-changed', state.directMode);
+		}
+		return { ok: true, state, restartRequired: result.restartRequired };
+	});
 	ipcMain.handle(RUNTIME_CHANNELS.BEHAVIOR_GET_MODE, () => behaviorEngine.getMode());
 	ipcMain.handle(RUNTIME_CHANNELS.BEHAVIOR_SET_MODE, (_, mode) => {
 		const result = settings.updateSettings({ behavior: { mode } }, { source: 'ipc:behavior:set-mode' });
 		const win = avatarWindow.get();
+		const state = settings.getNamespace('behavior') || behaviorEngine.getState();
 		if (result?.ok && win && !win.isDestroyed()) {
-			win.webContents.send('mode-changed', settings.getNamespace('behavior')?.mode || mode);
+			win.webContents.send('behavior-state-changed', state);
+			win.webContents.send('mode-changed', state.mode || mode);
+			win.webContents.send('direct-mode-changed', state.directMode);
 		}
-		return { ok: true, mode: settings.getNamespace('behavior')?.mode || mode, restartRequired: result.restartRequired };
+		return { ok: true, mode: state.mode || mode, state, restartRequired: result.restartRequired };
 	});
 
 	ipcMain.handle(RUNTIME_CHANNELS.EVENTS_SUBSCRIBE, (evt) => {
@@ -107,9 +122,13 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTa
 	ipcMain.handle(RUNTIME_CHANNELS.DIRECT_MODE_SET, (_, enabled) => {
 		const result = settings.updateSettings({ behavior: { directMode: !!enabled } }, { source: 'ipc:direct-mode:set' });
 		const win = avatarWindow.get();
-		const directMode = settings.getNamespace('behavior')?.directMode ?? !!enabled;
-		if (win) win.webContents.send('direct-mode-changed', directMode);
-		return { ok: true, directMode, restartRequired: result.restartRequired };
+		const state = settings.getNamespace('behavior') || behaviorEngine.getState();
+		const directMode = state.directMode ?? !!enabled;
+		if (win && !win.isDestroyed()) {
+			win.webContents.send('behavior-state-changed', state);
+			win.webContents.send('direct-mode-changed', directMode);
+		}
+		return { ok: true, directMode, state, restartRequired: result.restartRequired };
 	});
 }
 

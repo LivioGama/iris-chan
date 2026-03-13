@@ -1,5 +1,7 @@
 const assert = require('node:assert');
 const fs = require('node:fs');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 function simulateBehavior() {
 	let userSpokeSinceAssistant = true;
@@ -71,8 +73,14 @@ function simulateBehavior() {
 	};
 }
 
+async function loadInteractionPolicy() {
+	const moduleUrl = pathToFileURL(path.join(process.cwd(), 'src/renderer/interaction/interaction-policy.js')).href;
+	return import(moduleUrl);
+}
+
 console.log('Running V2 behavior rules tests...');
 
+async function main() {
 {
 	const b = simulateBehavior();
 	assert.strictEqual(b.canSpeak(), true, 'initially can speak');
@@ -136,4 +144,51 @@ console.log('Running V2 behavior rules tests...');
 	assert.ok(promptSrc.includes('If a click depends on prior setup, do that setup first.'), 'system prompt requires setup before dependent click actions');
 }
 
+{
+	const policy = await loadInteractionPolicy();
+	const promptReply = policy.buildReplyPresentation({
+		replyPrompt: false,
+		replyOptions: ['Sounds good', 'Let me check'],
+	}, { mode: 'passive', feedbackEnabled: false, introversionEnabled: false });
+	assert.strictEqual(promptReply.sessionMode, 'prompt', 'passive mode should downshift reply opportunities into prompts');
+
+	const feedbackReply = policy.buildReplyPresentation({
+		replyPrompt: false,
+		replyOptions: ['Sounds good', 'Let me check'],
+	}, { mode: 'proactive', feedbackEnabled: true, introversionEnabled: false });
+	assert.match(feedbackReply.spoken, /make 1 warmer, shorter, or clearer/i, 'feedback mode should make revision affordances explicit');
+
+	const introvertReply = policy.buildReplyPresentation({
+		replyPrompt: false,
+		replyOptions: ['Sounds good', 'Let me check'],
+	}, { mode: 'proactive', feedbackEnabled: false, introversionEnabled: true });
+	assert.strictEqual(introvertReply.sessionMode, 'prompt', 'introversion mode should prefer brief prompts over enumerating options');
+
+	assert.strictEqual(
+		policy.shouldAutoEscalateFromToolFailure({
+			toolName: 'click_at',
+			result: { ok: false, result: 'not found' },
+			intentText: 'open the GitHub tab',
+		}),
+		true,
+		'clear navigational asks should auto-escalate once'
+	);
+
+	assert.strictEqual(
+		policy.shouldAutoEscalateFromToolFailure({
+			toolName: 'click_at',
+			result: { ok: false, result: 'not found' },
+			intentText: 'delete that draft',
+		}),
+		false,
+		'destructive asks should not auto-escalate implicitly'
+	);
+}
+
 console.log('V2 behavior rules tests passed.');
+}
+
+main().catch((err) => {
+	console.error(err);
+	process.exit(1);
+});

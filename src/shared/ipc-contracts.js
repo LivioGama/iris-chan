@@ -69,6 +69,8 @@ const CHANNELS = {
 
 const RUNTIME_CHANNELS = {
 	RUNTIME_GET_HEALTH: 'rt:runtime:get-health',
+	BEHAVIOR_GET_STATE: 'rt:behavior:get-state',
+	BEHAVIOR_SET_STATE: 'rt:behavior:set-state',
 	BEHAVIOR_GET_MODE: 'rt:behavior:get-mode',
 	BEHAVIOR_SET_MODE: 'rt:behavior:set-mode',
 	EVENTS_BENCHMARK_PING: 'rt:events:benchmark-ping',

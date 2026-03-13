@@ -1,5 +1,6 @@
 // System instruction builder (vocab, corrections)
 import { buildRecentSeenPrompt } from '../vocab/recent-seen-store.js';
+import { buildInteractionPromptPolicy } from '../interaction/interaction-policy.js';
 
 const MAX_SYSTEM_TERMS = 40;
 
@@ -58,9 +59,23 @@ export function buildCorrectionsPrompt() {
 }
 
 export function buildSystemInstruction(options = {}) {
-	const directMode = options.directMode ?? false;
-	const autonomousMode = options.autonomousMode ?? false;
+	const behaviorState = options.behaviorState && typeof options.behaviorState === 'object'
+		? options.behaviorState
+		: {};
+	const mode = behaviorState.mode || 'silent';
+	const directMode = behaviorState.directMode ?? options.directMode ?? false;
+	const feedbackEnabled = behaviorState.feedbackEnabled ?? false;
+	const introversionEnabled = behaviorState.introversionEnabled ?? false;
+	const proactiveMode = mode === 'proactive';
 	const irisSourcePath = window.irisPaths?.sourceDirDisplay || 'the iris-chan source directory in the user home directory';
+	const interactionModeBlock = `
+
+INTERACTION MODE STATE:
+- Primary mode: ${mode}.
+- Direct execution mode: ${directMode ? 'on' : 'off'}.
+- Feedback UX state: ${feedbackEnabled ? 'active' : 'inactive'}.
+- Introversion UX state: ${introversionEnabled ? 'active' : 'inactive'}.
+${buildInteractionPromptPolicy({ mode, directMode, feedbackEnabled, introversionEnabled })}`;
 	const fastExecutionBlock = `
 
 FAST EXECUTION POLICY:
@@ -92,15 +107,15 @@ AI SCIENTIST OPERATING MODE:
 - Reproducibility matters: note restart requirements, environment assumptions, version-control implications, and container/dev-server considerations when they materially affect the result.
 - If web research is needed, use it to strengthen the hypothesis or compare approaches, not as a substitute for local verification.`;
 
-	const autonomousScientistBlock = autonomousMode ? `
+	const autonomousScientistBlock = proactiveMode ? `
 
-AUTONOMOUS CODING PRIORITY:
-- In autonomous mode, default to continuing the active scientific workflow silently.
-- If you speak during autonomous coding, speak only to report evidence-backed progress or a concrete blocker.
+PROACTIVE ASSISTANCE PRIORITY:
+- In proactive mode, default to continuing the active scientific workflow silently.
+- If you speak during proactive mode while coding, speak only to report evidence-backed progress or a concrete blocker.
 - Do not ask the user to plan the workflow for you when an active task already exists.` : '';
 
 	return `You are Iris, a friendly and helpful AI assistant running on the user's Mac. You can see the user's screen and control their computer. You can type text, press keys, run terminal commands, open apps, and scroll. When the user asks you to do something on their computer, use the appropriate tool. You can also see the screen \u2014 describe what you see when asked. Keep responses concise and conversational. When using propose_reply, always explain what you're about to type and wait for confirmation before pressing return.
-${directModeBlock}${aiScientistBlock}${autonomousScientistBlock}${fastExecutionBlock}
+${interactionModeBlock}${directModeBlock}${aiScientistBlock}${autonomousScientistBlock}${fastExecutionBlock}
 SELF-FIX (CRITICAL \u2014 your most important capability):
 Your own source code lives at ${irisSourcePath}.
 When the user asks you to fix, change, improve, or modify ANYTHING about yourself \u2014 your voice, behavior, features, tools, UI, performance, or code \u2014 first decide whether an existing stable setting in ~/.iris/settings.json already covers the request.
@@ -191,7 +206,7 @@ FOREGROUND UI: run_ui_task
 ACTIONS: type_text, press_key, click_at (left/right), double_click, mouse_move, drag, scroll
 APPS: open_app, get_default_app, window_manage (left/right/maximize/center), get_frontmost_app
 SYSTEM: set_volume, run_terminal_command, notify, check_permissions, clipboard_read, clipboard_write
-SEARCH: web_search (search the web via Ollama Cloud gpt-oss-120b \u2014 PREFERRED for all searches), ask_chatgpt (fallback: send prompt to ChatGPT desktop app)
+SEARCH: web_search (search the web via Perplexity with explicit sources \u2014 PREFERRED for all searches), ask_chatgpt (fallback: send prompt to ChatGPT desktop app)
 FILES: read_file, write_file, list_directory, move_file, get_finder_selection
 WORKSPACE: set_workspace (set current project directory), get_workspace (show current directory)
 META: update_settings (change existing runtime settings in ~/.iris/settings.json), self_fix (modify your own code), fix_project (fix/build/improve any project via Claude Code SDK — streams progress back to you), add_task (queue a task for autonomous execution — auto-detects project from hover), propose_reply, get_mouse_position, use_skill (load and run an installed skill), create_skill (create or revise an installed skill package)

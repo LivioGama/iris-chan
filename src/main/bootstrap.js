@@ -20,7 +20,7 @@ const { MemoryStore } = require('./automation/memory-store');
 const { LearningManager } = require('./automation/learning-manager');
 const { NativeFallbackManager } = require('./automation/native-fallback-manager');
 const { EpisodeRecorder } = require('./automation/episode-recorder');
-const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager, setEpisodeRecorder } = require('./automation/service-ref');
+const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager, setEpisodeRecorder, setConvexClient } = require('./automation/service-ref');
 const taskQueueWatcher = require('./task-queue/watcher');
 const { setConvexClient: setTqControllerClient, setBehaviorEngine: setTqBehaviorEngine } = require('./controllers/taskQueueController');
 const { setConvexClient: setTqToolClient } = require('./tools/task-queue');
@@ -62,17 +62,16 @@ function startRuntime({ apiKey }) {
 		return { applied: true, liveApply: true };
 	});
 	settings.registerApplyHandler('behavior', (nextBehavior, previousBehavior) => {
-		if (nextBehavior?.mode !== previousBehavior?.mode) {
-			behaviorEngine.setMode(nextBehavior.mode);
-			const win = avatarWindow.get();
-			if (win && !win.isDestroyed()) win.webContents.send('mode-changed', nextBehavior.mode);
+		const win = avatarWindow.get();
+		behaviorEngine.setState(nextBehavior);
+		if (nextBehavior?.mode !== previousBehavior?.mode && win && !win.isDestroyed()) {
+			win.webContents.send('mode-changed', nextBehavior.mode);
 		}
 		if (nextBehavior?.directMode !== previousBehavior?.directMode) {
-			behaviorEngine.setDirectMode(nextBehavior.directMode);
 			taskQueueWatcher.restartWithNewInterval();
-			const win = avatarWindow.get();
 			if (win && !win.isDestroyed()) win.webContents.send('direct-mode-changed', nextBehavior.directMode);
 		}
+		if (win && !win.isDestroyed()) win.webContents.send('behavior-state-changed', behaviorEngine.getState());
 		return { applied: true, liveApply: true };
 	});
 	settings.registerApplyHandler('voice', (nextVoice, previousVoice) => {
@@ -88,8 +87,7 @@ function startRuntime({ apiKey }) {
 		};
 	});
 	const initialSettings = settings.init();
-	behaviorEngine.setMode(initialSettings.behavior.mode);
-	behaviorEngine.setDirectMode(initialSettings.behavior.directMode);
+	behaviorEngine.setState(initialSettings.behavior);
 
 	eventBus.on('event', (evt) => {
 		const idempotencyKey = `runtime_evt_${evt.timestamp}_${runtimeEventSeq++}_${evt.type}`;
@@ -135,6 +133,7 @@ function startRuntime({ apiKey }) {
 	setLearningManager(learningManager);
 	setNativeFallbackManager(nativeFallbackManager);
 	setEpisodeRecorder(episodeRecorder);
+	setConvexClient(convexClient);
 	legacyIpc.register(apiKey);
 	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow });
 	setTqControllerClient(convexClient);
@@ -174,7 +173,7 @@ function startRuntime({ apiKey }) {
 			}
 		});
 		globalShortcut.register('CommandOrControl+Shift+M', () => {
-			const nextMode = behaviorEngine.getMode() === 'autonomous' ? 'silent' : 'autonomous';
+			const nextMode = behaviorEngine.getMode() === 'proactive' ? 'silent' : 'proactive';
 			settings.updateSettings({ behavior: { mode: nextMode } }, { source: 'shortcut:mode-toggle' });
 		});
 		globalShortcut.register('CommandOrControl+Shift+D', () => {

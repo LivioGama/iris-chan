@@ -7,7 +7,7 @@ export function createScreenCaptureController({ gemini, onCapture = null }) {
 	let interval = null;
 	let lastUserSpeechTime = Date.now();
 	let idleGateClosed = false;
-	let autonomousMode = false;
+	let proactiveMode = false;
 	let lastCaptureAt = 0;
 	let inFlightCapture = null;
 	let lastCaptureId = '';
@@ -68,7 +68,7 @@ export function createScreenCaptureController({ gemini, onCapture = null }) {
 		sendFrame({ passive: false, force: true });
 		interval = setInterval(() => {
 			if (idleGateClosed) return;
-			if (!autonomousMode && Date.now() - lastUserSpeechTime > 60000) {
+			if (!proactiveMode && Date.now() - lastUserSpeechTime > 60000) {
 				stop();
 				return;
 			}
@@ -104,6 +104,7 @@ export function createScreenCaptureController({ gemini, onCapture = null }) {
 		},
 		setLastUserSpeechTime(t) { lastUserSpeechTime = t; },
 		setIdleGateClosed(closed) { idleGateClosed = closed; },
-		setAutonomousMode(mode) { autonomousMode = mode; },
+		setAutonomousMode(mode) { proactiveMode = !!mode; },
+		setBehaviorMode(mode) { proactiveMode = mode === 'proactive'; },
 	};
 }

@@ -9,8 +9,15 @@ const LEGACY_LOG_SETTINGS_PATH = process.env.IRIS_LOG_SETTINGS_PATH || path.join
 
 const LEVEL_RANK = { info: 0, warn: 1, error: 2, silent: 3 };
 const AVATAR_VALUES = new Set(['original', 'tripo3d']);
-const MODE_VALUES = new Set(['silent', 'attentive', 'autonomous']);
+const MODE_VALUES = new Set(['silent', 'passive', 'proactive']);
 const VOICE_PRESETS = Object.freeze(deepClone(config.voicePresets || []));
+const LEGACY_MODE_ALIASES = Object.freeze({
+	silent: 'silent',
+	attentive: 'passive',
+	passive: 'passive',
+	autonomous: 'proactive',
+	proactive: 'proactive',
+});
 
 const DEFAULT_SETTINGS = Object.freeze({
 	voice: {
@@ -32,6 +39,8 @@ const DEFAULT_SETTINGS = Object.freeze({
 	behavior: {
 		mode: 'silent',
 		directMode: false,
+		feedbackEnabled: false,
+		introversionEnabled: false,
 	},
 	logging: {
 		console: {
@@ -87,10 +96,10 @@ const REGISTRY = Object.freeze({
 		liveApply: true,
 		normalize: normalizeBehaviorSettings,
 		capabilities: {
-			queryIntents: ['what mode are you in', 'is direct mode on'],
-			mutationIntents: ['change behavior mode', 'toggle direct mode', 'set attentive mode'],
-			examples: ['turn direct mode on', 'set mode to attentive'],
-			keyPaths: ['behavior.mode', 'behavior.directMode'],
+			queryIntents: ['what mode are you in', 'is direct mode on', 'is feedback mode on', 'is introversion mode on'],
+			mutationIntents: ['change behavior mode', 'toggle direct mode', 'set passive mode', 'set proactive mode', 'turn feedback mode on', 'turn introversion mode on'],
+			examples: ['turn direct mode on', 'set mode to proactive', 'turn feedback mode on'],
+			keyPaths: ['behavior.mode', 'behavior.directMode', 'behavior.feedbackEnabled', 'behavior.introversionEnabled'],
 		},
 	},
 	logging: {
@@ -267,8 +276,11 @@ function normalizeAvatarSettings(input = {}) {
 
 function normalizeBehaviorSettings(input = {}) {
 	const merged = mergeDeep(DEFAULT_SETTINGS.behavior, sanitizeKeys('behavior', input));
-	merged.mode = MODE_VALUES.has(merged.mode) ? merged.mode : DEFAULT_SETTINGS.behavior.mode;
+	const normalizedMode = LEGACY_MODE_ALIASES[String(merged.mode || '').trim().toLowerCase()];
+	merged.mode = MODE_VALUES.has(normalizedMode) ? normalizedMode : DEFAULT_SETTINGS.behavior.mode;
 	merged.directMode = normalizeBoolean(merged.directMode, DEFAULT_SETTINGS.behavior.directMode);
+	merged.feedbackEnabled = normalizeBoolean(merged.feedbackEnabled, DEFAULT_SETTINGS.behavior.feedbackEnabled);
+	merged.introversionEnabled = normalizeBoolean(merged.introversionEnabled, DEFAULT_SETTINGS.behavior.introversionEnabled);
 	return merged;
 }
 

@@ -19,3 +19,10 @@ export function updateIndicator(name, active) {
 		dot.classList.toggle('active', !!active);
 	}
 }
+
+export function setIndicatorLabel(name, label) {
+	const dot = indicators.get(name);
+	if (dot && typeof label === 'string' && label.trim()) {
+		dot.title = label.trim();
+	}
+}

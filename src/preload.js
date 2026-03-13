@@ -115,8 +115,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 			rendererRoundTripMs: performance.now() - startedAt,
 		};
 	},
+	getBehaviorState: () => ipcRenderer.invoke(RUNTIME_CHANNELS.BEHAVIOR_GET_STATE),
+	setBehaviorState: (state) => ipcRenderer.invoke(RUNTIME_CHANNELS.BEHAVIOR_SET_STATE, state),
 	getBehaviorMode: () => ipcRenderer.invoke(RUNTIME_CHANNELS.BEHAVIOR_GET_MODE),
 	setBehaviorMode: (mode) => ipcRenderer.invoke(RUNTIME_CHANNELS.BEHAVIOR_SET_MODE, mode),
+	onBehaviorStateChanged: (cb) => ipcRenderer.on('behavior-state-changed', (_, state) => cb(state)),
 	onBehaviorModeChanged: (cb) => ipcRenderer.on('mode-changed', (_, mode) => cb(mode)),
 	subscribeEvents: () => ipcRenderer.invoke(RUNTIME_CHANNELS.EVENTS_SUBSCRIBE),
 	unsubscribeEvents: () => ipcRenderer.invoke(RUNTIME_CHANNELS.EVENTS_UNSUBSCRIBE),
