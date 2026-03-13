@@ -180,6 +180,11 @@ function buildVoiceConfig(voiceConfig = {}) {
 	};
 }
 
+function getEffectiveModelVoiceName(voiceConfig = {}) {
+	const normalized = String(voiceConfig?.modelVoiceName || '').trim();
+	return normalized || null;
+}
+
 export class VoiceEngine extends Emitter {
 	constructor({ gemini, capture, playback, behavior, eventBus, vocab, screen, claudeCodeBatcher, voiceConfig, performanceMonitor = null }) {
 		super();
@@ -282,8 +287,8 @@ export class VoiceEngine extends Emitter {
 	}
 
 	_applyVoicePresentationConfig() {
-		const voiceName = String(this.voiceConfig?.modelVoiceName || '').trim();
-		if (voiceName && typeof this.gemini?.setVoiceName === 'function') {
+		const voiceName = getEffectiveModelVoiceName(this.voiceConfig);
+		if (typeof this.gemini?.setVoiceName === 'function') {
 			this.gemini.setVoiceName(voiceName);
 		}
 		if (this.voiceConfig?.speechProfile && typeof this.playback?.setSpeechProfile === 'function') {
@@ -292,6 +297,7 @@ export class VoiceEngine extends Emitter {
 	}
 
 	applyVoiceConfig(nextVoiceConfig = {}) {
+		const previousEffectiveVoiceName = getEffectiveModelVoiceName(this.voiceConfig);
 		this.voiceConfig = buildVoiceConfig(nextVoiceConfig);
 		this._newTurnThresholdMs = this.voiceConfig.newTurnThresholdMs;
 		this.volumeThreshold = this.voiceConfig.volumeThreshold;
@@ -307,6 +313,13 @@ export class VoiceEngine extends Emitter {
 		});
 		configureRecentSeenStore(this.voiceConfig.recentSeen);
 		this._applyVoicePresentationConfig();
+		const nextEffectiveVoiceName = getEffectiveModelVoiceName(this.voiceConfig);
+		if (previousEffectiveVoiceName !== nextEffectiveVoiceName && this._active && this.gemini?.connected) {
+			this.reconnect().catch((err) => {
+				logError('Voice', `Voice reconnect failed: ${err?.message || err}`);
+				this.needsReconnect = true;
+			});
+		}
 	}
 
 	_bind() {

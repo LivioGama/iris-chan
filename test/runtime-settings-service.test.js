@@ -33,8 +33,22 @@ async function main() {
 	assert.strictEqual(updated.ok, true, 'settings update should succeed');
 	assert.ok(updated.changedKeys.includes('voice.modelVoiceName'), 'changed keys should include patched voice settings');
 
+	const unregisterVoiceHandler = settings.registerApplyHandler('voice', (nextVoice, previousVoice) => ({
+		applied: true,
+		liveApply: true,
+		restartRequired: false,
+		sessionRefreshRequired: nextVoice?.modelVoiceName !== previousVoice?.modelVoiceName,
+	}));
+	const voiced = settings.updateSettings({
+		voice: {
+			modelVoiceName: 'Aoede',
+		},
+	});
+	assert.strictEqual(voiced.namespaceStatuses.find((status) => status.namespace === 'voice')?.sessionRefreshRequired, true, 'voice apply handlers should be able to expose session-refresh metadata');
+	unregisterVoiceHandler();
+
 	const diskSettings = JSON.parse(fs.readFileSync(process.env.IRIS_SETTINGS_PATH, 'utf-8'));
-	assert.strictEqual(diskSettings.voice.modelVoiceName, 'Kore', 'voice updates should persist to disk');
+	assert.strictEqual(diskSettings.voice.modelVoiceName, 'Aoede', 'voice updates should persist to disk');
 	assert.strictEqual(diskSettings.avatar.current, 'tripo3d', 'avatar settings should persist to disk');
 
 	const presetPatch = settings.buildVoicePresetPatch('soft bloom');

@@ -59,6 +59,56 @@ async function main() {
 	assert.strictEqual(switchPresetResult.ok, true, 'switching to a named preset should succeed');
 	assert.strictEqual(settings.getSettings().voice.modelVoiceName, 'Aoede', 'preset selection should flatten the preset model voice into settings');
 	assert.strictEqual(settings.getSettings().voice.speechProfile.playbackRate, 0.98, 'preset selection should flatten the preset speech profile into settings');
+	assert.strictEqual(switchPresetResult.translator, 'deterministic', 'known voice preset requests should prefer deterministic parsing');
+	assert.ok(Array.isArray(switchPresetResult.patchSummary), 'voice mutations should expose a patch summary');
+	assert.strictEqual(switchPresetResult.noChangeReason, null, 'successful voice preset changes should not report a no-change reason');
+
+	process.env.GROQ_API_KEY = 'test-groq-key';
+	const originalFetchForMutation = global.fetch;
+	let fetchCalls = 0;
+	global.fetch = async () => {
+		fetchCalls += 1;
+		return {
+			ok: true,
+			async json() {
+				return {
+					choices: [{
+						message: {
+							content: JSON.stringify({
+								patch: {
+									voice: { modelVoiceName: 'Kore' },
+								},
+							}),
+						},
+					}],
+				};
+			},
+		};
+	};
+	settings.updateSettings({
+		voice: {
+			modelVoiceName: 'Charon',
+			speechProfile: settings.DEFAULT_SETTINGS.voice.speechProfile,
+		},
+	}, { source: 'test:reset-before-deep-bloom' });
+	const deepBloomWarmResult = await update_settings({
+		request: 'switch to Deep Bloom, Warm',
+	});
+	assert.strictEqual(deepBloomWarmResult.ok, true, 'deterministic voice requests should still succeed when Groq is configured');
+	assert.strictEqual(deepBloomWarmResult.translator, 'deterministic', 'voice requests should resolve locally before Groq');
+	assert.strictEqual(fetchCalls, 0, 'deterministic voice parsing should skip the Groq mutation translator');
+	assert.strictEqual(settings.getSettings().voice.modelVoiceName, 'Aoede', 'deep bloom warm should land on the soft bloom/Aoede preset path');
+	assert.ok(deepBloomWarmResult.changedKeys.includes('voice.modelVoiceName'), 'deep bloom warm should report concrete changed keys');
+
+	const noOpResult = await update_settings({
+		request: 'switch to Deep Bloom, Warm',
+	});
+	assert.strictEqual(noOpResult.ok, true, 'reapplying the same voice request should still succeed');
+	assert.deepStrictEqual(noOpResult.changedKeys, [], 'reapplying the same voice request should be a no-op');
+	assert.strictEqual(noOpResult.noChangeReason, 'requested_settings_already_match_current_state', 'no-op mutations should explain why nothing changed');
+	assert.ok(noOpResult.patchSummary.includes('voice.modelVoiceName'), 'no-op responses should still show the resolved patch summary');
+	global.fetch = originalFetchForMutation;
+	delete process.env.GROQ_API_KEY;
 
 	const tweakResult = await update_settings({
 		request: 'make it warmer and slower',

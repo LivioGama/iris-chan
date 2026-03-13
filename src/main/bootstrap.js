@@ -75,6 +75,18 @@ function startRuntime({ apiKey }) {
 		}
 		return { applied: true, liveApply: true };
 	});
+	settings.registerApplyHandler('voice', (nextVoice, previousVoice) => {
+		const modelVoiceChanged = nextVoice?.modelVoiceName !== previousVoice?.modelVoiceName;
+		const speechProfileChanged = JSON.stringify(nextVoice?.speechProfile || {}) !== JSON.stringify(previousVoice?.speechProfile || {});
+		return {
+			applied: true,
+			liveApply: true,
+			restartRequired: false,
+			sessionRefreshRequired: modelVoiceChanged,
+			modelVoiceChanged,
+			speechProfileChanged,
+		};
+	});
 	const initialSettings = settings.init();
 	behaviorEngine.setMode(initialSettings.behavior.mode);
 	behaviorEngine.setDirectMode(initialSettings.behavior.directMode);

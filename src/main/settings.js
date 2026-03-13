@@ -393,13 +393,18 @@ function applyNamespaces(previous, next) {
 			continue;
 		}
 		try {
-			const result = handler(deepClone(next[namespace]), deepClone(previous?.[namespace]));
-			namespaceStatuses.push({
+			const result = handler(deepClone(next[namespace]), deepClone(previous?.[namespace])) || {};
+			const status = {
 				namespace,
 				applied: result?.applied !== false,
 				liveApply: result?.liveApply !== false,
 				restartRequired: !!result?.restartRequired,
-			});
+			};
+			for (const [key, value] of Object.entries(result)) {
+				if (['applied', 'liveApply', 'restartRequired'].includes(key)) continue;
+				status[key] = deepClone(value);
+			}
+			namespaceStatuses.push(status);
 		} catch {
 			namespaceStatuses.push({ namespace, applied: false, liveApply: !!REGISTRY[namespace]?.liveApply });
 		}

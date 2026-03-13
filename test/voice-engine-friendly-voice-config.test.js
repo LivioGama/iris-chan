@@ -19,6 +19,8 @@ class FakeGemini extends MockEmitter {
 	constructor() {
 		super();
 		this.voiceName = null;
+		this.connected = false;
+		this.reconnectCalls = 0;
 	}
 
 	setVoiceName(voiceName) {
@@ -32,6 +34,10 @@ class FakeGemini extends MockEmitter {
 	sendRealtimeText() {}
 	sendImage() {}
 	sendRecentSeenUpdate() {}
+	disconnect() {}
+	async connect() {
+		this.reconnectCalls += 1;
+	}
 }
 
 class FakeCapture extends MockEmitter {
@@ -116,7 +122,7 @@ async function main() {
 			stop() {},
 		};
 
-		new VoiceEngine({
+		const voice = new VoiceEngine({
 			gemini,
 			capture,
 			playback,
@@ -143,6 +149,39 @@ async function main() {
 		assert.strictEqual(playback.speechProfile.warmthGainDb, 2.5);
 		assert.strictEqual(playback.speechProfile.presenceFrequencyHz, 3000);
 		assert.strictEqual(playback.speechProfile.highShelfFrequencyHz, 6200);
+
+		voice._active = true;
+		voice._apiKey = 'test-key';
+		gemini.connected = true;
+
+		voice.applyVoiceConfig({
+			modelVoiceName: 'Aoede',
+			speechProfile: {
+				playbackRate: 0.97,
+			},
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.strictEqual(gemini.voiceName, 'Aoede', 'voice changes should update the active Gemini voice name');
+		assert.strictEqual(gemini.reconnectCalls, 1, 'changing the Gemini model voice should reconnect the active session');
+
+		voice.applyVoiceConfig({
+			speechProfile: {
+				playbackRate: 1.01,
+				pitchSemitones: 0.4,
+			},
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.strictEqual(gemini.voiceName, null, 'resetting to the default voice path should clear the custom Gemini voice');
+		assert.strictEqual(gemini.reconnectCalls, 2, 'resetting to the default voice should also reconnect the active session');
+
+		voice.applyVoiceConfig({
+			speechProfile: {
+				playbackRate: 1.02,
+				pitchSemitones: 0.5,
+			},
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.strictEqual(gemini.reconnectCalls, 2, 'speech-profile-only changes should not reconnect the active session');
 
 		console.log('Voice engine friendly voice config tests passed.');
 	} finally {

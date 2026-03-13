@@ -168,6 +168,35 @@ function derivePatchFromRequest(request = '') {
 	return Object.keys(patch).length ? patch : null;
 }
 
+function isVoiceRequest(request = '') {
+	const text = String(request || '');
+	if (/\bvoice\b|\bpreset\b|\bpitch\b|\bplayback(?: rate)?\b|\bwarm(?:er|th)?\b|\bbrighter\b|\bdarker\b|\beq\b|\bcompress(?:ed|ion)?\b/i.test(text)) {
+		return true;
+	}
+	const lower = text.toLowerCase();
+	return settings.getVoicePresets().some((preset) => {
+		const names = [preset.name].concat(Array.isArray(preset.aliases) ? preset.aliases : []);
+		return names.some((name) => lower.includes(String(name).toLowerCase()));
+	});
+}
+
+function summarizePatch(patch = {}) {
+	if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return [];
+	const changed = [];
+	const walk = (value, prefix = '') => {
+		for (const [key, nested] of Object.entries(value || {})) {
+			const fullKey = prefix ? `${prefix}.${key}` : key;
+			if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+				walk(nested, fullKey);
+				continue;
+			}
+			changed.push(fullKey);
+		}
+	};
+	walk(patch);
+	return changed;
+}
+
 function listVoicePresets() {
 	const presets = settings.getVoicePresets().map((preset) => ({
 		name: preset.name,
@@ -317,6 +346,10 @@ async function update_settings(args = {}) {
 		setPath(patch, args.key, args.value);
 		translator = 'kv';
 	}
+	if (!patch && args.request && isVoiceRequest(args.request)) {
+		patch = derivePatchFromRequest(args.request);
+		if (patch) translator = 'deterministic';
+	}
 	if (!patch && args.request) {
 		try {
 			patch = await groqPatchFromRequest(args.request);
@@ -337,17 +370,27 @@ async function update_settings(args = {}) {
 		return { ok: false, result: 'No valid settings patch provided. Pass patch JSON, key/value, or a supported request string.' };
 	}
 	const result = settings.updateSettings(patch, { source: 'tool:update_settings', translator });
+	const patchSummary = summarizePatch(patch);
+	const noChangeReason = result.changedKeys.length
+		? null
+		: (patchSummary.length ? 'requested_settings_already_match_current_state' : 'request_did_not_resolve_to_supported_setting_changes');
 	return {
 		ok: true,
 		applied: result.applied,
 		restartRequired: result.restartRequired,
 		changedKeys: result.changedKeys,
+		translator,
+		patchSummary,
+		noChangeReason,
 		result: JSON.stringify({
 			path: settings.SETTINGS_PATH,
 			applied: result.applied,
 			restartRequired: result.restartRequired,
 			changedKeys: result.changedKeys,
 			namespaceStatuses: result.namespaceStatuses,
+			translator,
+			patchSummary,
+			noChangeReason,
 		}),
 	};
 }
