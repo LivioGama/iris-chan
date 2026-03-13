@@ -436,6 +436,7 @@ canvas {
 	bottom: 22px;
 	display: flex;
 	flex-direction: column;
+	align-items: flex-start;
 	gap: 8px;
 	max-width: min(42vw, 460px);
 	max-height: min(36vh, 280px);
@@ -456,6 +457,8 @@ canvas {
 }
 
 .tl-card {
+	width: fit-content;
+	max-width: 100%;
 	padding: 9px 11px;
 	border-radius: 16px;
 	border: 1px solid rgba(171, 192, 224, 0.14);

@@ -6,7 +6,16 @@ export function pushTimelineEvent(evt) {
 	if (!root) return;
 
 	const card = buildCard(evt);
-	root.prepend(card);
+	if (evt.type === 'DB_HEALTH') {
+		const existing = root.querySelector('[data-event-type="DB_HEALTH"]');
+		if (existing) {
+			root.replaceChild(card, existing);
+		} else {
+			root.prepend(card);
+		}
+	} else {
+		root.prepend(card);
+	}
 
 	while (root.children.length > MAX_EVENTS) {
 		root.removeChild(root.lastChild);
@@ -27,6 +36,7 @@ function buildCard(evt) {
 
 	const card = document.createElement('div');
 	card.className = `tl-card phase-${phase}`;
+	card.dataset.eventType = evt.type;
 
 	const head = document.createElement('div');
 	head.className = 'tl-head';
