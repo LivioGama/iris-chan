@@ -10,6 +10,7 @@ export function bootRenderer() {
 
 export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 	if (!evt?.type) return;
+	if (evt.source === 'benchmark' || evt.type === '__IRIS_BENCHMARK_PING__') return;
 	const isUiTaskEvent = evt.payload?.taskKind === 'ui' && (
 		evt.type === 'TASK_MILESTONE' ||
 		evt.type === 'TASK_DONE' ||

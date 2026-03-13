@@ -23,6 +23,7 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTa
 		const webContentsId = evt.sender.id;
 		if (subscriptions.has(webContentsId)) return { ok: true };
 		const listener = (runtimeEvent) => {
+			if (runtimeEvent?.source === 'benchmark' || runtimeEvent?.type === '__IRIS_BENCHMARK_PING__') return;
 			evt.sender.send(RUNTIME_CHANNELS.EVENTS_STREAM, runtimeEvent);
 		};
 		eventBus.on('event', listener);
