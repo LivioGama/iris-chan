@@ -431,289 +431,56 @@
 		let draggedTask = null;
 		let reloadTimeout = null;
 		let renderTimeout = null;
-		let cleanDoneBtnAttached = false;
 
-			// Track tasks actively receiving SDK stream events — prevents file-watcher reloads from clobbering live logs
-			const activelyStreamingTasks = new Set();
-			// Track tasks that were started via SDK (vs manually moved to IN_PROGRESS)
-			const sdkRunningTasks = new Set();
-			// Track tasks recently completed via done event — prevents file-watcher reloads from regressing status
-			const recentlyCompletedTasks = new Map(); // taskId → {status, timestamp}
-			const dismissedQueueTaskIds = loadDismissedQueueTaskIds();
+		const activelyStreamingTasks = new Set();
+		const sdkRunningTasks = new Set();
+		const recentlyCompletedTasks = new Map();
+		const dismissedQueueTaskIds = loadDismissedQueueTaskIds();
 
-			function loadDismissedQueueTaskIds() {
-				try {
-					const raw = window.localStorage.getItem('kanban.dismissedQueueTaskIds');
-					const parsed = JSON.parse(raw || '[]');
-					return new Set(Array.isArray(parsed) ? parsed.filter(Boolean) : []);
-				} catch {
-					return new Set();
-				}
+		function loadDismissedQueueTaskIds() {
+			try {
+				const raw = window.localStorage.getItem('kanban.dismissedQueueTaskIds');
+				const parsed = JSON.parse(raw || '[]');
+				return new Set(Array.isArray(parsed) ? parsed.filter(Boolean) : []);
+			} catch {
+				return new Set();
 			}
-
-			function persistDismissedQueueTaskIds() {
-				try {
-					window.localStorage.setItem(
-						'kanban.dismissedQueueTaskIds',
-						JSON.stringify(Array.from(dismissedQueueTaskIds))
-					);
-				} catch (err) {
-					console.warn('[Kanban] Failed to persist dismissed queue tasks:', err.message);
-				}
-			}
-
-			function queueTaskIdOf(taskLike) {
-				return String(taskLike?.queueTaskId || taskLike?._id || taskLike?.taskId || '').trim();
-			}
-
-			function kanbanTaskIdForQueue(queueTaskId) {
-				return `queue-${queueTaskId}`;
-			}
-
-			function isQueueTask(task) {
-				return task?.origin === 'queue' || Boolean(task?.queueTaskId);
-			}
-
-			function inferQueueTaskTitle(queueTask = {}) {
-				const raw = String(
-					queueTask.title
-					|| queueTask.rawPrompt
-					|| queueTask.enrichedPrompt
-					|| queueTask.prompt
-					|| 'Queued task'
-				).trim();
-				return raw.split('\n')[0].slice(0, 140) || 'Queued task';
-			}
-
-			function normalizeComparableTaskText(value) {
-				return String(value || '')
-					.trim()
-					.toLowerCase()
-					.replace(/\s+/g, ' ');
-			}
-
-			function queueTaskComparableTexts(taskLike = {}) {
-				const texts = [
-					taskLike.title,
-					taskLike.rawPrompt,
-					taskLike.enrichedPrompt,
-					taskLike.prompt,
-					inferQueueTaskTitle(taskLike),
-				];
-				return new Set(
-					texts
-						.map((value) => normalizeComparableTaskText(value))
-						.filter(Boolean)
-				);
-			}
-
-			function kanbanTaskComparableTexts(taskLike = {}) {
-				const texts = [
-					taskLike.title,
-					taskLike.description,
-					taskLike.prompt,
-				];
-				return new Set(
-					texts
-						.map((value) => normalizeComparableTaskText(value))
-						.filter(Boolean)
-				);
-			}
-
-			function findExistingQueueTaskIndex(queueTask, taskList = tasks) {
-				const queueTaskId = queueTaskIdOf(queueTask);
-				if (queueTaskId) {
-					const directIndex = taskList.findIndex((task) => queueTaskIdOf(task) === queueTaskId);
-					if (directIndex >= 0) return directIndex;
-				}
-
-				const queueTexts = queueTaskComparableTexts(queueTask);
-				if (queueTexts.size === 0) return -1;
-				return taskList.findIndex((task) => {
-					if (isQueueTask(task)) return false;
-					if (!['TODO', 'IN_PROGRESS'].includes(String(task.status || '').toUpperCase())) return false;
-					const taskTexts = kanbanTaskComparableTexts(task);
-					for (const value of taskTexts) {
-						if (queueTexts.has(value)) return true;
-					}
-					return false;
-				});
-			}
-
-			function normalizeQueueTask(queueTask = {}, existingTask = null) {
-				const queueTaskId = queueTaskIdOf(queueTask);
-				if (!queueTaskId) return null;
-				const status = String(queueTask.status || existingTask?.originalStatus || 'draft').toLowerCase();
-				const existingLogs = String(existingTask?.logs || '').trim();
-				const resultText = String(queueTask.result || queueTask.errorMessage || '').trim();
-				const logs = existingLogs && resultText && !existingLogs.includes(resultText)
-					? `${existingLogs}\n${resultText}`
-					: existingLogs || resultText;
-				return {
-					id: existingTask?.id || kanbanTaskIdForQueue(queueTaskId),
-					queueTaskId,
-					title: inferQueueTaskTitle(queueTask),
-					description: queueTask.enrichedPrompt || queueTask.rawPrompt || existingTask?.description || '',
-					status: mapTaskStatus(status),
-					originalStatus: status,
-					order: Number.isFinite(existingTask?.order) ? existingTask.order : tasks.length,
-					files: Array.isArray(queueTask.impactedFiles) ? queueTask.impactedFiles : (existingTask?.files || []),
-					action: existingTask?.action || '',
-					verify: existingTask?.verify || '',
-					done: existingTask?.done || '',
-					dependencies: Array.isArray(queueTask.dependencies) ? queueTask.dependencies : (existingTask?.dependencies || []),
-					inferredDependencies: Array.isArray(queueTask.inferredDependencies) ? queueTask.inferredDependencies : (existingTask?.inferredDependencies || []),
-					dependencyState: queueTask.dependencyState || existingTask?.dependencyState || 'pending',
-					blockedBy: Array.isArray(queueTask.blockedBy) ? queueTask.blockedBy : (existingTask?.blockedBy || []),
-					origin: 'queue',
-					launchMode: queueTask.launchMode || existingTask?.launchMode || 'queued',
-					resumable: queueTask.resumable !== false,
-					resumeCount: Number(queueTask.resumeCount || existingTask?.resumeCount || 0),
-					startedAt: queueTask.startedAt || existingTask?.startedAt || null,
-					projectPath: queueTask.projectPath || existingTask?.projectPath || null,
-					schedulerSource: 'queue',
-					prompt: queueTask.enrichedPrompt || queueTask.rawPrompt || existingTask?.prompt || null,
-					logs,
-					complexity: queueTask.complexity || existingTask?.complexity || null,
-					countdownRemaining: status === 'draft'
-						? (typeof queueTask.countdownRemaining === 'number'
-							? queueTask.countdownRemaining
-							: existingTask?.countdownRemaining)
-						: undefined,
-				};
-			}
-
-			function upsertQueueTask(queueTask) {
-				const queueTaskId = queueTaskIdOf(queueTask);
-				if (!queueTaskId || dismissedQueueTaskIds.has(queueTaskId)) return null;
-				const existingIndex = findExistingQueueTaskIndex(queueTask, tasks);
-				const normalized = normalizeQueueTask(queueTask, existingIndex >= 0 ? tasks[existingIndex] : null);
-				if (!normalized) return null;
-				if (existingIndex >= 0) tasks[existingIndex] = normalized;
-				else tasks.push(normalized);
-				return normalized;
-			}
-
-			function removeQueueTask(queueTaskId, { dismiss = false } = {}) {
-				const normalizedId = String(queueTaskId || '').trim();
-				if (!normalizedId) return;
-				if (dismiss) {
-					dismissedQueueTaskIds.add(normalizedId);
-					persistDismissedQueueTaskIds();
-				}
-				tasks = tasks.filter((task) => queueTaskIdOf(task) !== normalizedId);
-			}
-
-			function mergeQueueTasks(fileTasks, liveQueueTasks = []) {
-				const merged = [...fileTasks];
-				liveQueueTasks.forEach((task) => {
-					if (!isQueueTask(task)) return;
-					const queueTaskId = queueTaskIdOf(task);
-					if (!queueTaskId || dismissedQueueTaskIds.has(queueTaskId)) return;
-					const existingIndex = findExistingQueueTaskIndex(task, merged);
-					const normalized = normalizeQueueTask(task, existingIndex >= 0 ? merged[existingIndex] : null);
-					if (!normalized) return;
-					if (existingIndex >= 0) merged[existingIndex] = normalized;
-					else merged.push(normalized);
-				});
-				return merged;
-			}
-
-			async function hydrateQueueTasks() {
-				try {
-					const result = await window.electronAPI?.tqGetAll();
-					if (!result?.ok || !Array.isArray(result.value)) return;
-					let changed = false;
-					result.value.forEach((queueTask) => {
-						const queueTaskId = queueTaskIdOf(queueTask);
-						const status = String(queueTask.status || '').toLowerCase();
-						if (!queueTaskId) return;
-						if (status === 'cancelled') {
-							const before = tasks.length;
-							removeQueueTask(queueTaskId);
-							if (tasks.length !== before) changed = true;
-							return;
-						}
-						const before = JSON.stringify(tasks.find((task) => queueTaskIdOf(task) === queueTaskId) || null);
-						const normalized = upsertQueueTask(queueTask);
-						if (JSON.stringify(normalized || null) !== before) changed = true;
-					});
-					if (changed) {
-						renderTasks();
-						saveTasksToFile();
-					}
-				} catch (err) {
-					console.warn('[Kanban] Failed to hydrate queue tasks:', err.message);
-				}
-			}
-
-		// Debounced reload to prevent rapid successive reloads
-		function scheduleReload() {
-			if (reloadTimeout) clearTimeout(reloadTimeout);
-			reloadTimeout = setTimeout(() => {
-				loadTasksFromFile().then(() => hydrateQueueTasks());
-				reloadTimeout = null;
-			}, 500);
 		}
 
-		// Debounced render to prevent excessive DOM updates
-		function scheduleRender() {
-			if (renderTimeout) clearTimeout(renderTimeout);
-			renderTimeout = setTimeout(() => {
-				renderTasks();
-				renderTimeout = null;
-			}, 50);
-		}
-
-		// Calculate and apply window size based on visible columns and task count
-		let resizeTimeout = null;
-		function updateWindowSize() {
-			if (resizeTimeout) clearTimeout(resizeTimeout);
-			resizeTimeout = setTimeout(() => {
-				const totalTasks = tasks.length;
-
-				// Hide window when no tasks
-				if (totalTasks === 0) {
-					window.electronAPI?.kanbanSetVisible(false).catch(() => {});
-					return;
-				}
-				window.electronAPI?.kanbanSetVisible(true).catch(() => {});
-
-				const progressCol = document.querySelector('.col-progress');
-				const doneCol = document.querySelector('.col-done');
-
-				const hasWip = !progressCol.classList.contains('hidden');
-				const hasDone = !doneCol.classList.contains('hidden');
-
-				// Width calculation
-				let width;
-				if (!hasWip && !hasDone) {
-					width = 320 + 12 + 6;
-				} else {
-					width = 240 + 12 + 6;
-					if (hasWip) width += 240 + 6;
-					if (hasDone) width += 240;
-				}
-
-				// Height: header(38) + column-header(30) + tasks(35 each, 140 with logs) + input(30) + padding(24)
-				const wipCount = countByStatus('IN_PROGRESS');
-				// All IN_PROGRESS tasks now show a log element (even if empty, placeholder is shown)
-				const wipWithLogs = wipCount;
-				const maxPerColumn = Math.max(
-					countByStatus('TODO'),
-					hasWip ? wipCount : 0,
-					hasDone ? countByStatus('DONE') : 0
+		function persistDismissedQueueTaskIds() {
+			try {
+				window.localStorage.setItem(
+					'kanban.dismissedQueueTaskIds',
+					JSON.stringify(Array.from(dismissedQueueTaskIds))
 				);
-				const logsExtra = wipWithLogs * 110; // extra height for logs sections
-				const height = Math.min(38 + 30 + maxPerColumn * 35 + logsExtra + 30 + 24, 700);
-
-				window.electronAPI?.kanbanResize(width, height).catch(err => {
-					console.warn('[Kanban] Resize failed:', err.message);
-				});
-			}, 300);
+			} catch (err) {
+				console.warn('[Kanban] Failed to persist dismissed queue tasks:', err.message);
+			}
 		}
 
-		// Map task.status to kanban column status
+		function queueTaskIdOf(taskLike) {
+			return String(taskLike?.queueTaskId || taskLike?._id || taskLike?.taskId || '').trim();
+		}
+
+		function kanbanTaskIdForQueue(queueTaskId) {
+			return `queue-${queueTaskId}`;
+		}
+
+		function isQueueTask(task) {
+			return task?.origin === 'queue' || Boolean(task?.queueTaskId);
+		}
+
+		function inferQueueTaskTitle(queueTask = {}) {
+			const raw = String(
+				queueTask.title
+				|| queueTask.rawPrompt
+				|| queueTask.enrichedPrompt
+				|| queueTask.prompt
+				|| 'Queued task'
+			).trim();
+			return raw.split('\n')[0].slice(0, 140) || 'Queued task';
+		}
+
 		function mapTaskStatus(status) {
 			if (!status) return 'TODO';
 			switch (String(status).toUpperCase()) {
@@ -737,7 +504,6 @@
 			}
 		}
 
-		// Reverse map: kanban status back to ship status
 		function mapStatusToOriginal(status, originalStatus) {
 			if (status === 'TODO') {
 				const raw = String(originalStatus || '').toLowerCase();
@@ -752,16 +518,16 @@
 			return 'queued';
 		}
 
-			function getStatusBadge(task) {
-				const raw = String(task.originalStatus || task.status || '').toLowerCase();
-				switch (raw) {
-					case 'queued':
-					case 'pending':
-						return 'queued';
-					case 'draft':
-						return typeof task.countdownRemaining === 'number'
-							? `draft ${task.countdownRemaining}s`
-							: 'draft';
+		function getStatusBadge(task) {
+			const raw = String(task.originalStatus || task.status || '').toLowerCase();
+			switch (raw) {
+				case 'queued':
+				case 'pending':
+					return 'queued';
+				case 'draft':
+					return typeof task.countdownRemaining === 'number'
+						? `draft ${task.countdownRemaining}s`
+						: 'draft';
 				case 'blocked':
 					return 'blocked';
 				case 'resuming':
@@ -781,116 +547,314 @@
 			}
 		}
 
-			// Load tasks from tasks.json via IPC
-			async function loadTasksFromFile() {
-				try {
-					const loaded = await window.electronAPI?.loadKanbanTasks() || [];
-					const prevQueueTasks = tasks.filter((task) => isQueueTask(task));
-					// Preserve in-memory logs for tasks that are actively streaming
-					// (file-watcher reloads can clobber live-streamed logs that haven't been flushed to disk yet)
-					const prevLogsByTaskId = {};
-					for (const t of tasks) {
-						if (activelyStreamingTasks.has(t.id) && t.logs) {
-							prevLogsByTaskId[t.id] = t.logs;
-						}
-					}
+		function normalizeLoadedTask(task, idx, prevLogsByTaskId) {
+			const id = task.id || `task-${idx + 1}`;
+			const diskLogs = task.logs || '';
+			const preservedLogs = prevLogsByTaskId[id];
+			const finalLogs = preservedLogs && preservedLogs.length > diskLogs.length
+				? preservedLogs
+				: diskLogs;
 
-					// Expire old entries from recentlyCompletedTasks (older than 10 seconds)
-					const now = Date.now();
-					for (const [tid, info] of recentlyCompletedTasks) {
-						if (now - info.timestamp > 10000) recentlyCompletedTasks.delete(tid);
-					}
-
-					const fileTasks = Array.isArray(loaded) ? loaded.map((task, idx) => {
-						const id = task.id || `task-${idx + 1}`;
-						const diskLogs = task.logs || '';
-						const preservedLogs = prevLogsByTaskId[id];
-						const finalLogs = preservedLogs && preservedLogs.length > diskLogs.length
-							? preservedLogs
-							: diskLogs;
-
-						let finalStatus = mapTaskStatus(task.status);
-						const recentCompletion = recentlyCompletedTasks.get(id);
-						if (recentCompletion && finalStatus === 'IN_PROGRESS') {
-							finalStatus = recentCompletion.status;
-							console.log(`[Kanban] Preserving recently-completed status for ${id}: ${finalStatus} (disk says IN_PROGRESS)`);
-						}
-
-						return {
-							id,
-							queueTaskId: task.queueTaskId || null,
-							title: task.title || 'Untitled',
-							description: task.description || '',
-							status: finalStatus,
-							originalStatus: task.status,
-							order: task.order || idx,
-							files: task.files || [],
-							action: task.action || '',
-							verify: task.verify || '',
-							done: task.done || '',
-							dependencies: task.dependencies || task.dependsOn || [],
-							inferredDependencies: task.inferredDependencies || [],
-							dependencyState: task.dependencyState || 'ready',
-							blockedBy: task.blockedBy || [],
-							origin: task.origin || 'kanban',
-							launchMode: task.launchMode || 'manual',
-							resumable: task.resumable !== false,
-							resumeCount: Number(task.resumeCount || 0),
-							startedAt: task.startedAt || null,
-							projectPath: task.projectPath || null,
-							schedulerSource: task.schedulerSource || 'tasks.json',
-							prompt: task.prompt || null,
-							logs: finalLogs,
-							complexity: task.complexity || null,
-							countdownRemaining: typeof task.countdownRemaining === 'number' ? task.countdownRemaining : undefined,
-						};
-					}) : [];
-
-					tasks = mergeQueueTasks(fileTasks, prevQueueTasks);
-
-					const maxId = Math.max(...tasks.map(t => {
-						const match = String(t.id || '').match(/task-(\d+)/);
-						return match ? Number.parseInt(match[1]) : 0;
-					}), 0);
-					taskIdCounter = maxId + 1;
-					console.log('[Kanban] Loaded', tasks.length, 'tasks:', tasks.map(t => `${t.id}(${t.status})`).join(', '));
-				} catch (err) {
-					console.error('[Kanban] Error loading tasks:', err);
-				}
-				renderTasks();
+			let finalStatus = mapTaskStatus(task.status);
+			const recentCompletion = recentlyCompletedTasks.get(id);
+			if (recentCompletion && finalStatus === 'IN_PROGRESS') {
+				finalStatus = recentCompletion.status;
+				console.log(`[Kanban] Preserving recently-completed status for ${id}: ${finalStatus} (disk says IN_PROGRESS)`);
 			}
 
-		// Save tasks back to tasks.json
+			return {
+				id,
+				queueTaskId: task.queueTaskId || null,
+				title: task.title || 'Untitled',
+				description: task.description || '',
+				status: finalStatus,
+				originalStatus: task.status,
+				order: Number.isFinite(task.order) ? task.order : idx,
+				files: task.files || [],
+				action: task.action || '',
+				verify: task.verify || '',
+				done: task.done || '',
+				dependencies: task.dependencies || task.dependsOn || [],
+				inferredDependencies: task.inferredDependencies || [],
+				dependencyState: task.dependencyState || 'ready',
+				blockedBy: task.blockedBy || [],
+				origin: task.origin || 'kanban',
+				launchMode: task.launchMode || 'manual',
+				resumable: task.resumable !== false,
+				resumeCount: Number(task.resumeCount || 0),
+				startedAt: task.startedAt || null,
+				projectPath: task.projectPath || null,
+				schedulerSource: task.schedulerSource || 'tasks.json',
+				prompt: task.prompt || null,
+				logs: finalLogs,
+				complexity: task.complexity || null,
+				countdownRemaining: typeof task.countdownRemaining === 'number' ? task.countdownRemaining : undefined,
+			};
+		}
+
+		function normalizeQueueTask(queueTask = {}, existingTask = null) {
+			const queueTaskId = queueTaskIdOf(queueTask);
+			if (!queueTaskId) return null;
+			const status = String(queueTask.status || existingTask?.originalStatus || 'draft').toLowerCase();
+			const existingLogs = String(existingTask?.logs || '').trim();
+			const resultText = String(queueTask.result || queueTask.errorMessage || '').trim();
+			const logs = existingLogs && resultText && !existingLogs.includes(resultText)
+				? `${existingLogs}\n${resultText}`
+				: existingLogs || resultText;
+			return {
+				id: existingTask?.id || kanbanTaskIdForQueue(queueTaskId),
+				queueTaskId,
+				title: inferQueueTaskTitle(queueTask),
+				description: queueTask.enrichedPrompt || queueTask.rawPrompt || existingTask?.description || '',
+				status: mapTaskStatus(status),
+				originalStatus: status,
+				order: Number.isFinite(existingTask?.order) ? existingTask.order : tasks.length,
+				files: Array.isArray(queueTask.impactedFiles) ? queueTask.impactedFiles : (existingTask?.files || []),
+				action: existingTask?.action || '',
+				verify: existingTask?.verify || '',
+				done: existingTask?.done || '',
+				dependencies: Array.isArray(queueTask.dependencies) ? queueTask.dependencies : (existingTask?.dependencies || []),
+				inferredDependencies: Array.isArray(queueTask.inferredDependencies) ? queueTask.inferredDependencies : (existingTask?.inferredDependencies || []),
+				dependencyState: queueTask.dependencyState || existingTask?.dependencyState || 'pending',
+				blockedBy: Array.isArray(queueTask.blockedBy) ? queueTask.blockedBy : (existingTask?.blockedBy || []),
+				origin: 'queue',
+				launchMode: queueTask.launchMode || existingTask?.launchMode || 'queued',
+				resumable: queueTask.resumable !== false,
+				resumeCount: Number(queueTask.resumeCount || existingTask?.resumeCount || 0),
+				startedAt: queueTask.startedAt || existingTask?.startedAt || null,
+				projectPath: queueTask.projectPath || existingTask?.projectPath || null,
+				schedulerSource: 'queue',
+				prompt: queueTask.enrichedPrompt || queueTask.rawPrompt || existingTask?.prompt || null,
+				logs,
+				complexity: queueTask.complexity || existingTask?.complexity || null,
+				countdownRemaining: status === 'draft'
+					? (typeof queueTask.countdownRemaining === 'number'
+						? queueTask.countdownRemaining
+						: existingTask?.countdownRemaining)
+					: undefined,
+			};
+		}
+
+		function normalizeComparableTaskText(value) {
+			return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+		}
+
+		function queueTaskComparableTexts(taskLike = {}) {
+			return new Set(
+				[
+					taskLike.title,
+					taskLike.rawPrompt,
+					taskLike.enrichedPrompt,
+					taskLike.prompt,
+					inferQueueTaskTitle(taskLike),
+				]
+					.map((value) => normalizeComparableTaskText(value))
+					.filter(Boolean)
+			);
+		}
+
+		function kanbanTaskComparableTexts(taskLike = {}) {
+			return new Set(
+				[
+					taskLike.title,
+					taskLike.description,
+					taskLike.prompt,
+				]
+					.map((value) => normalizeComparableTaskText(value))
+					.filter(Boolean)
+			);
+		}
+
+		function findExistingQueueTaskIndex(queueTask, taskList = tasks) {
+			const queueTaskId = queueTaskIdOf(queueTask);
+			if (queueTaskId) {
+				const directIndex = taskList.findIndex((task) => queueTaskIdOf(task) === queueTaskId);
+				if (directIndex >= 0) return directIndex;
+			}
+
+			const queueTexts = queueTaskComparableTexts(queueTask);
+			if (queueTexts.size === 0) return -1;
+			return taskList.findIndex((task) => {
+				if (isQueueTask(task)) return false;
+				if (String(task.origin || '').toLowerCase() === 'self_fix') return false;
+				if (!['TODO', 'IN_PROGRESS'].includes(String(task.status || '').toUpperCase())) return false;
+				for (const value of kanbanTaskComparableTexts(task)) {
+					if (queueTexts.has(value)) return true;
+				}
+				return false;
+			});
+		}
+
+		function upsertQueueTask(queueTask) {
+			const queueTaskId = queueTaskIdOf(queueTask);
+			if (!queueTaskId || dismissedQueueTaskIds.has(queueTaskId)) return null;
+			const existingIndex = findExistingQueueTaskIndex(queueTask, tasks);
+			const normalized = normalizeQueueTask(queueTask, existingIndex >= 0 ? tasks[existingIndex] : null);
+			if (!normalized) return null;
+			if (existingIndex >= 0) tasks[existingIndex] = normalized;
+			else tasks.push(normalized);
+			return normalized;
+		}
+
+		function removeQueueTask(queueTaskId, { dismiss = false } = {}) {
+			const normalizedId = String(queueTaskId || '').trim();
+			if (!normalizedId) return;
+			if (dismiss) {
+				dismissedQueueTaskIds.add(normalizedId);
+				persistDismissedQueueTaskIds();
+			}
+			tasks = tasks.filter((task) => queueTaskIdOf(task) !== normalizedId);
+		}
+
+		function scheduleReload() {
+			if (reloadTimeout) clearTimeout(reloadTimeout);
+			reloadTimeout = setTimeout(async () => {
+				await loadTasksFromFile();
+				await hydrateQueueTasks();
+				reloadTimeout = null;
+			}, 500);
+		}
+
+		function scheduleRender() {
+			if (renderTimeout) clearTimeout(renderTimeout);
+			renderTimeout = setTimeout(() => {
+				renderTasks();
+				renderTimeout = null;
+			}, 50);
+		}
+
+		let resizeTimeout = null;
+		function updateWindowSize() {
+			if (resizeTimeout) clearTimeout(resizeTimeout);
+			resizeTimeout = setTimeout(() => {
+				const totalTasks = tasks.length;
+				if (totalTasks === 0) {
+					window.electronAPI?.kanbanSetVisible(false).catch(() => {});
+					return;
+				}
+				window.electronAPI?.kanbanSetVisible(true).catch(() => {});
+
+				const progressCol = document.querySelector('.col-progress');
+				const doneCol = document.querySelector('.col-done');
+				const hasWip = !progressCol.classList.contains('hidden');
+				const hasDone = !doneCol.classList.contains('hidden');
+
+				let width;
+				if (!hasWip && !hasDone) {
+					width = 320 + 12 + 6;
+				} else {
+					width = 240 + 12 + 6;
+					if (hasWip) width += 240 + 6;
+					if (hasDone) width += 240;
+				}
+
+				const wipCount = countByStatus('IN_PROGRESS');
+				const maxPerColumn = Math.max(
+					countByStatus('TODO'),
+					hasWip ? wipCount : 0,
+					hasDone ? countByStatus('DONE') : 0
+				);
+				const logsExtra = wipCount * 110;
+				const height = Math.min(38 + 30 + maxPerColumn * 35 + logsExtra + 30 + 24, 700);
+
+				window.electronAPI?.kanbanResize(width, height).catch((err) => {
+					console.warn('[Kanban] Resize failed:', err.message);
+				});
+			}, 300);
+		}
+
+		async function loadTasksFromFile() {
+			const prevLogsByTaskId = {};
+			for (const task of tasks) {
+				if (activelyStreamingTasks.has(task.id) && task.logs) {
+					prevLogsByTaskId[task.id] = task.logs;
+				}
+			}
+
+			const now = Date.now();
+			for (const [taskId, info] of recentlyCompletedTasks) {
+				if (now - info.timestamp > 10000) recentlyCompletedTasks.delete(taskId);
+			}
+
+			try {
+				const loaded = await window.electronAPI?.loadKanbanTasks() || [];
+				console.log(`[Kanban] loadKanbanTasks returned ${Array.isArray(loaded) ? loaded.length : 0} task(s)`);
+				const fileTasks = Array.isArray(loaded)
+					? loaded.map((task, idx) => normalizeLoadedTask(task, idx, prevLogsByTaskId))
+					: [];
+				console.log('[Kanban] File-backed normalized statuses:', fileTasks.map((task) => `${task.id}:${task.status}/${task.originalStatus}`).join(', ') || '(none)');
+				tasks = fileTasks;
+				const maxId = Math.max(...tasks.map((task) => {
+					const match = String(task.id || '').match(/task-(\d+)/);
+					return match ? Number.parseInt(match[1], 10) : 0;
+				}), 0);
+				taskIdCounter = maxId + 1;
+				console.log(`[Kanban] File-backed tasks applied: ${tasks.length}`);
+			} catch (err) {
+				console.error('[Kanban] Error loading tasks:', err);
+				tasks = [];
+			}
+
+			renderTasks();
+		}
+
+		async function hydrateQueueTasks() {
+			try {
+				const result = await window.electronAPI?.tqGetAll();
+				if (!result?.ok || !Array.isArray(result.value)) return;
+				const beforeCount = tasks.length;
+				let changed = false;
+				result.value.forEach((queueTask) => {
+					const queueTaskId = queueTaskIdOf(queueTask);
+					const status = String(queueTask.status || '').toLowerCase();
+					if (!queueTaskId) return;
+					if (status === 'cancelled') {
+						const countBeforeRemoval = tasks.length;
+						removeQueueTask(queueTaskId);
+						if (tasks.length !== countBeforeRemoval) changed = true;
+						return;
+					}
+					if (upsertQueueTask(queueTask)) changed = true;
+				});
+				if (changed) {
+					console.log(`[Kanban] Queue hydration adjusted task count: ${beforeCount} -> ${tasks.length}`);
+					renderTasks();
+					saveTasksToFile();
+				}
+			} catch (err) {
+				console.warn('[Kanban] Failed to hydrate queue tasks:', err.message);
+			}
+		}
+
 		async function saveTasksToFile() {
 			try {
-				const toSave = tasks.map(t => ({
-					id: t.id,
-					title: t.title,
-					description: t.description,
-					status: mapStatusToOriginal(t.status, t.originalStatus),
-					order: t.order,
-					files: t.files,
-					action: t.action,
-					verify: t.verify,
-					done: t.done,
-					dependencies: t.dependencies || [],
-					inferredDependencies: t.inferredDependencies || [],
-					dependencyState: t.dependencyState || 'ready',
-					blockedBy: t.blockedBy || [],
-					origin: t.origin || 'kanban',
-					queueTaskId: t.queueTaskId || null,
-					launchMode: t.launchMode || 'manual',
-					resumable: t.resumable !== false,
-					resumeCount: t.resumeCount || 0,
-					startedAt: t.startedAt || null,
-					projectPath: t.projectPath || null,
-					schedulerSource: t.schedulerSource || 'tasks.json',
-					prompt: t.prompt || null,
-					logs: t.logs || '',
-					complexity: t.complexity || null,
-					countdownRemaining: typeof t.countdownRemaining === 'number' ? t.countdownRemaining : undefined
+				const toSave = tasks.map((task) => ({
+					id: task.id,
+					title: task.title,
+					description: task.description,
+					status: mapStatusToOriginal(task.status, task.originalStatus),
+					order: task.order,
+					files: task.files,
+					action: task.action,
+					verify: task.verify,
+					done: task.done,
+					dependencies: task.dependencies || [],
+					inferredDependencies: task.inferredDependencies || [],
+					dependencyState: task.dependencyState || 'ready',
+					blockedBy: task.blockedBy || [],
+					origin: task.origin || 'kanban',
+					queueTaskId: task.queueTaskId || null,
+					launchMode: task.launchMode || 'manual',
+					resumable: task.resumable !== false,
+					resumeCount: task.resumeCount || 0,
+					startedAt: task.startedAt || null,
+					projectPath: task.projectPath || null,
+					schedulerSource: task.schedulerSource || 'tasks.json',
+					prompt: task.prompt || null,
+					logs: task.logs || '',
+					complexity: task.complexity || null,
+					countdownRemaining: typeof task.countdownRemaining === 'number' ? task.countdownRemaining : undefined,
 				}));
-				
 				const result = await window.electronAPI?.saveKanbanTasks(toSave);
 				if (result?.ok) {
 					console.log('[Kanban] Tasks saved to tasks.json');
@@ -903,91 +867,93 @@
 		}
 
 		function countByStatus(status) {
-			return tasks.filter(t => t.status === status).length;
+			return tasks.filter((task) => task.status === status).length;
 		}
 
 		function updateCounts() {
-			document.getElementById('todo-count').textContent = countByStatus('TODO');
-			document.getElementById('progress-count').textContent = countByStatus('IN_PROGRESS');
-			document.getElementById('done-count').textContent = countByStatus('DONE');
-			
-			// Show/hide columns based on task counts
-			const wipCount = countByStatus('IN_PROGRESS');
-			const doneCount = countByStatus('DONE');
+			document.getElementById('todo-count').textContent = String(countByStatus('TODO'));
+			document.getElementById('progress-count').textContent = String(countByStatus('IN_PROGRESS'));
+			document.getElementById('done-count').textContent = String(countByStatus('DONE'));
+
 			const progressCol = document.querySelector('.col-progress');
 			const doneCol = document.querySelector('.col-done');
-			
-			// Only show WIP and DONE columns if they have tasks
-			if (wipCount === 0) {
-				progressCol.classList.add('hidden');
-			} else {
-				progressCol.classList.remove('hidden');
-			}
-			
-			if (doneCount === 0) {
-				doneCol.classList.add('hidden');
-			} else {
-				doneCol.classList.remove('hidden');
-			}
-			
-			// Trigger window resize animation
+			const wipCount = countByStatus('IN_PROGRESS');
+			const doneCount = countByStatus('DONE');
+
+			progressCol.classList.toggle('hidden', wipCount === 0);
+			doneCol.classList.toggle('hidden', doneCount === 0);
 			updateWindowSize();
-			
-			// Attach clean button handler for DONE column
+
 			const cleanDoneBtn = document.getElementById('clean-done-btn');
-				if (cleanDoneBtn && !cleanDoneBtn.dataset.attached) {
-					cleanDoneBtn.dataset.attached = 'true';
-					cleanDoneBtn.onclick = (e) => {
-						e.stopPropagation();
-						const doneTasks = tasks.filter(t => t.status === 'DONE');
-						if (doneTasks.length === 0) {
-							alert('No done tasks to clean.');
-							return;
-						}
-						doneTasks
-							.filter((task) => isQueueTask(task))
-							.forEach((task) => dismissedQueueTaskIds.add(task.queueTaskId));
-						persistDismissedQueueTaskIds();
-						tasks = tasks.filter(t => t.status !== 'DONE');
-						renderTasks();
-						saveTasksToFile();
-						console.log(`[Kanban] Cleaned ${doneTasks.length} done tasks`);
-					};
+			if (cleanDoneBtn && !cleanDoneBtn.dataset.attached) {
+				cleanDoneBtn.dataset.attached = 'true';
+				cleanDoneBtn.onclick = (e) => {
+					e.stopPropagation();
+					const doneTasks = tasks.filter((task) => task.status === 'DONE');
+					if (doneTasks.length === 0) {
+						alert('No done tasks to clean.');
+						return;
+					}
+					doneTasks
+						.filter((task) => isQueueTask(task))
+						.forEach((task) => dismissedQueueTaskIds.add(task.queueTaskId));
+					persistDismissedQueueTaskIds();
+					tasks = tasks.filter((task) => task.status !== 'DONE');
+					renderTasks();
+					saveTasksToFile();
+					console.log(`[Kanban] Cleaned ${doneTasks.length} done tasks`);
+				};
 			}
 		}
 
 		function renderTasks() {
+			console.log(`[Kanban] renderTasks with ${tasks.length} task(s)`);
 			const columns = {
 				TODO: document.getElementById('todo-tasks'),
 				IN_PROGRESS: document.getElementById('in-progress-tasks'),
-				DONE: document.getElementById('done-tasks')
+				DONE: document.getElementById('done-tasks'),
 			};
 
-			Object.values(columns).forEach(col => col.innerHTML = '');
+			Object.values(columns).forEach((column) => {
+				column.innerHTML = '';
+			});
 
 			const byStatus = { TODO: [], IN_PROGRESS: [], DONE: [] };
-			tasks.forEach(task => byStatus[task.status].push(task));
+			tasks.forEach((task) => {
+				if (byStatus[task.status]) byStatus[task.status].push(task);
+			});
+			console.log('[Kanban] renderTasks grouped counts:', JSON.stringify({
+				TODO: byStatus.TODO.length,
+				IN_PROGRESS: byStatus.IN_PROGRESS.length,
+				DONE: byStatus.DONE.length,
+			}));
 
 			Object.entries(byStatus).forEach(([status, statusTasks]) => {
 				const container = columns[status];
-
 				if (statusTasks.length === 0) {
 					const empty = document.createElement('div');
 					empty.className = 'empty-state';
-					empty.textContent = status === 'TODO' ? 'No tasks yet' : status === 'IN_PROGRESS' ? 'Nothing in progress' : 'Nothing completed';
+					empty.textContent = status === 'TODO'
+						? 'No tasks yet'
+						: status === 'IN_PROGRESS'
+							? 'Nothing in progress'
+							: 'Nothing completed';
 					container.appendChild(empty);
 					return;
 				}
 
-				statusTasks.forEach(task => {
+				statusTasks.forEach((task) => {
 					const taskEl = document.createElement('div');
 					taskEl.className = 'task' + (task.status === 'DONE' ? ' task-done' : '');
-						taskEl.draggable = !isQueueTask(task);
+					taskEl.draggable = !isQueueTask(task);
 					taskEl.dataset.taskId = task.id;
 					taskEl.title = task.description;
 
-					// Drag events
 					taskEl.addEventListener('dragstart', (e) => {
+						if (isQueueTask(task)) {
+							e.preventDefault();
+							return;
+						}
 						draggedTask = task;
 						taskEl.classList.add('dragging');
 						e.dataTransfer.effectAllowed = 'move';
@@ -996,21 +962,21 @@
 					taskEl.addEventListener('dragend', () => {
 						taskEl.classList.remove('dragging');
 						draggedTask = null;
-						document.querySelectorAll('.column').forEach(c => c.classList.remove('drag-over'));
+						document.querySelectorAll('.column').forEach((column) => column.classList.remove('drag-over'));
 					});
 
-					const titleEl = document.createElement('div');
-					titleEl.className = 'title';
-					titleEl.textContent = task.title;
 					const statusEl = document.createElement('div');
 					statusEl.className = 'task-status';
 					statusEl.textContent = getStatusBadge(task);
 
+					const titleEl = document.createElement('div');
+					titleEl.className = 'title';
+					titleEl.textContent = task.title;
+
 					const actionsEl = document.createElement('div');
 					actionsEl.className = 'task-actions';
 
-						if (task.status === 'TODO' && !isQueueTask(task)) {
-						// "▶ Run" — executes task autonomously via Claude Code SDK
+					if (task.status === 'TODO' && !isQueueTask(task)) {
 						const runBtn = document.createElement('button');
 						runBtn.textContent = '▶ Run';
 						runBtn.className = 'run-btn';
@@ -1027,7 +993,6 @@
 							saveTasksToFile();
 							try {
 								await window.electronAPI?.kanbanRunTask(task.id);
-								// Don't reload immediately — stream handler will update state live
 								syncTasksToConvex();
 							} catch (err) {
 								sdkRunningTasks.delete(task.id);
@@ -1038,7 +1003,6 @@
 						};
 						actionsEl.appendChild(runBtn);
 
-						// "▷ Start" — manually move to IN_PROGRESS (user works on it themselves)
 						const startBtn = document.createElement('button');
 						startBtn.textContent = '▷ Start';
 						startBtn.className = 'start-btn';
@@ -1055,7 +1019,6 @@
 					} else if (task.status === 'IN_PROGRESS' && !isQueueTask(task)) {
 						const isRunningSDK = sdkRunningTasks.has(task.id);
 						if (isRunningSDK) {
-							// SDK is actively running — show pulsing indicator
 							const indicator = document.createElement('button');
 							indicator.innerHTML = '<span class="spinning">⚙</span> Running';
 							indicator.className = 'run-btn loading-indicator';
@@ -1064,7 +1027,6 @@
 							actionsEl.appendChild(indicator);
 						}
 
-						// "✓ Done" — mark task as complete (always visible for IN_PROGRESS)
 						const finishBtn = document.createElement('button');
 						finishBtn.textContent = '✓ Done';
 						finishBtn.className = 'finish-btn';
@@ -1081,41 +1043,39 @@
 						actionsEl.appendChild(finishBtn);
 					}
 
-					// Delete button — for all tasks
 					const delBtn = document.createElement('button');
 					delBtn.innerHTML = '&times;';
 					delBtn.className = 'delete-btn';
-						delBtn.title = isQueueTask(task)
-							? (task.status === 'DONE' ? 'Hide task' : 'Cancel task')
-							: 'Delete task';
-						delBtn.onclick = async () => {
-							sdkRunningTasks.delete(task.id);
-							activelyStreamingTasks.delete(task.id);
-							if (isQueueTask(task)) {
-								if (task.status === 'DONE') {
-									removeQueueTask(task.queueTaskId, { dismiss: true });
-								} else {
-									const result = await window.electronAPI?.tqCancelTask(task.queueTaskId);
-									if (!result?.ok) {
-										alert(`Failed to cancel task: ${result?.error || 'Unknown error'}`);
-										return;
-									}
-									removeQueueTask(task.queueTaskId);
-								}
+					delBtn.title = isQueueTask(task)
+						? (task.status === 'DONE' ? 'Hide task' : 'Cancel task')
+						: 'Delete task';
+					delBtn.onclick = async () => {
+						sdkRunningTasks.delete(task.id);
+						activelyStreamingTasks.delete(task.id);
+						if (isQueueTask(task)) {
+							if (task.status === 'DONE') {
+								removeQueueTask(task.queueTaskId, { dismiss: true });
 							} else {
-								tasks = tasks.filter(t => t.id !== task.id);
+								const result = await window.electronAPI?.tqCancelTask(task.queueTaskId);
+								if (!result?.ok) {
+									alert(`Failed to cancel task: ${result?.error || 'Unknown error'}`);
+									return;
+								}
+								removeQueueTask(task.queueTaskId);
 							}
-							renderTasks();
-							saveTasksToFile();
-							syncTasksToConvex();
-						};
+						} else {
+							tasks = tasks.filter((candidate) => candidate.id !== task.id);
+						}
+						renderTasks();
+						saveTasksToFile();
+						syncTasksToConvex();
+					};
 					actionsEl.appendChild(delBtn);
 
 					taskEl.appendChild(statusEl);
 					taskEl.appendChild(titleEl);
 					taskEl.appendChild(actionsEl);
 
-					// Logs display — always show for IN_PROGRESS tasks (with placeholder if empty)
 					if (task.status === 'IN_PROGRESS' || task.logs || task.originalStatus === 'blocked') {
 						const logsEl = document.createElement('div');
 						logsEl.className = 'task-logs';
@@ -1132,9 +1092,10 @@
 							logsEl.style.opacity = '0.3';
 						}
 						taskEl.appendChild(logsEl);
-						// Auto-scroll to bottom for in-progress tasks
 						if (task.status === 'IN_PROGRESS') {
-							requestAnimationFrame(() => { logsEl.scrollTop = logsEl.scrollHeight; });
+							requestAnimationFrame(() => {
+								logsEl.scrollTop = logsEl.scrollHeight;
+							});
 						}
 					}
 
@@ -1145,8 +1106,7 @@
 			updateCounts();
 		}
 
-		// Drag & drop on columns
-		document.querySelectorAll('.column').forEach(col => {
+		document.querySelectorAll('.column').forEach((col) => {
 			col.addEventListener('dragover', (e) => {
 				e.preventDefault();
 				e.dataTransfer.dropEffect = 'move';
@@ -1167,13 +1127,10 @@
 			});
 		});
 
-		// Add task via header button
 		document.getElementById('add-task').onclick = () => {
-			const input = document.getElementById('todo-input');
-			input.focus();
+			document.getElementById('todo-input').focus();
 		};
 
-		// Inline input
 		document.getElementById('todo-input').addEventListener('keydown', (e) => {
 			if (e.key === 'Enter' && e.target.value.trim()) {
 				tasks.push({
@@ -1185,7 +1142,7 @@
 					action: '',
 					verify: '',
 					done: '',
-					logs: ''
+					logs: '',
 				});
 				e.target.value = '';
 				renderTasks();
@@ -1198,10 +1155,9 @@
 			}
 		});
 
-	// Run all
-	document.getElementById('run-all').onclick = async () => {
-		const btnEl = document.getElementById('run-all');
-		const todoTasks = tasks.filter(t => t.status === 'TODO');
+		document.getElementById('run-all').onclick = async () => {
+			const btnEl = document.getElementById('run-all');
+			const todoTasks = tasks.filter(t => t.status === 'TODO');
 		
 		console.log('[RunAll] Button clicked, TODO tasks found:', todoTasks.length);
 		
@@ -1359,27 +1315,26 @@
 			btnEl.disabled = false;
 			clearTimeout(safetyTimeout);
 		}
-	};
+		};
 
-			// Clean up completed tasks
-			document.getElementById('clean-tasks').onclick = async () => {
-				try {
-					const doneQueueTasks = tasks.filter((task) => isQueueTask(task) && task.status === 'DONE');
-					doneQueueTasks.forEach((task) => dismissedQueueTaskIds.add(task.queueTaskId));
-					if (doneQueueTasks.length > 0) {
-						persistDismissedQueueTaskIds();
-						tasks = tasks.filter((task) => !(isQueueTask(task) && task.status === 'DONE'));
+		document.getElementById('clean-tasks').onclick = async () => {
+			try {
+				const doneQueueTasks = tasks.filter((task) => isQueueTask(task) && task.status === 'DONE');
+				doneQueueTasks.forEach((task) => dismissedQueueTaskIds.add(task.queueTaskId));
+				if (doneQueueTasks.length > 0) {
+					persistDismissedQueueTaskIds();
+					tasks = tasks.filter((task) => !(isQueueTask(task) && task.status === 'DONE'));
+				}
+				const result = await window.electronAPI?.kanbanRemoveCompleted();
+				if (result?.ok) {
+					if (result.removed > 0 || doneQueueTasks.length > 0) {
+						console.log(`[Kanban] Cleaned ${result.removed} completed tasks`);
+						await loadTasksFromFile();
+						await hydrateQueueTasks();
+						syncTasksToConvex();
+					} else {
+						alert('No completed tasks to clean.');
 					}
-					const result = await window.electronAPI?.kanbanRemoveCompleted();
-					if (result?.ok) {
-						if (result.removed > 0 || doneQueueTasks.length > 0) {
-							console.log(`[Kanban] Cleaned ${result.removed} completed tasks`);
-							await loadTasksFromFile();
-							await hydrateQueueTasks();
-							syncTasksToConvex();
-						} else {
-							alert('No completed tasks to clean.');
-						}
 				} else {
 					alert(`Error: ${result?.error || 'Unknown error'}`);
 				}
@@ -1388,7 +1343,6 @@
 			}
 		};
 
-		// Sync tasks to Convex (one-way sync)
 		async function syncTasksToConvex() {
 			try {
 				await window.electronAPI?.kanbanSyncToConvex(tasks);
@@ -1479,104 +1433,88 @@
 
 		loadTasksFromFile().then(() => hydrateQueueTasks());
 
-		// Listen for tasks.json updates from file watcher
-			if (window.electronAPI) {
-				window.electronAPI.onKanbanTasksUpdated(() => {
-				// Skip file-watcher reloads while SDK is actively streaming
+		if (window.electronAPI) {
+			window.electronAPI.onKanbanTasksUpdated(() => {
 				if (activelyStreamingTasks.size > 0) return;
-					console.log('[Kanban] Detected tasks.json change, scheduling reload...');
-					scheduleReload();
-				});
+				console.log('[Kanban] Detected tasks.json change, scheduling reload...');
+				scheduleReload();
+			});
 
-				window.electronAPI.onTqTaskUpdate((data) => {
-					const queueTaskId = queueTaskIdOf(data);
-					if (!queueTaskId) return;
-					if (String(data.status || '').toLowerCase() === 'cancelled') {
-						removeQueueTask(queueTaskId);
-						renderTasks();
-						saveTasksToFile();
-						return;
-					}
-
-					const existingTask = tasks.find((task) => queueTaskIdOf(task) === queueTaskId);
-					const queueTask = {
-						...(existingTask || {}),
-						...(data.task || {}),
-						...data,
-						_id: queueTaskId,
-						status: data.status || data.task?.status || existingTask?.originalStatus || 'draft',
-						countdownRemaining: existingTask?.countdownRemaining,
-					};
-					const normalized = upsertQueueTask(queueTask);
-					if (!normalized) return;
-					if (['completed', 'done', 'failed'].includes(String(queueTask.status || '').toLowerCase())) {
-						recentlyCompletedTasks.set(normalized.id, { status: normalized.status, timestamp: Date.now() });
-					}
+			window.electronAPI.onTqTaskUpdate((data) => {
+				const queueTaskId = queueTaskIdOf(data);
+				if (!queueTaskId) return;
+				if (String(data.status || '').toLowerCase() === 'cancelled') {
+					removeQueueTask(queueTaskId);
 					renderTasks();
 					saveTasksToFile();
-				});
+					return;
+				}
 
-				window.electronAPI.onTqCountdownState((data) => {
-					const queueTaskId = queueTaskIdOf(data);
-					if (!queueTaskId) return;
-					const task = tasks.find((candidate) => queueTaskIdOf(candidate) === queueTaskId);
-					if (!task) return;
-					task.countdownRemaining = data.remaining;
-					task.originalStatus = 'draft';
-					task.status = 'TODO';
-					scheduleRender();
-					saveTasksToFile();
-				});
+				const existingTask = tasks.find((task) => queueTaskIdOf(task) === queueTaskId);
+				const queueTask = {
+					...(existingTask || {}),
+					...(data.task || {}),
+					...data,
+					_id: queueTaskId,
+					status: data.status || data.task?.status || existingTask?.originalStatus || 'draft',
+					countdownRemaining: existingTask?.countdownRemaining,
+				};
+				const normalized = upsertQueueTask(queueTask);
+				if (!normalized) return;
+				if (['completed', 'done', 'failed'].includes(String(queueTask.status || '').toLowerCase())) {
+					recentlyCompletedTasks.set(normalized.id, { status: normalized.status, timestamp: Date.now() });
+				}
+				renderTasks();
+				saveTasksToFile();
+			});
 
-				// Live log streaming from Claude Code SDK
+			window.electronAPI.onTqCountdownState((data) => {
+				const queueTaskId = queueTaskIdOf(data);
+				if (!queueTaskId) return;
+				const task = tasks.find((candidate) => queueTaskIdOf(candidate) === queueTaskId);
+				if (!task) return;
+				task.countdownRemaining = data.remaining;
+				task.originalStatus = 'draft';
+				task.status = 'TODO';
+				scheduleRender();
+				saveTasksToFile();
+			});
+
 			window.electronAPI.onKanbanCodeStream((data) => {
 				if (data.type === 'log' && data.taskId) {
-					// Mark task as actively streaming (prevents file-reload clobbering)
 					activelyStreamingTasks.add(data.taskId);
-
-					const task = tasks.find(t => t.id === data.taskId);
+					const task = tasks.find((candidate) => candidate.id === data.taskId);
 					if (task) {
 						task.logs = (task.logs || '') + (task.logs ? '\n' : '') + data.line;
-						// Keep last 50 lines in memory
 						const lines = task.logs.split('\n');
 						if (lines.length > 50) task.logs = lines.slice(-50).join('\n');
-						// Update the DOM directly (no full re-render for performance)
 						const logsEl = document.querySelector(`[data-task-id="${data.taskId}"] .task-logs`);
 						if (logsEl) {
 							logsEl.textContent = task.logs;
-							logsEl.style.opacity = ''; // clear placeholder opacity
+							logsEl.style.opacity = '';
 							logsEl.scrollTop = logsEl.scrollHeight;
 						} else {
-							// Log element doesn't exist yet — need a render to create it
 							scheduleRender();
 						}
 					}
 				} else if (data.type === 'done' && data.taskId) {
-					// Task finished — update state immediately in memory, persist to file
-					const task = tasks.find(t => t.id === data.taskId);
+					const task = tasks.find((candidate) => candidate.id === data.taskId);
 					const newStatus = data.status === 'COMPLETED' ? 'DONE' : 'TODO';
 					if (task) {
 						task.status = newStatus;
 						task.originalStatus = data.status === 'COMPLETED' ? 'completed' : 'failed';
 						if (data.summary) {
 							task.logs = (task.logs || '') + '\n' + (newStatus === 'DONE' ? '✅' : '❌') + ' ' + data.summary;
-							// Keep last 50 lines
 							const lines = task.logs.split('\n');
 							if (lines.length > 50) task.logs = lines.slice(-50).join('\n');
 						}
 					}
-					// Track recently completed to prevent file-reload status regression
 					recentlyCompletedTasks.set(data.taskId, { status: newStatus, timestamp: Date.now() });
-					// Clean up streaming state
 					sdkRunningTasks.delete(data.taskId);
 					activelyStreamingTasks.delete(data.taskId);
-					// Re-render immediately to reflect completion
 					renderTasks();
-					// Persist the DONE/TODO status to the kanban's tasks.json
-					// (critical: backend SDK may write to a different file path via workspace.get())
 					saveTasksToFile();
 					syncTasksToConvex();
-					// Also reload from disk after a delay to pick up any final backend state
 					setTimeout(() => {
 						loadTasksFromFile();
 					}, 2000);
