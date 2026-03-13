@@ -5,10 +5,26 @@ console.log('Running task queue watcher tests...');
 
 const originalLoad = Module._load;
 const executed = [];
+const broadcasts = [];
 
 Module._load = function patchedLoad(request, parent, isMain) {
 	if (request === '../logger') {
 		return { info() {}, warn() {}, error() {} };
+	}
+	if (request === '../windows/avatar-window' || request === '../windows/kanban-window') {
+		return {
+			get() {
+				return {
+					isDestroyed() { return false; },
+					webContents: {
+						id: request,
+						send(channel, payload) {
+							broadcasts.push({ channel, payload });
+						},
+					},
+				};
+			},
+		};
 	}
 	if (request === './executor') {
 		return {
@@ -79,7 +95,7 @@ function wait(ms) {
 			resumable: true,
 		},
 		{
-			_id: 'r',
+			_id: 17,
 			projectPath: '/tmp/proj',
 			rawPrompt: 'Resume me',
 			status: 'running',
@@ -121,7 +137,11 @@ function wait(ms) {
 	await wait(75);
 	watcher.stop();
 
-	assert.ok(updates.some((entry) => entry.id === 'r' && entry.patch.status === 'resuming'), 'running tasks should be recovered as resuming on startup');
+	assert.ok(updates.some((entry) => entry.id === 17 && entry.patch.status === 'resuming'), 'running tasks should be recovered as resuming on startup');
+	assert.ok(
+		broadcasts.some((entry) => entry.channel === 'tq:task-update' && entry.payload.taskId === '17' && entry.payload.status === 'resuming'),
+		'recovered tasks should broadcast the normalized task identifier on resume'
+	);
 	assert.ok(claims.some((entry) => entry.id === 'a'), 'first queued task should be claimed');
 	assert.ok(claims.some((entry) => entry.id === 'b'), 'second same-project queued task should be claimed in parallel');
 	assert.ok(!claims.some((entry) => entry.id === 'c'), 'blocked follow-up task should not be claimed');

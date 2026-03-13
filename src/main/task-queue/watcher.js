@@ -157,13 +157,14 @@ async function recoverInterruptedTasks() {
 	if (!result.ok || !Array.isArray(result.value)) return;
 	const interrupted = result.value.filter((task) => String(task.status || '').toLowerCase() === 'running' && task.resumable !== false);
 	for (const task of interrupted) {
+		const taskId = getTaskIdentifier(task);
 		await convex.updateQueueTask(task._id, {
 			status: 'resuming',
 			resumeCount: Number(task.resumeCount || 0) + 1,
 			updatedAt: Date.now(),
 		});
 		broadcastTaskUpdate({
-			taskId: task._id,
+			taskId,
 			status: 'resuming',
 			resumeCount: Number(task.resumeCount || 0) + 1,
 		});
