@@ -10,7 +10,6 @@ import { BehaviorEngine } from './voice/behavior-engine.js';
 import { VoiceEngine } from './voice/voice-engine.js';
 import { createScreenCaptureController } from './voice/screen-capture-controller.js';
 import { createClaudeCodeBatcher } from './voice/claude-code-batcher.js';
-import { renderToolsSkillsPanel, anchorPanelToAvatar } from './ui/tools-skills-panel.js';
 import { onRuntimeEvent } from './app-init.js';
 import { eventBusWeb } from '../shared/event-bus-web.js';
 import { initLogger, getLogSettings } from './logger.js';
@@ -77,21 +76,7 @@ window.addEventListener('click', () => {
 	muteBadge.classList.toggle('visible', muted);
 });
 
-const tools = (await window.electronAPI.getSkillDeclarations()?.then((decl) => (decl || []).map((d) => d.name)).catch(() => [])) || [];
-const skills = (await window.electronAPI.getSkillCatalog()?.then((items) => (items || []).map((s) => s.name)).catch(() => [])) || [];
-renderToolsSkillsPanel({ tools, skills });
 setupLogModeButton();
-
-function updateSidePanelsAnchor() {
-	const canvasRect = renderer.domElement.getBoundingClientRect();
-	anchorPanelToAvatar({
-		right: Math.round(canvasRect.left + Math.min(260, canvasRect.width - 40)),
-		top: Math.round(canvasRect.top + 10),
-	});
-}
-
-updateSidePanelsAnchor();
-window.addEventListener('resize', updateSidePanelsAnchor);
 
 window.electronAPI.subscribeEvents?.();
 window.electronAPI.onEvent?.((evt) => onRuntimeEvent(evt, { askedProgress: false }));

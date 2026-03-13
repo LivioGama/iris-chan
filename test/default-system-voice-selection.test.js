@@ -123,9 +123,10 @@ async function main() {
 			sentSetup = payload;
 		};
 		gemini._sendSetup();
+		const parsedSetup = JSON.parse(sentSetup);
 
 		assert.strictEqual(
-			sentSetup?.setup?.generationConfig?.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName,
+			parsedSetup?.setup?.generationConfig?.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName,
 			'Charon',
 			'voice engine should propagate the configured Gemini voice into the setup payload',
 		);

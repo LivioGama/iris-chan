@@ -20,6 +20,8 @@ const MAX_SKILL_CATALOG_ENTRIES = 40;
 const SYSTEM_PROMPT_VERSION = 'speed-scientific-v1';
 const DEFAULT_SETUP_MAX_SYSTEM_CHARS = Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_SETUP_MAX_SYSTEM_CHARS || '24000', 10);
 const COMPACT_SETUP_MAX_SYSTEM_CHARS = Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_SETUP_COMPACT_SYSTEM_CHARS || '14000', 10);
+const DEFAULT_SETUP_MAX_PAYLOAD_CHARS = Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_SETUP_MAX_PAYLOAD_CHARS || '45000', 10);
+const INBOUND_MESSAGE_BATCH_SIZE = Math.max(1, Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_INBOUND_BATCH_SIZE || '24', 10));
 const SETUP_FALLBACK_PROFILES = Object.freeze([
 	Object.freeze({
 		label: 'full',
@@ -156,21 +158,16 @@ export class GeminiClient extends Emitter {
 		this._connectId = 0; // guards against stale WS callbacks
 		this._directMode = false;
 		this._autonomousMode = false;
-		this._audioMsg = {
-			realtimeInput: {
-				audio: {
-					mimeType: 'audio/pcm;rate=16000',
-					data: '',
-				},
-			},
-		};
 		this._voiceName = DEFAULT_SYSTEM_MODEL_VOICE;
 		this._cachedSetupPayload = null;
+		this._cachedSetupPayloadJson = '';
 		this._cachedSetupKey = '';
 		this._cachedSkillSection = '';
 		this._cachedSystemInstruction = '';
 		this._cachedSystemInstructionKey = '';
 		this._setupFallbackLevel = 0;
+		this._inboundQueue = [];
+		this._inboundDrainScheduled = false;
 	}
 
 	setDirectMode(enabled) {
@@ -225,6 +222,7 @@ export class GeminiClient extends Emitter {
 
 	_invalidateSetupCache() {
 		this._cachedSetupPayload = null;
+		this._cachedSetupPayloadJson = '';
 		this._cachedSetupKey = '';
 		this._cachedSystemInstruction = '';
 		this._cachedSystemInstructionKey = '';
@@ -277,8 +275,7 @@ export class GeminiClient extends Emitter {
 			if (id !== this._connectId) return;
 			try {
 				const text = ev.data instanceof Blob ? await ev.data.text() : ev.data;
-				const msg = JSON.parse(text);
-				this._handleMessage(msg);
+				this._enqueueInboundMessage(text);
 			} catch (e) {
 				logError('Gemini', 'Parse error:', e);
 			}
@@ -305,26 +302,70 @@ export class GeminiClient extends Emitter {
 	}
 
 	_sendSetup() {
-		this._send(this._getSetupPayload());
+		this._send(this._getSerializedSetupPayload());
 	}
 
 	_getSetupPayload() {
-		const fallbackProfile = this._getSetupFallbackProfile();
+		return this._getSetupPayloadBundle().payload;
+	}
+
+	_getSerializedSetupPayload() {
+		return this._getSetupPayloadBundle().serialized;
+	}
+
+	_getSetupPayloadBundle() {
 		const setupKey = JSON.stringify({
 			directMode: this._directMode,
 			autonomousMode: this._autonomousMode,
 			voiceName: this._voiceName,
 			setupFallbackLevel: this._setupFallbackLevel,
-			skillDeclarations: fallbackProfile.includeSkillDeclarations && Array.isArray(this._skillDeclarations)
+			skillDeclarations: Array.isArray(this._skillDeclarations)
 				? this._skillDeclarations.length
 				: 0,
 			skillSectionFingerprint: fingerprintText(this._cachedSkillSection),
 			systemPromptVersion: SYSTEM_PROMPT_VERSION,
 		});
-		if (this._cachedSetupPayload && this._cachedSetupKey === setupKey) {
-			return this._cachedSetupPayload;
+		if (this._cachedSetupPayload && this._cachedSetupPayloadJson && this._cachedSetupKey === setupKey) {
+			return {
+				payload: this._cachedSetupPayload,
+				serialized: this._cachedSetupPayloadJson,
+			};
 		}
 
+		let nextLevel = this._setupFallbackLevel;
+		let fallbackProfile = this._getSetupFallbackProfile(nextLevel);
+		let setup = null;
+		let serialized = '';
+		do {
+			fallbackProfile = this._getSetupFallbackProfile(nextLevel);
+			setup = this._buildSetupPayload(fallbackProfile);
+			serialized = JSON.stringify(setup);
+			if (serialized.length <= DEFAULT_SETUP_MAX_PAYLOAD_CHARS || nextLevel >= SETUP_FALLBACK_PROFILES.length - 1) {
+				break;
+			}
+			nextLevel += 1;
+			logWarn('Gemini', `Setup payload estimated at ${serialized.length} chars; degrading to ${this._getSetupFallbackProfile(nextLevel).label} profile before connect`);
+		} while (true);
+		if (nextLevel !== this._setupFallbackLevel) {
+			this._setupFallbackLevel = nextLevel;
+		}
+		this._cachedSetupPayload = setup;
+		this._cachedSetupPayloadJson = serialized;
+		this._cachedSetupKey = JSON.stringify({
+			directMode: this._directMode,
+			autonomousMode: this._autonomousMode,
+			voiceName: this._voiceName,
+			setupFallbackLevel: this._setupFallbackLevel,
+			skillDeclarations: Array.isArray(this._skillDeclarations)
+				? this._skillDeclarations.length
+				: 0,
+			skillSectionFingerprint: fingerprintText(this._cachedSkillSection),
+			systemPromptVersion: SYSTEM_PROMPT_VERSION,
+		});
+		return { payload: setup, serialized };
+	}
+
+	_buildSetupPayload(fallbackProfile = this._getSetupFallbackProfile()) {
 		const generationConfig = {
 			responseModalities: ['AUDIO'],
 		};
@@ -341,7 +382,7 @@ export class GeminiClient extends Emitter {
 			...toolDeclarations,
 			...(fallbackProfile.includeSkillDeclarations ? (this._skillDeclarations || []) : []),
 		];
-		const setup = {
+		return {
 			setup: {
 				model: MODEL,
 				generationConfig,
@@ -357,9 +398,6 @@ export class GeminiClient extends Emitter {
 				},
 			},
 		};
-		this._cachedSetupPayload = setup;
-		this._cachedSetupKey = setupKey;
-		return setup;
 	}
 
 	_getSetupFallbackProfile(level = this._setupFallbackLevel) {
@@ -471,10 +509,35 @@ export class GeminiClient extends Emitter {
 		}
 	}
 
+	_enqueueInboundMessage(raw) {
+		if (typeof raw !== 'string' || !raw) return;
+		this._inboundQueue.push(raw);
+		if (this._inboundDrainScheduled) return;
+		this._inboundDrainScheduled = true;
+		queueMicrotask(() => this._drainInboundQueue());
+	}
+
+	_drainInboundQueue() {
+		this._inboundDrainScheduled = false;
+		let processed = 0;
+		while (this._inboundQueue.length && processed < INBOUND_MESSAGE_BATCH_SIZE) {
+			const raw = this._inboundQueue.shift();
+			processed += 1;
+			try {
+				this._handleMessage(JSON.parse(raw));
+			} catch (e) {
+				logError('Gemini', 'Parse error:', e);
+			}
+		}
+		if (this._inboundQueue.length) {
+			this._inboundDrainScheduled = true;
+			setTimeout(() => this._drainInboundQueue(), 0);
+		}
+	}
+
 	sendAudio(base64Data) {
 		if (!this.sessionReady) return;
-		this._audioMsg.realtimeInput.audio.data = base64Data;
-		this._send(this._audioMsg);
+		this._send(`{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":"${base64Data}"}}}`);
 	}
 
 	sendToolResponse(callId, name, result) {
@@ -483,15 +546,10 @@ export class GeminiClient extends Emitter {
 		if (!this.connected) {
 			logError('Gemini', `sendToolResponse for "${name}" but WS not connected — response will be dropped`);
 		}
-		this._send({
-			toolResponse: {
-				functionResponses: [{
-					id: callId,
-					name,
-					response: { result: typeof result === 'string' ? result : JSON.stringify(result) },
-				}],
-			},
-		});
+		const resultText = typeof result === 'string' ? result : JSON.stringify(result);
+		this._send(
+			`{"toolResponse":{"functionResponses":[{"id":${JSON.stringify(callId)},"name":${JSON.stringify(name)},"response":{"result":${JSON.stringify(resultText)}}}]}}`
+		);
 	}
 
 	sendText(text) {
@@ -506,12 +564,9 @@ export class GeminiClient extends Emitter {
 				text: finalText,
 			});
 		}
-		this._send({
-			clientContent: {
-				turns: [{ role: 'user', parts: [{ text: finalText }] }],
-				turnComplete: true,
-			},
-		});
+		this._send(
+			`{"clientContent":{"turns":[{"role":"user","parts":[{"text":${JSON.stringify(finalText)}}]}],"turnComplete":true}}`
+		);
 	}
 
 	_buildAutonomousClaudeCodeStatusPrompt(text, status) {
@@ -529,11 +584,7 @@ export class GeminiClient extends Emitter {
 
 	sendRealtimeText(text) {
 		if (!this.sessionReady || !text) return;
-		this._send({
-			realtimeInput: {
-				text,
-			},
-		});
+		this._send(`{"realtimeInput":{"text":${JSON.stringify(text)}}}`);
 	}
 
 	async sendVocabUpdate() {
@@ -554,19 +605,12 @@ export class GeminiClient extends Emitter {
 
 	sendImage(base64Jpeg) {
 		if (!this.sessionReady) return;
-		this._send({
-			realtimeInput: {
-				mediaChunks: [{
-					mimeType: 'image/jpeg',
-					data: base64Jpeg,
-				}],
-			},
-		});
+		this._send(`{"realtimeInput":{"mediaChunks":[{"mimeType":"image/jpeg","data":"${base64Jpeg}"}]}}`);
 	}
 
 	_send(obj) {
 		if (this.ws?.readyState === WebSocket.OPEN) {
-			this.ws.send(JSON.stringify(obj));
+			this.ws.send(typeof obj === 'string' ? obj : JSON.stringify(obj));
 		}
 	}
 

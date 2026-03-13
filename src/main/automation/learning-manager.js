@@ -391,6 +391,39 @@ function inferNoisyPointerScreenReference({ rawText = '', tokenSet, pointerMode 
 	return asciiTokens <= 1;
 }
 
+function inferFlattenedPreparationRecoveryPolicy(event = {}) {
+	const rawText = String(
+		event.guidanceText
+		|| event.userText
+		|| event.classification?.payload?.description
+		|| event.issueSignature
+		|| ''
+	).trim();
+	if (!rawText) return null;
+	const normalized = normalizeText(rawText);
+	if (!normalized) return null;
+	const mentionsPlanner = normalized.includes('run_ui_task');
+	const mentionsOpenApp = normalized.includes('open_app');
+	const mentionsPointer = /\b(click_at|double_click|mouse_move|drag)\b/.test(normalized);
+	const mentionsRecovery = /\brecover(?:ed|y|ies|ing)?\b/.test(normalized)
+		|| /\bafter user guidance\b/.test(normalized)
+		|| /\bto open_app\b/.test(normalized);
+	if (!mentionsPlanner || !mentionsOpenApp || !mentionsPointer || !mentionsRecovery) return null;
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.pre_click_preparation',
+		value: {
+			enabled: true,
+			message: 'When a UI task depends on a specific app or window, open or focus that app first, refresh the screen context, and only then use pointer actions or resolve visible targets. Treat run_ui_task -> open_app recovery as missing preparation rather than a reason to ask for the same guidance again.',
+			evidence: rawText,
+		},
+		source: 'observed_recovery',
+		confidence: 0.96,
+		evidence: rawText,
+	};
+}
+
 const POINTER_SEQUENCE_TOOLS = new Set(['click_at', 'double_click', 'mouse_move', 'drag']);
 
 class LearningManager {
@@ -782,6 +815,14 @@ class LearningManager {
 		const directCreativePolicy = inferDirectCreativeFulfillmentPolicy(event.guidanceText || event.userText || '');
 		if (directCreativePolicy) {
 			const stored = this.memoryStore.upsert(directCreativePolicy);
+			if (stored) {
+				log.info('Learning', `Memory updated: key=${stored.key} kind=${stored.kind} scope=${stored.scope}`);
+			}
+			return;
+		}
+		const flattenedPreparationPolicy = inferFlattenedPreparationRecoveryPolicy(event);
+		if (flattenedPreparationPolicy) {
+			const stored = this.memoryStore.upsert(flattenedPreparationPolicy);
 			if (stored) {
 				log.info('Learning', `Memory updated: key=${stored.key} kind=${stored.kind} scope=${stored.scope}`);
 			}

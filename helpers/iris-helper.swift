@@ -72,6 +72,8 @@ struct AXSnapshotResponse: Encodable {
 	let elements: [AXSnapshotNode]
 }
 
+let stdoutHandle = FileHandle.standardOutput
+
 func respond(_ ok: Bool, _ result: String) -> Never {
 	let response = Response(ok: ok, result: result)
 	let data = try! JSONEncoder().encode(response)
@@ -81,7 +83,7 @@ func respond(_ ok: Bool, _ result: String) -> Never {
 
 func writeStdoutLine(_ text: String) {
 	if let data = (text + "\n").data(using: .utf8) {
-		FileHandle.standardOutput.write(data)
+		stdoutHandle.write(data)
 	}
 }
 

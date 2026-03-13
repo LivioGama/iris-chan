@@ -100,9 +100,13 @@ export function showToolDone(name, index, ok) {
 	const entry = el.querySelector(`[data-call-id="${name}-${index}"]`);
 	if (entry) {
 		entry.classList.remove('running');
-		entry.classList.add(ok ? 'success' : 'error');
+		entry.classList.add(ok ? 'success' : 'attention');
 		const spinner = entry.querySelector('.tool-spinner');
-		if (spinner) spinner.textContent = ok ? '✓' : '✗';
+		if (spinner) spinner.textContent = ok ? '✓' : '!';
+		const status = document.createElement('span');
+		status.className = 'tool-status';
+		status.textContent = ok ? 'Done' : 'Needs another step';
+		entry.appendChild(status);
 	}
 }
 

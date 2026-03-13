@@ -147,19 +147,17 @@ console.log('Running V2 UI behavior tests...');
 	try {
 		setPresence('voice', 'thinking', { detail: 'Working out the next response' });
 		const indicator = document.getElementById('presence-indicator');
-		assert.ok(indicator, 'presence indicator should be created when activated');
-		assert.strictEqual(indicator.dataset.phase, 'thinking', 'voice processing should show thinking phase');
-		assert.ok(indicator.classList.contains('visible'), 'presence indicator should be visible when active');
+		assert.strictEqual(indicator, null, 'presence indicator should remain removed from the overlay');
+		assert.strictEqual(getActivePresenceSnapshot().phase, 'thinking', 'voice processing state should still be tracked internally');
 
 		setPresence('tool', 'tool', { detail: 'Step 1 of 1 · Searching the web' });
-		assert.strictEqual(indicator.dataset.phase, 'tool', 'tool work should outrank generic thinking state');
 		assert.strictEqual(getActivePresenceSnapshot().phase, 'tool', 'highest-priority presence state should be exposed');
 
 		clearPresence('tool');
-		assert.strictEqual(indicator.dataset.phase, 'thinking', 'clearing tool state should reveal underlying thinking state');
+		assert.strictEqual(getActivePresenceSnapshot().phase, 'thinking', 'clearing tool state should reveal underlying thinking state');
 
 		clearPresence('voice');
-		assert.ok(!indicator.classList.contains('visible'), 'indicator should hide when no presence states remain');
+		assert.strictEqual(getActivePresenceSnapshot(), null, 'clearing all presence should leave no active snapshot');
 	} finally {
 		resetPresenceIndicatorForTests();
 		global.document = prevDocument;

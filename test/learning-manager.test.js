@@ -755,6 +755,63 @@ async function testPlannerPointerFailureThenOpenAppRecoveryLearnsPreparationPoli
 	assert.strictEqual(selfFixCalls, 0, 'failed-pointer then open_app recovery should be learned without a core self-fix');
 }
 
+async function testFlattenedRecoveryIssueLearnsPreparationPolicyBeforeSelfFix() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.enqueue({
+		type: 'core-gap',
+		domain: 'general',
+		issueSignature: 'core_gap:general:general:none:none:click_at+open_app+recovered+run_ui_task:pointer',
+		userText: '',
+		guidanceText: '',
+		classification: {
+			payload: {
+				description: 'Recovered from run_ui_task, run_ui_task, click_at to open_app, open_app, open_app, self_fix after user guidance: .',
+			},
+		},
+		failedTools: [],
+		successfulTools: [],
+		createdAt: new Date().toISOString(),
+	});
+	await wait(120);
+
+	const policy = memoryStore.find({ key: 'policy.pre_click_preparation' });
+	assert.ok(policy, 'flattened recovery issue should be converted into the reusable preparation policy');
+	assert.match(
+		String(policy.value?.message || ''),
+		/open or focus that app first, refresh the screen context/i,
+		'flattened recovery issue should preserve the app/window preparation rule'
+	);
+	assert.match(
+		String(policy.value?.evidence || ''),
+		/Recovered from run_ui_task, run_ui_task, click_at to open_app, open_app, open_app/i,
+		'flattened recovery issue should preserve the original recovery evidence'
+	);
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(
+		issues.issues.some((issue) => issue.issueSignature === 'core_gap:general:general:none:none:click_at+open_app+recovered+run_ui_task:pointer'),
+		false,
+		'flattened recovery issue should not remain in the old generic self-fix bucket'
+	);
+	assert.strictEqual(selfFixCalls, 0, 'flattened recovery issue should learn natively before queuing another self-fix');
+}
+
 async function testLearningManagerExposesSafeMultiToolSequence() {
 	const irisDir = createTempDir();
 	const memoryStore = new MemoryStore({ irisDir });
@@ -1411,6 +1468,7 @@ Promise.resolve()
 	.then(testLearningManagerCreatesReusableToolSkill)
 	.then(testPlannerOpenThenPointerRecoveryLearnsPreparationPolicyInsteadOfSkill)
 	.then(testPlannerPointerFailureThenOpenAppRecoveryLearnsPreparationPolicy)
+	.then(testFlattenedRecoveryIssueLearnsPreparationPolicyBeforeSelfFix)
 	.then(testLearningManagerExposesSafeMultiToolSequence)
 	.then(testLearningManagerDedupesAutonomousSelfFix)
 	.then(testPointerRecoveryDoesNotCreateLearnedSkill)

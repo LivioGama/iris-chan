@@ -20,6 +20,17 @@ const TOOL_SLOW_MS = Number.parseInt(process.env.IRIS_TOOL_SLOW_MS || '1200', 10
 const RUNTIME_LOG_CONTEXT_LINES = Number.parseInt(process.env.IRIS_RUNTIME_LOG_CONTEXT_LINES || '180', 10);
 const RUNTIME_LOG_CONTEXT_BYTES = Number.parseInt(process.env.IRIS_RUNTIME_LOG_CONTEXT_BYTES || '24000', 10);
 const RUNTIME_LOG_EVIDENCE_LIMIT = 5;
+const TOOL_COOPERATIVE_YIELD_MS = Math.max(0, Number.parseInt(process.env.IRIS_TOOL_COOPERATIVE_YIELD_MS || '0', 10));
+
+function yieldToEventLoop() {
+	return new Promise((resolve) => {
+		if (TOOL_COOPERATIVE_YIELD_MS > 0) {
+			setTimeout(resolve, TOOL_COOPERATIVE_YIELD_MS);
+			return;
+		}
+		setImmediate(resolve);
+	});
+}
 
 function loadHandlers() {
 	const handlers = {};
@@ -377,6 +388,7 @@ async function executeCore(name, args, markOk) {
 			}
 			let lastResult = firstResult;
 			for (const step of sequenceRemainder) {
+				await yieldToEventLoop();
 				const handler = builtinHandlers[step.name];
 				if (!handler) {
 					return { ok: false, result: `Learned tool sequence references unknown tool: ${step.name}` };
@@ -429,5 +441,6 @@ module.exports = {
 		summarizeRuntimeLogEvidence,
 		deriveRuntimeLogInsights,
 		enrichArgsWithScientificRuntimeEvidence,
+		yieldToEventLoop,
 	},
 };

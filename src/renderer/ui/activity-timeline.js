@@ -59,11 +59,11 @@ function titleFromType(type) {
 		case 'THINKING': return 'Thinking';
 		case 'TOOL_START': return 'Tool Started';
 		case 'TOOL_END': return 'Tool Finished';
-		case 'ACTION_VERIFY_OK': return 'Verify OK';
-		case 'ACTION_VERIFY_FAIL': return 'Verify Failed';
+		case 'ACTION_VERIFY_OK': return 'Check Landed';
+		case 'ACTION_VERIFY_FAIL': return 'Checking Again';
 		case 'TASK_MILESTONE': return 'Task Milestone';
 		case 'TASK_DONE': return 'Task Done';
-		case 'INTERRUPT': return 'Interrupted';
+		case 'INTERRUPT': return 'Paused';
 		case 'DB_HEALTH': return 'Database Health';
 		case 'PROACTIVE_SUGGESTION': return 'Proactive Suggestion';
 		default: return String(type || 'Event');
@@ -76,13 +76,13 @@ function formatMessage(evt) {
 		const ok = evt.payload?.ok ? 'ok' : 'degraded';
 		return `DB ${ok} (${evt.payload?.latencyMs ?? -1} ms)`;
 	}
-	if (evt.type === 'INTERRUPT') return evt.payload?.reason || 'User interruption';
+	if (evt.type === 'INTERRUPT') return evt.payload?.reason || 'Work paused by the user.';
 	if (evt.type === 'PROACTIVE_SUGGESTION') {
 		const kind = evt.payload?.kind ? `[${evt.payload.kind}] ` : '';
 		const app = evt.payload?.context?.app ? ` (${evt.payload.context.app})` : '';
 		return `${kind}${evt.payload?.suggestion || 'High-confidence suggestion'}${app}`;
 	}
-	if (evt.type === 'ACTION_VERIFY_FAIL') return 'Visual check failed, retrying.';
+	if (evt.type === 'ACTION_VERIFY_FAIL') return 'Visual check needs another pass.';
 	if (evt.type === 'ACTION_VERIFY_OK') return 'Visual check passed.';
 	return JSON.stringify(evt.payload || {});
 }

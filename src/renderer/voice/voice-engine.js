@@ -17,7 +17,6 @@ import {
 import { showBubble, clearBubbles, showStreamingBubble, finalizeStreamingBubble } from '../ui/bubbles.js';
 import { setPresence, clearPresence, clearAllPresence } from '../ui/presence-indicator.js';
 import { updateIndicator } from '../ui/status-indicators.js';
-import { showPanel as showToolsPanel, hidePanel as hideToolsPanel } from '../ui/tools-skills-panel.js';
 import { refreshWorkspace } from '../ui/workspace-bar.js';
 import { info as logInfo, error as logError } from '../logger.js';
 
@@ -239,10 +238,9 @@ export class VoiceEngine extends Emitter {
 				await this.capture.start();
 			} catch (err) {
 				logError('Voice', 'Mic error:', err);
-			}
-			this._screen.start();
-			showToolsPanel();
-		});
+				}
+				this._screen.start();
+			});
 
 		this.gemini.on('disconnected', () => {
 			updateIndicator('ws', false);
@@ -986,13 +984,12 @@ export class VoiceEngine extends Emitter {
 		this._setState(STATES.IDLE);
 		for (const id of ['ws', 'mic', 'voice', 'send', 'think', 'speak', 'tool', 'srch']) {
 			updateIndicator(id, false);
-		}
-		clearAllPresence();
-		clearBubbles();
-		hideToolsPanel();
-		this._unsubscribeScreenCapture?.();
-		this._unsubscribeScreenCapture = null;
-		window.electronAPI.searchHide();
+			}
+			clearAllPresence();
+			clearBubbles();
+			this._unsubscribeScreenCapture?.();
+			this._unsubscribeScreenCapture = null;
+			window.electronAPI.searchHide();
 		window.electronAPI.endSession?.();
 	}
 
