@@ -1,43 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const settings = require('./settings');
 
 const LOG_PATH = process.env.IRIS_LOG_PATH || path.join(os.homedir(), 'Desktop', 'consolidated_messages.log');
-const SETTINGS_PATH = process.env.IRIS_LOG_SETTINGS_PATH || path.join(os.homedir(), '.iris', 'logging-settings.json');
 const MAX_SIZE = 2 * 1024 * 1024;
 const LEVEL_RANK = { info: 0, warn: 1, error: 2, silent: 3 };
-
-const DEFAULT_SETTINGS = Object.freeze({
-	console: {
-		enabled: true,
-		level: 'info',
-	},
-	persist: {
-		enabled: true,
-		level: 'info',
-	},
-	sources: {
-		mainConsole: true,
-		rendererConsole: true,
-		rendererConsoleCapture: true,
-	},
-	categories: {
-		conversation: true,
-		voice: true,
-		gemini: true,
-		vocab: true,
-		tools: true,
-		runtime: true,
-		ui: true,
-		system: true,
-		other: true,
-	},
-});
 
 let stdoutOk = true;
 let stderrOk = true;
 let writeCount = 0;
-let settingsBroadcaster = null;
 let consoleInterceptorInstalled = false;
 const nativeConsole = {
 	log: console.log.bind(console),
@@ -49,69 +21,18 @@ const nativeConsole = {
 if (process.stdout) process.stdout.on('error', () => { stdoutOk = false; });
 if (process.stderr) process.stderr.on('error', () => { stderrOk = false; });
 
+let currentSettings = settings.getNamespace('logging') || settings.DEFAULT_SETTINGS.logging;
+settings.onChange((nextSettings) => {
+	if (!nextSettings?.logging) return;
+	currentSettings = nextSettings.logging;
+});
+
 function deepClone(value) {
 	return JSON.parse(JSON.stringify(value));
 }
 
-function mergeSettings(base, patch) {
-	if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return deepClone(base);
-	const out = Array.isArray(base) ? [...base] : { ...base };
-	for (const [key, value] of Object.entries(patch)) {
-		if (value && typeof value === 'object' && !Array.isArray(value) && base && typeof base[key] === 'object' && base[key] !== null && !Array.isArray(base[key])) {
-			out[key] = mergeSettings(base[key], value);
-		} else {
-			out[key] = value;
-		}
-	}
-	return out;
-}
-
 function normalizeLevel(level, fallback = 'info') {
 	return Object.prototype.hasOwnProperty.call(LEVEL_RANK, level) ? level : fallback;
-}
-
-function normalizeSettings(input = {}) {
-	const merged = mergeSettings(DEFAULT_SETTINGS, input);
-	merged.console.enabled = !!merged.console.enabled;
-	merged.console.level = normalizeLevel(merged.console.level);
-	merged.persist.enabled = !!merged.persist.enabled;
-	merged.persist.level = normalizeLevel(merged.persist.level);
-	merged.sources.mainConsole = !!merged.sources.mainConsole;
-	merged.sources.rendererConsole = !!merged.sources.rendererConsole;
-	merged.sources.rendererConsoleCapture = !!merged.sources.rendererConsoleCapture;
-	for (const key of Object.keys(DEFAULT_SETTINGS.categories)) {
-		merged.categories[key] = merged.categories[key] !== false;
-	}
-	return merged;
-}
-
-function loadSettings() {
-	try {
-		const raw = fs.readFileSync(SETTINGS_PATH, 'utf-8');
-		return normalizeSettings(JSON.parse(raw));
-	} catch {
-		return normalizeSettings();
-	}
-}
-
-let currentSettings = loadSettings();
-
-function saveSettings() {
-	try {
-		fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
-		fs.writeFileSync(SETTINGS_PATH, JSON.stringify(currentSettings, null, 2), 'utf-8');
-	} catch {}
-}
-
-function setSettingsBroadcaster(fn) {
-	settingsBroadcaster = typeof fn === 'function' ? fn : null;
-}
-
-function broadcastSettings() {
-	if (!settingsBroadcaster) return;
-	try {
-		settingsBroadcaster(getSettings());
-	} catch {}
 }
 
 function getSettings() {
@@ -119,17 +40,23 @@ function getSettings() {
 }
 
 function updateSettings(patch = {}) {
-	currentSettings = normalizeSettings(mergeSettings(currentSettings, patch));
-	saveSettings();
-	broadcastSettings();
-	return getSettings();
+	const result = settings.updateSettings({ logging: patch }, { source: 'logger:updateSettings' });
+	currentSettings = result.settings.logging;
+	return deepClone(currentSettings);
 }
 
 function resetSettings() {
-	currentSettings = normalizeSettings();
-	saveSettings();
-	broadcastSettings();
-	return getSettings();
+	const result = settings.updateSettings({ logging: settings.DEFAULT_SETTINGS.logging }, { source: 'logger:resetSettings' });
+	currentSettings = result.settings.logging;
+	return deepClone(currentSettings);
+}
+
+function setSettingsBroadcaster(fn) {
+	settings.setSettingsBroadcaster((nextSettings) => {
+		try {
+			fn(nextSettings?.logging || getSettings());
+		} catch {}
+	});
 }
 
 function ts() {
@@ -169,6 +96,7 @@ function sourceEnabled(source = 'main') {
 
 function deriveCategory(tag = '') {
 	const normalized = String(tag || '').toLowerCase();
+	if (normalized.includes('metric') || normalized.includes('benchmark')) return 'metrics';
 	if (normalized.includes('conversation')) return 'conversation';
 	if (normalized.includes('voice') || normalized.includes('playback')) return 'voice';
 	if (normalized.includes('gemini')) return 'gemini';
@@ -259,7 +187,7 @@ function cycleConsoleLevel() {
 	const order = ['info', 'warn', 'error', 'silent'];
 	const index = order.indexOf(currentSettings.console.level);
 	const next = order[(index + 1) % order.length];
-	return updateSettings({ console: { level: next } });
+	return updateSettings({ console: { level: next, enabled: next !== 'silent' } });
 }
 
 function installConsoleInterceptor() {
@@ -278,8 +206,7 @@ try {
 
 module.exports = {
 	LOG_PATH,
-	SETTINGS_PATH,
-	DEFAULT_SETTINGS: deepClone(DEFAULT_SETTINGS),
+	DEFAULT_SETTINGS: deepClone(settings.DEFAULT_SETTINGS.logging),
 	deriveCategory,
 	getSettings,
 	updateSettings,

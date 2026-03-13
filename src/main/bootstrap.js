@@ -24,6 +24,8 @@ const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearning
 const taskQueueWatcher = require('./task-queue/watcher');
 const { setConvexClient: setTqControllerClient, setBehaviorEngine: setTqBehaviorEngine } = require('./controllers/taskQueueController');
 const { setConvexClient: setTqToolClient } = require('./tools/task-queue');
+const { setBehaviorEngine: setTqServiceBehaviorEngine } = require('./task-queue/service');
+const settings = require('./settings');
 
 function startRuntime({ apiKey }) {
 	const eventBus = new RuntimeEventBus();
@@ -50,6 +52,32 @@ function startRuntime({ apiKey }) {
 	});
 	const statusTray = createTrayController();
 	let runtimeEventSeq = 0;
+
+	settings.registerApplyHandler('avatar', (nextAvatar, previousAvatar) => {
+		if (nextAvatar?.current === previousAvatar?.current) return { applied: true, liveApply: true };
+		const win = avatarWindow.get();
+		if (win && !win.isDestroyed()) {
+			win.reload();
+		}
+		return { applied: true, liveApply: true };
+	});
+	settings.registerApplyHandler('behavior', (nextBehavior, previousBehavior) => {
+		if (nextBehavior?.mode !== previousBehavior?.mode) {
+			behaviorEngine.setMode(nextBehavior.mode);
+			const win = avatarWindow.get();
+			if (win && !win.isDestroyed()) win.webContents.send('mode-changed', nextBehavior.mode);
+		}
+		if (nextBehavior?.directMode !== previousBehavior?.directMode) {
+			behaviorEngine.setDirectMode(nextBehavior.directMode);
+			taskQueueWatcher.restartWithNewInterval();
+			const win = avatarWindow.get();
+			if (win && !win.isDestroyed()) win.webContents.send('direct-mode-changed', nextBehavior.directMode);
+		}
+		return { applied: true, liveApply: true };
+	});
+	const initialSettings = settings.init();
+	behaviorEngine.setMode(initialSettings.behavior.mode);
+	behaviorEngine.setDirectMode(initialSettings.behavior.directMode);
 
 	eventBus.on('event', (evt) => {
 		const idempotencyKey = `runtime_evt_${evt.timestamp}_${runtimeEventSeq++}_${evt.type}`;
@@ -100,6 +128,7 @@ function startRuntime({ apiKey }) {
 	setTqControllerClient(convexClient);
 	setTqBehaviorEngine(behaviorEngine);
 	setTqToolClient(convexClient);
+	setTqServiceBehaviorEngine(behaviorEngine);
 
 	app.whenReady().then(async () => {
 		if (process.platform === 'darwin') {
@@ -134,14 +163,11 @@ function startRuntime({ apiKey }) {
 		});
 		globalShortcut.register('CommandOrControl+Shift+M', () => {
 			const nextMode = behaviorEngine.getMode() === 'autonomous' ? 'silent' : 'autonomous';
-			behaviorEngine.setMode(nextMode);
-			if (win) win.webContents.send('mode-changed', nextMode);
+			settings.updateSettings({ behavior: { mode: nextMode } }, { source: 'shortcut:mode-toggle' });
 		});
 		globalShortcut.register('CommandOrControl+Shift+D', () => {
 			const next = !behaviorEngine.getDirectMode();
-			behaviorEngine.setDirectMode(next);
-			taskQueueWatcher.restartWithNewInterval();
-			if (win) win.webContents.send('direct-mode-changed', next);
+			settings.updateSettings({ behavior: { directMode: next } }, { source: 'shortcut:direct-mode-toggle' });
 		});
 	});
 

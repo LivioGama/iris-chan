@@ -3,6 +3,7 @@ const { RUNTIME_CHANNELS } = require('../shared/ipc-contracts.js');
 const geometryStore = require('./runtime/geometry-store');
 const avatarWindow = require('./windows/avatar-window');
 const taskQueueWatcher = require('./task-queue/watcher');
+const settings = require('./settings');
 
 function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow }) {
 	const subscriptions = new Map();
@@ -11,12 +12,12 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTa
 
 	ipcMain.handle(RUNTIME_CHANNELS.BEHAVIOR_GET_MODE, () => behaviorEngine.getMode());
 	ipcMain.handle(RUNTIME_CHANNELS.BEHAVIOR_SET_MODE, (_, mode) => {
-		const result = behaviorEngine.setMode(mode);
+		const result = settings.updateSettings({ behavior: { mode } }, { source: 'ipc:behavior:set-mode' });
 		const win = avatarWindow.get();
 		if (result?.ok && win && !win.isDestroyed()) {
-			win.webContents.send('mode-changed', result.mode);
+			win.webContents.send('mode-changed', settings.getNamespace('behavior')?.mode || mode);
 		}
-		return result;
+		return { ok: true, mode: settings.getNamespace('behavior')?.mode || mode, restartRequired: result.restartRequired };
 	});
 
 	ipcMain.handle(RUNTIME_CHANNELS.EVENTS_SUBSCRIBE, (evt) => {
@@ -88,13 +89,11 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTa
 	// Direct mode: get/set
 	ipcMain.handle(RUNTIME_CHANNELS.DIRECT_MODE_GET, () => behaviorEngine.getDirectMode());
 	ipcMain.handle(RUNTIME_CHANNELS.DIRECT_MODE_SET, (_, enabled) => {
-		const result = behaviorEngine.setDirectMode(enabled);
-		// Restart watcher with appropriate poll interval
-		taskQueueWatcher.restartWithNewInterval();
-		// Notify renderer
+		const result = settings.updateSettings({ behavior: { directMode: !!enabled } }, { source: 'ipc:direct-mode:set' });
 		const win = avatarWindow.get();
-		if (win) win.webContents.send('direct-mode-changed', result.directMode);
-		return result;
+		const directMode = settings.getNamespace('behavior')?.directMode ?? !!enabled;
+		if (win) win.webContents.send('direct-mode-changed', directMode);
+		return { ok: true, directMode, restartRequired: result.restartRequired };
 	});
 }
 
