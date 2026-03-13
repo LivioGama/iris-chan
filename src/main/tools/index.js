@@ -8,12 +8,15 @@ const { applyScientificWorkflowDefaults, buildScientificTaskMetadata } = require
 
 const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './create-skill', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue', './ui-task', './reply-assistant'];
 const SCIENTIFIC_TASK_TOOLS = new Set(['fix_project', 'self_fix', 'add_task']);
+const MANAGEMENT_CORRECTION_TOOLS = new Set(['fix_project', 'self_fix', 'add_task']);
 const UI_SEMANTIC_TOOLS = new Set(['open_app', 'type_text', 'press_key', 'scroll', 'click_at', 'double_click', 'mouse_move', 'drag']);
 const DIRECT_UI_TOOL = 'run_ui_task';
 const SCIENTIFIC_RUNTIME_TRIGGER = /\b(runtime logs?|terminal output|stdout|stderr|ai scientist|scientific workflow|self-improvement|execution bottleneck|idle behavior|action verification|visible runtime logs?)\b/i;
 const SEMANTIC_UI_INTENT_PATTERN = /\b(open|go to|goto|search|find|navigate|switch|focus|click|tap|select|choose|scroll to|type into|enter|submit)\b/i;
 const EXPLICIT_LOW_LEVEL_PATTERN = /\b(cmd|ctrl|shift|option|alt|escape|return|enter|tab|space|arrow|left|right|up|down|delete|backspace|double[- ]?click|drag|drop|x=|y=|\d+\s*,\s*\d+)\b/i;
 const APP_NAME_ONLY_PATTERN = /^[a-z0-9 .+\-_/]+$/i;
+const TASK_ID_PATTERN = /#?([a-f0-9]{8,})/ig;
+const MANAGEMENT_CORRECTION_MARKER = 'MANAGEMENT CORRECTIONS (STRUCTURED):';
 const ENABLE_SEMANTIC_UI_FAST_PATH = process.env.IRIS_SEMANTIC_UI_FAST_PATH !== '0';
 const ENABLE_SCIENTIFIC_SELF_REVIEW = process.env.IRIS_SCIENTIFIC_SELF_REVIEW !== '0';
 const TOOL_SLOW_MS = Number.parseInt(process.env.IRIS_TOOL_SLOW_MS || '1200', 10);
@@ -243,6 +246,107 @@ function normalizeWhitespace(value = '') {
 	return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function splitTaskIds(value = '') {
+	return Array.from(
+		new Set(
+			Array.from(String(value || '').matchAll(TASK_ID_PATTERN))
+				.map((match) => String(match[1] || '').toLowerCase())
+				.filter(Boolean)
+		)
+	);
+}
+
+function parseManagementCorrections(text = '') {
+	const rawText = String(text || '');
+	if (!rawText.trim()) return null;
+	const normalized = normalizeWhitespace(rawText);
+	const lower = normalized.toLowerCase();
+	const signalsManagementCorrection = [
+		'agent-relay',
+		'management correction',
+		'management corrections',
+		'execution wave',
+		'restaff',
+		'approve the first execution wave',
+		'cancel cosmetic',
+		'memory lane',
+		'safety lane',
+		'observability lane',
+		'research lane',
+	].some((signal) => lower.includes(signal));
+	if (!signalsManagementCorrection) return null;
+
+	const cancellations = [];
+	for (const match of rawText.matchAll(/cancel(?:led|s|ling)?[^.\n]*?task\s+#?([a-f0-9]{8,})/ig)) {
+		const taskId = String(match[1] || '').toLowerCase();
+		if (!taskId) continue;
+		cancellations.push({
+			taskId,
+			reason: /cosmetic/i.test(match[0]) ? 'cosmetic task explicitly cancelled by management correction' : 'explicitly cancelled by management correction',
+		});
+	}
+
+	const approvals = [];
+	const seenApprovalIds = new Set();
+	for (const match of rawText.matchAll(/([a-z][a-z0-9_-]*eng)\s*\(([^)]+)\)/ig)) {
+		const agent = String(match[1] || '').toLowerCase();
+		const taskIds = splitTaskIds(match[2]);
+		if (!agent || !taskIds.length) continue;
+		const uniqueTaskIds = taskIds.filter((taskId) => {
+			const composite = `${agent}:${taskId}`;
+			if (seenApprovalIds.has(composite)) return false;
+			seenApprovalIds.add(composite);
+			return true;
+		});
+		if (!uniqueTaskIds.length) continue;
+		approvals.push({ agent, taskIds: uniqueTaskIds });
+	}
+
+	if (!cancellations.length && !approvals.length) return null;
+
+	return {
+		cancellations,
+		approvals,
+		prioritizeP0: /\bp0\b/i.test(rawText) || /execution-critical/i.test(rawText),
+		preserveExecutionCritical: /preserve execution-critical tasks/i.test(rawText),
+		requireExactSequence: /exactly as listed/i.test(rawText) || /correct sequencing/i.test(rawText),
+	};
+}
+
+function buildManagementCorrectionsBlock(parsed) {
+	if (!parsed) return '';
+	const lines = [MANAGEMENT_CORRECTION_MARKER];
+	if (parsed.preserveExecutionCritical) {
+		lines.push('- preserve execution-critical tasks: yes');
+	}
+	if (parsed.prioritizeP0) {
+		lines.push('- prioritize p0 lanes: yes');
+		lines.push('- widen coverage with dedicated memory/safety/research-observability lanes: yes');
+	}
+	if (parsed.requireExactSequence) {
+		lines.push('- execute first-wave approvals exactly as listed: yes');
+	}
+	for (const cancellation of parsed.cancellations || []) {
+		lines.push(`- cancel task ${cancellation.taskId}: ${cancellation.reason}`);
+	}
+	for (const approval of parsed.approvals || []) {
+		lines.push(`- approve tasks for ${approval.agent}: ${approval.taskIds.join(', ')}`);
+	}
+	return lines.join('\n');
+}
+
+function attachManagementCorrections(name, args = {}) {
+	if (!MANAGEMENT_CORRECTION_TOOLS.has(name) || !args || typeof args !== 'object') return args;
+	const description = typeof args.description === 'string' ? args.description : '';
+	if (!description || description.includes(MANAGEMENT_CORRECTION_MARKER)) return args;
+	const parsed = parseManagementCorrections(description);
+	if (!parsed) return args;
+	return {
+		...(args || {}),
+		description: `${description}\n\n${buildManagementCorrectionsBlock(parsed)}`,
+	};
+}
+
 function inferUserIntentText(name, args = {}) {
 	if (!args || typeof args !== 'object') return '';
 	if (typeof args.goal === 'string' && args.goal.trim()) return normalizeWhitespace(args.goal);
@@ -352,6 +456,7 @@ async function executeCore(name, args, markOk) {
 	const resolved = learningManager?.resolveToolRequest?.(executionPolicy.name, executionPolicy.args || {}) || { name: executionPolicy.name, args: executionPolicy.args };
 	name = resolved.name || name;
 	args = applyScientificWorkflowDefaults(name, resolved.args || args || {});
+	args = attachManagementCorrections(name, args);
 	args = enrichArgsWithScientificRuntimeEvidence(name, args);
 	const sequenceRemainder = Array.isArray(resolved.sequenceRemainder) ? resolved.sequenceRemainder : [];
 	const startedAt = Date.now();
@@ -441,6 +546,9 @@ module.exports = {
 		summarizeRuntimeLogEvidence,
 		deriveRuntimeLogInsights,
 		enrichArgsWithScientificRuntimeEvidence,
+		parseManagementCorrections,
+		buildManagementCorrectionsBlock,
+		attachManagementCorrections,
 		yieldToEventLoop,
 	},
 };

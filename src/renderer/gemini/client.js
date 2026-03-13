@@ -61,6 +61,14 @@ const SELF_FIX_DETAIL_PATTERNS = [
 	/\b(?:problem|desired behavior|implementation|files?)\s*:/i,
 	/\b(?:voice|behavior|instructions|memory|prompt|tool|tools|ui|speech|response|responses|restart|screen|transcript|idle|silence)\b/i,
 ];
+const MANAGEMENT_CORRECTION_MARKER = '[SYSTEM: MANAGEMENT CORRECTION';
+const MANAGEMENT_TASK_ID_PATTERN = /#?([a-f0-9]{8,})/ig;
+const DEFAULT_BEHAVIOR_STATE = Object.freeze({
+	mode: 'silent',
+	directMode: false,
+	feedbackEnabled: false,
+	introversionEnabled: false,
+});
 
 function normalizeSelfFixUtterance(text = '') {
 	return String(text || '').replace(/\s+/g, ' ').trim();
@@ -68,6 +76,86 @@ function normalizeSelfFixUtterance(text = '') {
 
 function stripSelfFixPunctuation(text = '') {
 	return normalizeSelfFixUtterance(text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+}
+
+function splitManagementTaskIds(value = '') {
+	return Array.from(
+		new Set(
+			Array.from(String(value || '').matchAll(MANAGEMENT_TASK_ID_PATTERN))
+				.map((match) => String(match[1] || '').toLowerCase())
+				.filter(Boolean)
+		)
+	);
+}
+
+function parseManagementCorrections(text = '') {
+	const rawText = String(text || '');
+	if (!rawText.trim()) return null;
+	const normalized = normalizeSelfFixUtterance(rawText).toLowerCase();
+	const signalsManagementCorrection = [
+		'agent-relay',
+		'management correction',
+		'management corrections',
+		'execution wave',
+		'restaff',
+		'approve the first execution wave',
+		'cancel cosmetic',
+		'memory lane',
+		'safety lane',
+		'observability lane',
+		'research lane',
+	].some((signal) => normalized.includes(signal));
+	if (!signalsManagementCorrection) return null;
+
+	const cancellations = Array.from(rawText.matchAll(/cancel(?:led|s|ling)?[^.\n]*?task\s+#?([a-f0-9]{8,})/ig))
+		.map((match) => ({
+			taskId: String(match[1] || '').toLowerCase(),
+			reason: /cosmetic/i.test(match[0]) ? 'cosmetic task explicitly cancelled by management correction' : 'explicitly cancelled by management correction',
+		}))
+		.filter((entry) => entry.taskId);
+
+	const approvals = [];
+	for (const match of rawText.matchAll(/([a-z][a-z0-9_-]*eng)\s*\(([^)]+)\)/ig)) {
+		const agent = String(match[1] || '').toLowerCase();
+		const taskIds = splitManagementTaskIds(match[2]);
+		if (!agent || !taskIds.length) continue;
+		approvals.push({ agent, taskIds });
+	}
+
+	if (!cancellations.length && !approvals.length) return null;
+	return {
+		cancellations,
+		approvals,
+		preserveExecutionCritical: /preserve execution-critical tasks/i.test(rawText),
+		prioritizeP0: /\bp0\b/i.test(rawText) || /execution-critical/i.test(rawText),
+		requireExactSequence: /exactly as listed/i.test(rawText) || /correct sequencing/i.test(rawText),
+	};
+}
+
+function buildManagementCorrectionsNote(parsed) {
+	if (!parsed) return '';
+	const lines = ['[SYSTEM: MANAGEMENT CORRECTION — preserve exact task ids/assignments from the user text]'];
+	if (parsed.preserveExecutionCritical) lines.push('- preserve execution-critical tasks');
+	if (parsed.prioritizeP0) lines.push('- prioritize p0 planning lanes, including memory/safety/research-observability coverage');
+	if (parsed.requireExactSequence) lines.push('- execute first-wave approvals exactly as listed');
+	for (const cancellation of parsed.cancellations || []) {
+		lines.push(`- cancel task ${cancellation.taskId}: ${cancellation.reason}`);
+	}
+	for (const approval of parsed.approvals || []) {
+		lines.push(`- approve tasks for ${approval.agent}: ${approval.taskIds.join(', ')}`);
+	}
+	lines.push('[SYSTEM: treat this as binding planning/dispatch input, not a summary target]');
+	return lines.join('\n');
+}
+
+function augmentTextWithManagementCorrections(text = '') {
+	const value = String(text || '');
+	if (!value || value.startsWith('[SYSTEM:') || value.includes(MANAGEMENT_CORRECTION_MARKER)) {
+		return value;
+	}
+	const parsed = parseManagementCorrections(value);
+	if (!parsed) return value;
+	return `${value}\n\n${buildManagementCorrectionsNote(parsed)}`;
 }
 
 export function classifySelfFixRequest(text = '', { awaitingDetails = false } = {}) {
@@ -151,8 +239,7 @@ export class GeminiClient extends Emitter {
 		this.sessionReady = false;
 		this._reconnectTimer = null;
 		this._connectId = 0; // guards against stale WS callbacks
-		this._directMode = false;
-		this._autonomousMode = false;
+		this._behaviorState = { ...DEFAULT_BEHAVIOR_STATE };
 		this._cachedSetupPayload = null;
 		this._cachedSetupPayloadJson = '';
 		this._cachedSetupKey = '';
@@ -166,12 +253,26 @@ export class GeminiClient extends Emitter {
 	}
 
 	setDirectMode(enabled) {
-		this._directMode = !!enabled;
-		this._invalidateSetupCache();
+		this.setBehaviorState({ ...this._behaviorState, directMode: !!enabled });
 	}
 
 	setAutonomousMode(enabled) {
-		this._autonomousMode = !!enabled;
+		this.setBehaviorState({
+			...this._behaviorState,
+			mode: enabled ? 'proactive' : 'silent',
+		});
+	}
+
+	setBehaviorState(nextState = {}) {
+		const nextMode = ['silent', 'passive', 'proactive'].includes(nextState.mode)
+			? nextState.mode
+			: this._behaviorState.mode;
+		this._behaviorState = {
+			mode: nextMode,
+			directMode: !!nextState.directMode,
+			feedbackEnabled: !!nextState.feedbackEnabled,
+			introversionEnabled: !!nextState.introversionEnabled,
+		};
 		this._invalidateSetupCache();
 	}
 
@@ -226,16 +327,14 @@ export class GeminiClient extends Emitter {
 	_getSystemInstruction() {
 		const systemInstructionKey = JSON.stringify({
 			version: SYSTEM_PROMPT_VERSION,
-			directMode: this._directMode,
-			autonomousMode: this._autonomousMode,
+			behaviorState: this._behaviorState,
 			skillFingerprint: fingerprintText(this._cachedSkillSection),
 		});
 		if (this._cachedSystemInstruction && this._cachedSystemInstructionKey === systemInstructionKey) {
 			return this._cachedSystemInstruction;
 		}
 		const nextInstruction = `${buildSystemInstruction({
-			directMode: this._directMode,
-			autonomousMode: this._autonomousMode,
+			behaviorState: this._behaviorState,
 		})}${this._cachedSkillSection}`;
 		this._cachedSystemInstruction = nextInstruction;
 		this._cachedSystemInstructionKey = systemInstructionKey;
@@ -310,8 +409,7 @@ export class GeminiClient extends Emitter {
 
 	_getSetupPayloadBundle() {
 		const setupKey = JSON.stringify({
-			directMode: this._directMode,
-			autonomousMode: this._autonomousMode,
+			behaviorState: this._behaviorState,
 			setupFallbackLevel: this._setupFallbackLevel,
 			skillDeclarations: Array.isArray(this._skillDeclarations)
 				? this._skillDeclarations.length
@@ -346,8 +444,7 @@ export class GeminiClient extends Emitter {
 		this._cachedSetupPayload = setup;
 		this._cachedSetupPayloadJson = serialized;
 		this._cachedSetupKey = JSON.stringify({
-			directMode: this._directMode,
-			autonomousMode: this._autonomousMode,
+			behaviorState: this._behaviorState,
 			setupFallbackLevel: this._setupFallbackLevel,
 			skillDeclarations: Array.isArray(this._skillDeclarations)
 				? this._skillDeclarations.length
@@ -553,12 +650,13 @@ export class GeminiClient extends Emitter {
 				...claudeCodeStatus,
 				text,
 			});
-			if (this._autonomousMode) {
+			if (this._behaviorState.mode === 'proactive') {
 				return;
 			}
 		}
+		const outgoingText = augmentTextWithManagementCorrections(text);
 		this._send(
-			`{"clientContent":{"turns":[{"role":"user","parts":[{"text":${JSON.stringify(text)}}]}],"turnComplete":true}}`
+			`{"clientContent":{"turns":[{"role":"user","parts":[{"text":${JSON.stringify(outgoingText)}}]}],"turnComplete":true}}`
 		);
 	}
 
