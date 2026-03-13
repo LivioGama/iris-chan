@@ -42,10 +42,16 @@ function parseJsonEnvelope(text = '') {
 
 function coerceKind(kind = '') {
 	const normalized = normalizeText(kind);
-	if (['reply', 'next-step', 'warning', 'fix', 'follow-up', 'opportunity'].includes(normalized)) {
+	if (['reply', 'reply-prompt', 'next-step', 'warning', 'fix', 'follow-up', 'opportunity'].includes(normalized)) {
 		return normalized;
 	}
 	return 'next-step';
+}
+
+function parseToolEnvelope(result) {
+	if (!result) return null;
+	if (result.analysis && typeof result.analysis === 'object') return result.analysis;
+	return parseJsonEnvelope(result.result || '');
 }
 
 export class ProactiveEngine {
@@ -59,6 +65,9 @@ export class ProactiveEngine {
 		this.apiKey = '';
 		this.lastFrontmostApp = '';
 		this.lastEvaluatedFingerprint = '';
+		this.lastReplyFingerprint = '';
+		this.lastReplyAt = 0;
+		this.replyCooldownMs = 45_000;
 	}
 
 	async start() {
@@ -84,6 +93,7 @@ export class ProactiveEngine {
 	async tick() {
 		if (this.inFlight) return;
 		if (!this.voice?.canEvaluateProactively?.()) return;
+		if (this.voice?.hasPendingReplySession?.()) return;
 
 		const capture = this.screen?.latestCapture || null;
 		const captureAgeMs = capture?.capturedAt ? (Date.now() - capture.capturedAt) : Number.POSITIVE_INFINITY;
@@ -107,6 +117,10 @@ export class ProactiveEngine {
 		try {
 			this.lastFrontmostApp = frontmostApp;
 			this.lastEvaluatedFingerprint = contextFingerprint;
+
+			const handledReply = await this._evaluateReplyOpportunity({ frontmostApp, capture, contextFingerprint });
+			if (handledReply) return;
+
 			const suggestion = await this._evaluateWithFlash({ frontmostApp, capture, contextFingerprint });
 			if (!suggestion?.suggest) return;
 			if (!this.behavior.canSuggest({
@@ -135,6 +149,60 @@ export class ProactiveEngine {
 		} finally {
 			this.inFlight = false;
 		}
+	}
+
+	async _evaluateReplyOpportunity({ frontmostApp, capture, contextFingerprint }) {
+		let analysis = null;
+		try {
+			const detectResult = await window.electronAPI.executeTool?.('detect_reply_opportunity', {});
+			analysis = parseToolEnvelope(detectResult);
+		} catch (err) {
+			logError('ReplyAssistant', `Detection failed: ${err?.message || err}`);
+			return false;
+		}
+		if (!analysis?.ok) return false;
+		if (!analysis.needsReply) return false;
+		if (analysis.conversationFingerprint === this.lastReplyFingerprint && Date.now() - this.lastReplyAt < this.replyCooldownMs) {
+			return false;
+		}
+		if (!analysis.shouldOffer && !analysis.askToHelp) return false;
+
+		const drafts = await this._generateReplySuggestions({ frontmostApp, capture, analysis });
+		if (!Array.isArray(drafts) || drafts.length === 0) return false;
+
+		const replyPayload = {
+			kind: coerceKind(analysis.askToHelp ? 'reply-prompt' : 'reply'),
+			suggestion: analysis.askToHelp ? 'Want a suggested reply here?' : drafts.map((draft, index) => `${index + 1}. ${draft}`).join('  '),
+			confidence: Number(analysis.confidence || 0),
+			replyPrompt: !!analysis.askToHelp,
+			replyOptions: drafts,
+			context: {
+				app: analysis.frontmostApp || frontmostApp,
+				contextFingerprint: analysis.contextFingerprint || contextFingerprint,
+				conversationFingerprint: analysis.conversationFingerprint,
+				rationale: Array.isArray(analysis.reasons) ? analysis.reasons.join('; ') : '',
+				source: 'reply-assistant',
+			},
+			replyAssistant: {
+				composerQueries: Array.isArray(analysis.composerQueries) ? analysis.composerQueries : [],
+				sendQueries: Array.isArray(analysis.sendQueries) ? analysis.sendQueries : [],
+				contextSummary: analysis.contextSummary || '',
+				sendShortcutHint: analysis.sendShortcutHint || '',
+				conversationFingerprint: analysis.conversationFingerprint || contextFingerprint,
+				needsReply: !!analysis.needsReply,
+				askToHelp: !!analysis.askToHelp,
+				confidence: Number(analysis.confidence || 0),
+			},
+		};
+
+		this.eventBus.emitEvent(EVENT_TYPES.PROACTIVE_SUGGESTION, replyPayload, 'reply-assistant');
+		const spoken = this.voice?.presentReplySuggestions?.(replyPayload);
+		if (spoken) {
+			this.lastReplyFingerprint = analysis.conversationFingerprint || contextFingerprint;
+			this.lastReplyAt = Date.now();
+			return true;
+		}
+		return false;
 	}
 
 	async _evaluateWithFlash({ frontmostApp, capture, contextFingerprint }) {
@@ -197,6 +265,64 @@ export class ProactiveEngine {
 		} catch (err) {
 			logError('Proactive', `Flash evaluation error: ${err?.message || err}`);
 			return null;
+		}
+	}
+
+	async _generateReplySuggestions({ frontmostApp, capture, analysis }) {
+		if (!this.apiKey || !capture?.data) return [];
+		const prompt = [
+			'You generate concise reply suggestions for a visible conversation.',
+			'Return ONLY JSON. No markdown.',
+			'Use the accessibility summary as the primary source of truth. Use the screenshot only if the accessibility summary is incomplete.',
+			'Do not mention seeing a screenshot or UI. Do not include numbering in the reply texts.',
+			'Make the replies short, natural, and sendable as-is.',
+			'JSON schema:',
+			'{"drafts":["Sure, I can take a look.","I\'ll reply shortly."]}',
+			`Frontmost app: ${frontmostApp}`,
+			`Conversation summary:\n${analysis?.contextSummary || 'No context'}`,
+		].join('\n');
+
+		const body = {
+			contents: [{
+				parts: [
+					{ text: prompt },
+					{
+						inlineData: {
+							mimeType: 'image/jpeg',
+							data: capture.data,
+						},
+					},
+				],
+			}],
+			generationConfig: {
+				temperature: 0.35,
+				maxOutputTokens: 220,
+				responseMimeType: 'application/json',
+			},
+		};
+
+		try {
+			const resp = await fetch(`${FLASH_ENDPOINT}?key=${this.apiKey}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(12000),
+			});
+			if (!resp.ok) {
+				logError('ReplyAssistant', `Draft generation failed: HTTP ${resp.status}`);
+				return [];
+			}
+			const data = await resp.json();
+			const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+			const parsed = parseJsonEnvelope(text);
+			const drafts = Array.isArray(parsed?.drafts) ? parsed.drafts : [];
+			return drafts
+				.map((draft) => String(draft || '').trim())
+				.filter(Boolean)
+				.slice(0, 4);
+		} catch (err) {
+			logError('ReplyAssistant', `Draft generation error: ${err?.message || err}`);
+			return [];
 		}
 	}
 }

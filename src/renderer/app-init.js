@@ -53,6 +53,12 @@ export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 	}
 
 	if (evt.type === 'PROACTIVE_SUGGESTION') {
+		if (Array.isArray(evt.payload?.replyOptions) && evt.payload.replyOptions.length) {
+			const title = evt.payload?.replyPrompt ? 'Want a suggested reply here?' : 'Reply suggestions:';
+			const lines = evt.payload.replyOptions.map((option, index) => `${index + 1}. ${option}`);
+			showBubble('context', `${title}\n${lines.join('\n')}`);
+			return;
+		}
 		const kind = evt.payload?.kind ? `${evt.payload.kind}: ` : '';
 		showBubble('context', `${kind}${evt.payload?.suggestion || 'Suggested next step.'}`);
 		return;

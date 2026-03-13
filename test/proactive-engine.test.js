@@ -24,6 +24,9 @@ async function main() {
 			getApiKey: async () => 'test-key',
 			executeTool: async (name) => {
 				toolCalls += 1;
+				if (name === 'detect_reply_opportunity') {
+					return { ok: true, analysis: { ok: true, needsReply: false } };
+				}
 				assert.strictEqual(name, 'get_frontmost_app');
 				return { ok: true, result: 'Visual Studio Code - iris-chan' };
 			},
@@ -72,10 +75,12 @@ async function main() {
 		},
 		voice: {
 			canEvaluateProactively() { return true; },
+			hasPendingReplySession() { return false; },
 			speakProactiveSuggestion(text, payload) {
 				spoken.push({ text, payload });
 				return true;
 			},
+			presentReplySuggestions() { return false; },
 		},
 		screen: {
 			latestCapture: {
@@ -94,7 +99,7 @@ async function main() {
 	await engine.start();
 	await engine.tick();
 
-	assert.strictEqual(toolCalls, 1, 'frontmost app should be read once');
+	assert.strictEqual(toolCalls, 2, 'reply detection and frontmost app lookup should each run once');
 	assert.strictEqual(emitted.length, 1, 'one proactive event should be emitted');
 	assert.strictEqual(spoken.length, 1, 'one proactive suggestion should be spoken');
 	assert.strictEqual(emitted[0].type, 'PROACTIVE_SUGGESTION');

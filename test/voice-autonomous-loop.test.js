@@ -134,6 +134,7 @@ function installDomStubs() {
 			saveConversationTurn() {},
 			searchHide() {},
 			endSession() {},
+			executeTool: async () => ({ ok: true, result: 'ok' }),
 		},
 	};
 	global.requestAnimationFrame = (fn) => {
@@ -350,6 +351,117 @@ console.log('Running autonomous loop timer tests...');
 				'background_task_active',
 				'expected active background tasks to be treated as an idle suppression reason',
 			);
+		}
+
+		{
+			const { voice, gemini } = createVoiceHarness(VoiceEngine);
+			const toolCalls = [];
+			global.window.electronAPI.executeTool = async (name, args) => {
+				toolCalls.push({ name, args });
+				return { ok: true, result: 'ok' };
+			};
+			voice._active = true;
+			voice.state = 'LISTENING';
+			voice.gemini.sessionReady = true;
+
+			const shown = voice.presentReplySuggestions({
+				replyOptions: ['Sure, I can reply.', 'I will send it soon.'],
+				replyAssistant: {
+					composerQueries: ['reply'],
+					sendQueries: ['send'],
+					contextSummary: 'Visible conversation context',
+					sendShortcutHint: 'return',
+				},
+			});
+			assert.strictEqual(shown, true, 'reply suggestions should be spoken when the session is ready');
+
+			voice._accum.user = 'send 2';
+			voice._maybeCaptureReplyCommand();
+			assert.strictEqual(voice._pendingReplyAction?.type, 'preview-suggestion', 'send 2 should select a suggestion for preview');
+
+			await voice._runReplyAction(voice._pendingReplyAction);
+			voice._pendingReplyAction = null;
+			assert.strictEqual(toolCalls[0].name, 'prepare_reply_draft', 'preview should prepare the draft first');
+			assert.strictEqual(voice._replySession.mode, 'preview', 'preview action should advance the session to preview mode');
+
+			voice._accum.user = 'send it';
+			voice._proactiveResponseExpected = false;
+			voice._maybeCaptureReplyCommand();
+			assert.strictEqual(voice._pendingReplyAction?.type, 'confirm-send', 'send it should confirm the previewed draft');
+
+			await voice._runReplyAction(voice._pendingReplyAction);
+			voice._pendingReplyAction = null;
+			assert.strictEqual(toolCalls[1].name, 'send_reply_draft', 'confirmation should send the prepared draft');
+			assert.strictEqual(voice._replySession, null, 'successful send should clear the reply session');
+			assert.ok(gemini.sentTexts.some((text) => /Sent\./.test(text)), 'the success acknowledgement should be spoken');
+		}
+
+		{
+			const { voice } = createVoiceHarness(VoiceEngine);
+			const toolCalls = [];
+			global.window.electronAPI.executeTool = async (name, args) => {
+				toolCalls.push({ name, args });
+				if (name === 'prepare_reply_draft') return { ok: true, result: 'prepared' };
+				if (name === 'send_reply_draft') return { ok: true, result: 'sent' };
+				return { ok: true, result: 'ok' };
+			};
+			voice._active = true;
+			voice.state = 'LISTENING';
+			voice.gemini.sessionReady = true;
+			voice._apiKey = 'test-key';
+			voice._reviseReplyDraft = async ({ baseDraft, instruction }) => ({
+				ok: true,
+				draft: `${baseDraft} [${instruction}]`,
+			});
+
+			voice.presentReplySuggestions({
+				replyOptions: ['Hey, how have you been?', 'Sure, I can do that.'],
+				replyAssistant: {
+					composerQueries: ['reply'],
+					sendQueries: ['send'],
+					contextSummary: 'Visible conversation context',
+					sendShortcutHint: 'return',
+				},
+			});
+
+			voice._accum.user = 'send 1, but say how are you doing instead';
+			voice._maybeCaptureReplyCommand();
+			assert.strictEqual(voice._pendingReplyAction?.type, 'revise-and-send', 'edit-and-send command should trigger revision');
+
+			await voice._runReplyAction(voice._pendingReplyAction);
+			voice._pendingReplyAction = null;
+
+			assert.strictEqual(toolCalls[0].name, 'prepare_reply_draft', 'revised draft should be prepared before send');
+			assert.strictEqual(toolCalls[1].name, 'send_reply_draft', 'revised draft should send immediately after preparation');
+			assert.strictEqual(voice._replySession, null, 'successful revised send should clear the reply session');
+		}
+
+		{
+			const { voice } = createVoiceHarness(VoiceEngine);
+			voice._active = true;
+			voice.state = 'LISTENING';
+			voice.gemini.sessionReady = true;
+			voice._apiKey = 'test-key';
+			voice._reviseReplyDraft = async () => ({ ok: false });
+
+			voice.presentReplySuggestions({
+				replyOptions: ['Hey, how have you been?'],
+				replyAssistant: {
+					composerQueries: ['reply'],
+					sendQueries: ['send'],
+					contextSummary: 'Visible conversation context',
+					sendShortcutHint: 'return',
+				},
+			});
+
+			voice._accum.user = 'make 1 shorter';
+			voice._maybeCaptureReplyCommand();
+			assert.strictEqual(voice._pendingReplyAction?.type, 'revise-and-send', 'make N shorter should route through revision');
+
+			await voice._runReplyAction(voice._pendingReplyAction);
+			voice._pendingReplyAction = null;
+
+			assert.ok(voice._replySession, 'failed revision should keep the session alive');
 		}
 
 		{

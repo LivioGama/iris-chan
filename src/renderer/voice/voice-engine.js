@@ -72,6 +72,88 @@ const DEFAULT_VOICE_CONFIG = Object.freeze({
 	},
 });
 
+const DEFAULT_SPEECH_PROFILE = Object.freeze({
+	playbackRate: 1,
+	pitchSemitones: 0,
+	lowShelfFrequencyHz: 170,
+	lowShelfGainDb: 0,
+	warmthFrequencyHz: 280,
+	warmthGainDb: 0,
+	warmthQ: 0.9,
+	presenceFrequencyHz: 2100,
+	presenceGainDb: 0,
+	presenceQ: 0.7,
+	highShelfFrequencyHz: 4800,
+	highShelfGainDb: 0,
+	outputGain: 1,
+	compressorThresholdDb: -24,
+	compressorKneeDb: 8,
+	compressorRatio: 2.2,
+	compressorAttackSeconds: 0.003,
+	compressorReleaseSeconds: 0.2,
+});
+
+function normalizeReplyCommandText(value = '') {
+	return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function parseReplyCommand(text = '', mode = '') {
+	const normalized = normalizeReplyCommandText(text);
+	if (!normalized) return null;
+	const replaceMatch = normalized.match(/^(?:instead say|say instead|reply instead)\s+(.+)$/);
+	const numberedEditMatch = normalized.match(/^(?:send|say|tell(?:\s+(?:her|him|them))?|use|pick|choose|option)\s+([1-4])(?:\s*,?\s*but\s+|\s+but\s+)(.+)$/);
+	const makeNumberedMatch = normalized.match(/^make\s+([1-4])\s+(.+)$/);
+	const currentDraftRewrite = /^(?:make|change|rewrite|rephrase|shorten|soften|warm(?:er)?|casual|formal)\b/.test(normalized)
+		? normalized
+		: '';
+	if (mode === 'prompt') {
+		if (/^(yes|yeah|yep|sure|ok|okay|do it|show me|suggest|help)\b/.test(normalized)) {
+			return { type: 'open-suggestions' };
+		}
+		if (/^(no|nope|not now|skip|cancel)\b/.test(normalized)) {
+			return { type: 'dismiss' };
+		}
+		return null;
+	}
+	if (mode === 'suggestions') {
+		if (numberedEditMatch) {
+			return {
+				type: 'revise-and-send',
+				index: Number(numberedEditMatch[1]) - 1,
+				instruction: numberedEditMatch[2].trim(),
+			};
+		}
+		if (makeNumberedMatch) {
+			return {
+				type: 'revise-and-send',
+				index: Number(makeNumberedMatch[1]) - 1,
+				instruction: `make it ${makeNumberedMatch[2].trim()}`,
+			};
+		}
+		const sendMatch = normalized.match(/^(?:send|use|pick|choose|option)\s+([1-4])\b/);
+		if (sendMatch) return { type: 'preview-suggestion', index: Number(sendMatch[1]) - 1 };
+		const bareMatch = normalized.match(/^([1-4])$/);
+		if (bareMatch) return { type: 'preview-suggestion', index: Number(bareMatch[1]) - 1 };
+		if (replaceMatch) return { type: 'replace-and-send', text: replaceMatch[1].trim() };
+		if (/^(cancel|skip|not now|never mind)\b/.test(normalized)) return { type: 'dismiss' };
+		return null;
+	}
+	if (mode === 'preview') {
+		if (/^(send it|confirm|yes|yeah|do it|go ahead)\b/.test(normalized)) return { type: 'confirm-send' };
+		if (replaceMatch) return { type: 'replace-and-send', text: replaceMatch[1].trim() };
+		if (numberedEditMatch) {
+			return {
+				type: 'revise-and-send',
+				index: Number(numberedEditMatch[1]) - 1,
+				instruction: numberedEditMatch[2].trim(),
+			};
+		}
+		if (currentDraftRewrite) return { type: 'revise-current-and-send', instruction: currentDraftRewrite };
+		if (/^(cancel|skip|not now|no)\b/.test(normalized)) return { type: 'dismiss' };
+	}
+	return null;
+}
+
 function buildVoiceConfig(voiceConfig = {}) {
 	const overrides = voiceConfig && typeof voiceConfig === 'object' ? voiceConfig : {};
 	return {
@@ -89,6 +171,12 @@ function buildVoiceConfig(voiceConfig = {}) {
 			...DEFAULT_VOICE_CONFIG.recentSeen,
 			...(overrides.recentSeen || {}),
 		},
+		speechProfile: overrides.speechProfile && typeof overrides.speechProfile === 'object'
+			? {
+				...DEFAULT_SPEECH_PROFILE,
+				...(overrides.speechProfile || {}),
+			}
+			: undefined,
 	};
 }
 
@@ -139,6 +227,8 @@ export class VoiceEngine extends Emitter {
 		this._autonomousResponseExpected = false;
 		this._proactiveResponseExpected = false;
 		this._proactivePromptedAt = 0;
+		this._replySession = null;
+		this._pendingReplyAction = null;
 
 		this._matcher = vocab || new VocabMatcher();
 		this._correctionCandidates = new Map();
@@ -247,6 +337,7 @@ export class VoiceEngine extends Emitter {
 		this.gemini.on('inputTranscription', (text) => {
 			if (this._muted) return;
 			this._appendTranscript('user', text);
+			this._maybeCaptureReplyCommand();
 			updateIndicator('voice', true);
 		});
 
@@ -283,6 +374,13 @@ export class VoiceEngine extends Emitter {
 			this._accum.model = '';
 			this._lastUserTurn = '';
 			this._resetTurnLatency();
+			if (this._pendingReplyAction) {
+				const pending = this._pendingReplyAction;
+				this._pendingReplyAction = null;
+				this._runReplyAction(pending).catch((err) => {
+					logError('ReplyAssistant', `Reply action failed: ${err?.message || err}`);
+				});
+			}
 
 			if (!this._autonomousMode) {
 				if (this._proactiveResponseExpected) {
@@ -621,6 +719,15 @@ export class VoiceEngine extends Emitter {
 
 		const role = who === 'model' ? 'iris' : 'user';
 		showStreamingBubble('chat', this._correctTranscript(this._accum[who]), `stream-${who}`, { role });
+	}
+
+	_maybeCaptureReplyCommand() {
+		if (!this._replySession) return;
+		const transcript = this._correctTranscript(this._accum.user || '');
+		const parsed = parseReplyCommand(transcript, this._replySession.mode);
+		if (!parsed) return;
+		this._pendingReplyAction = parsed;
+		this._dropModelOutputUntilTurnComplete = true;
 	}
 
 	async loadVocabulary() {
@@ -1023,12 +1130,224 @@ export class VoiceEngine extends Emitter {
 			&& this.gemini?.sessionReady;
 	}
 
+	hasPendingReplySession() {
+		return !!this._replySession;
+	}
+
 	speakProactiveSuggestion(text, meta = {}) {
 		const clean = this.behavior.sanitize(text);
 		if (!clean) return false;
 		if (!this.canEvaluateProactively()) return false;
 		if (!this.behavior.canSpeakProactively()) return false;
 		const kind = String(meta?.kind || 'next-step').trim() || 'next-step';
+		this._proactiveResponseExpected = true;
+		this._proactivePromptedAt = Date.now();
+		this.gemini.sendText(
+			`[PROACTIVE SUGGESTION]\n` +
+			`Do NOT use tools. Speak EXACTLY the sentence below, naturally, once, and add nothing before or after.\n` +
+			`Kind: ${kind}\n` +
+			`Sentence: ${clean}`
+		);
+		return true;
+	}
+
+	presentReplySuggestions(payload = {}) {
+		const options = Array.isArray(payload.replyOptions) ? payload.replyOptions.map((item) => String(item || '').trim()).filter(Boolean) : [];
+		if (!options.length) return false;
+		const meta = payload.replyAssistant || {};
+		this._replySession = {
+			mode: payload.replyPrompt ? 'prompt' : 'suggestions',
+			options,
+			composerQueries: Array.isArray(meta.composerQueries) ? meta.composerQueries : [],
+			sendQueries: Array.isArray(meta.sendQueries) ? meta.sendQueries : [],
+			contextSummary: String(meta.contextSummary || ''),
+			sendShortcutHint: String(meta.sendShortcutHint || ''),
+			conversationFingerprint: String(meta.conversationFingerprint || ''),
+			createdAt: Date.now(),
+			draft: '',
+			baseDraft: '',
+			latestDraft: '',
+			selectedOptionIndex: null,
+		};
+
+		const spoken = payload.replyPrompt
+			? 'Want a suggested reply here?'
+			: `Possible replies. ${options.map((option, index) => `Option ${index + 1}: ${option}.`).join(' ')} Say send 1, send 2, send 3, or send 4. Or say instead say and your reply.`;
+		return this._speakSystemSentence(spoken, payload.replyPrompt ? 'reply-prompt' : 'reply');
+	}
+
+	async _runReplyAction(action) {
+		if (!this._replySession || !action?.type) return;
+		if (action.type === 'dismiss') {
+			this._replySession = null;
+			this._speakSystemSentence('Okay.', 'reply-dismiss');
+			return;
+		}
+		if (action.type === 'open-suggestions') {
+			this._replySession.mode = 'suggestions';
+			this._speakSystemSentence(
+				`Possible replies. ${this._replySession.options.map((option, index) => `Option ${index + 1}: ${option}.`).join(' ')} Say send 1, send 2, send 3, or send 4. Or say instead say and your reply.`,
+				'reply-suggestions'
+			);
+			return;
+		}
+		if (action.type === 'preview-suggestion') {
+			const text = this._replySession.options[action.index] || '';
+			if (!text) return;
+			await this._previewReplyDraft(text);
+			return;
+		}
+		if (action.type === 'replace-and-send') {
+			await this._composeAndSendReply(action.text, { replace: true });
+			return;
+		}
+		if (action.type === 'revise-and-send') {
+			const baseDraft = this._replySession.options[action.index] || '';
+			if (!baseDraft) return;
+			this._replySession.selectedOptionIndex = action.index;
+			await this._reviseAndSendReply(baseDraft, action.instruction, { selectedOptionIndex: action.index });
+			return;
+		}
+		if (action.type === 'revise-current-and-send') {
+			const baseDraft = this._replySession.latestDraft || this._replySession.baseDraft || this._replySession.draft;
+			if (!baseDraft) {
+				this._speakSystemSentence('Please tell me which reply to use first.', 'reply-clarify');
+				return;
+			}
+			await this._reviseAndSendReply(baseDraft, action.instruction, { selectedOptionIndex: this._replySession.selectedOptionIndex });
+			return;
+		}
+		if (action.type === 'confirm-send') {
+			await this._sendReplyDraft();
+		}
+	}
+
+	async _previewReplyDraft(text) {
+		if (!this._replySession) return;
+		const clean = String(text || '').trim();
+		if (!clean) return;
+		const result = await window.electronAPI.executeTool?.('prepare_reply_draft', {
+			text: clean,
+			composer_queries: this._replySession.composerQueries,
+		});
+		if (!result?.ok) {
+			this._speakSystemSentence('I could not prepare that reply.', 'reply-error');
+			return;
+		}
+		this._replySession.mode = 'preview';
+		this._replySession.draft = clean;
+		this._replySession.baseDraft = clean;
+		this._replySession.latestDraft = clean;
+		const selectedIndex = this._replySession.options.findIndex((option) => option === clean);
+		if (selectedIndex >= 0) this._replySession.selectedOptionIndex = selectedIndex;
+		this._speakSystemSentence(`Previewing: ${clean}. Say send it to send, or say instead say and your new reply.`, 'reply-preview');
+	}
+
+	async _composeAndSendReply(text, { replace = false } = {}) {
+		if (!this._replySession) return;
+		const clean = String(text || '').trim();
+		if (!clean) {
+			this._speakSystemSentence('Please rephrase how you want that reply changed.', 'reply-clarify');
+			return;
+		}
+		this._replySession.draft = clean;
+		if (!this._replySession.baseDraft) this._replySession.baseDraft = clean;
+		this._replySession.latestDraft = clean;
+		const prepare = await window.electronAPI.executeTool?.('prepare_reply_draft', {
+			text: clean,
+			composer_queries: this._replySession.composerQueries,
+		});
+		if (!prepare?.ok) {
+			this._speakSystemSentence(`I could not ${replace ? 'prepare that replacement reply' : 'prepare that revised reply'}.`, 'reply-error');
+			return;
+		}
+		await this._sendReplyDraft();
+	}
+
+	async _reviseAndSendReply(baseDraft, instruction, { selectedOptionIndex = null } = {}) {
+		if (!this._replySession) return;
+		const revised = await this._reviseReplyDraft({
+			baseDraft,
+			instruction,
+			options: this._replySession.options,
+			contextSummary: this._replySession.contextSummary,
+		});
+		if (!revised?.ok || !revised.draft) {
+			this._speakSystemSentence('Please rephrase how you want that reply changed.', 'reply-clarify');
+			return;
+		}
+		this._replySession.selectedOptionIndex = selectedOptionIndex;
+		this._replySession.baseDraft = String(baseDraft || '').trim();
+		this._replySession.latestDraft = revised.draft;
+		this._replySession.mode = 'preview';
+		await this._composeAndSendReply(revised.draft);
+	}
+
+	async _reviseReplyDraft({ baseDraft = '', instruction = '', options = [], contextSummary = '' } = {}) {
+		const draft = String(baseDraft || '').trim();
+		const changeRequest = String(instruction || '').trim();
+		if (!draft || !changeRequest || !this._apiKey) return { ok: false };
+		const prompt = [
+			'Rewrite the selected reply using the spoken instruction.',
+			'Return ONLY JSON. No markdown.',
+			'Rules:',
+			'- Output exactly one sendable reply.',
+			'- Do not explain changes.',
+			'- Do not add numbering or quotes unless the reply itself needs them.',
+			'- If the instruction is too ambiguous to act on safely, return {"ok":false}.',
+			'JSON schema:',
+			'{"ok":true,"draft":"string"}',
+			`Selected draft: ${draft}`,
+			`Spoken instruction: ${changeRequest}`,
+			`Other options for context: ${options.join(' || ') || 'none'}`,
+			`Conversation summary:\n${contextSummary || 'none'}`,
+		].join('\n');
+		try {
+			const resp = await fetch(`${FLASH_ENDPOINT}?key=${this._apiKey}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					contents: [{ parts: [{ text: prompt }] }],
+					generationConfig: {
+						temperature: 0.25,
+						maxOutputTokens: 140,
+						responseMimeType: 'application/json',
+					},
+				}),
+				signal: AbortSignal.timeout(12000),
+			});
+			if (!resp.ok) return { ok: false };
+			const data = await resp.json();
+			const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+			const parsed = parseJsonEnvelope(text);
+			const nextDraft = String(parsed?.draft || '').trim();
+			if (parsed?.ok !== true || !nextDraft) return { ok: false };
+			return { ok: true, draft: nextDraft };
+		} catch {
+			return { ok: false };
+		}
+	}
+
+	async _sendReplyDraft() {
+		if (!this._replySession?.draft) return;
+		const result = await window.electronAPI.executeTool?.('send_reply_draft', {
+			send_queries: this._replySession.sendQueries,
+			context_text: this._replySession.contextSummary,
+			shortcut_hint: this._replySession.sendShortcutHint,
+		});
+		if (result?.ok) {
+			this._replySession = null;
+			this._speakSystemSentence('Sent.', 'reply-sent');
+			return;
+		}
+		this._speakSystemSentence('I could not send that reply.', 'reply-send-failed');
+	}
+
+	_speakSystemSentence(text, kind = 'next-step') {
+		const clean = this.behavior.sanitize(text);
+		if (!clean) return false;
+		if (!this.canEvaluateProactively()) return false;
+		if (!this.behavior.canSpeakProactively()) return false;
 		this._proactiveResponseExpected = true;
 		this._proactivePromptedAt = Date.now();
 		this.gemini.sendText(
