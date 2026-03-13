@@ -90,6 +90,22 @@ function buildPreClickPreparationPolicyPayload(text = '', confidence = 0.96) {
 	};
 }
 
+function buildPositiveFeedbackClosurePolicyPayload(text = '', confidence = 0.96) {
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.positive_feedback_closure',
+		value: {
+			enabled: true,
+			message: 'When the user gives a short approval or satisfaction update such as saying the latest result looks good now, treat it as confirmation that the current direction worked. Acknowledge briefly, preserve the current task context, and do not reopen task discovery or ask for the same guidance again.',
+			evidence: text.trim(),
+		},
+		source: 'user_correction',
+		confidence,
+		evidence: text,
+	};
+}
+
 function isStatusBarIconCorrection(text = '') {
 	const normalized = normalizeText(text);
 	if (!normalized) return false;
@@ -221,6 +237,19 @@ function isTaskCreationAccountabilityGuidance(text = '') {
 	return mentionsTasks && mentionsCreation && asksOverview;
 }
 
+function isPositiveFeedbackClosureGuidance(text = '') {
+	const raw = String(text || '').trim();
+	if (!raw) return false;
+	const normalized = normalizeText(raw);
+	if (!normalized) return false;
+	const shortApproval = normalized.split(/\s+/).length <= 10;
+	const englishApproval = /\b(?:this|it|that)?\s*(?:is|looks|feels)?\s*(?:pretty\s+|really\s+|much\s+)?(?:nice|good|better|great|solid)\s+now\b/.test(normalized)
+		|| /\blooks\s+(?:good|better|great|nice)\s+now\b/.test(normalized)
+		|| /\b(?:much\s+)?better\s+now\b/.test(normalized);
+	const devanagariApproval = /(ओ|ओह|oh)\s+(दिस|this)\s+(इज|is)\s+((?:प्रीटी|प्रिटी|pretty)\s+)?(नाइस|nice|गुड|good|बेटर|better)\s+(नाउ|now)/i.test(raw);
+	return shortApproval && (englishApproval || devanagariApproval);
+}
+
 function isDirectTaskCreationGuidance(text = '') {
 	const normalized = normalizeText(text);
 	if (!normalized) return false;
@@ -291,6 +320,7 @@ function isPresenceReassuranceGuidance(text = '') {
 	const asksAvailability = /\b(are you there|you there|are you here|hello are you there|can you hear me|are you listening)\b/.test(normalized);
 	const raw = String(text || '').trim();
 	const rawTerms = raw.split(/\s+/).filter(Boolean);
+	const greetsAssistantByName = /^(?:hi|hii|hiii|hello|helo|hey|yo|sup|namaste|namaskar|हेलो|हैलो|हेल्लो|नमस्ते|नमस्कार)[,\s!?.…-]*(?:iris|iris[- ]?chan)[!?.…\s-]*$/iu.test(raw);
 	const plainGreeting = rawTerms.length > 0
 		&& rawTerms.length <= 3
 		&& /^(?:hi|hii|hiii|hello|helo|hey|yo|sup|namaste|namaskar|हेलो|हैलो|हेल्लो|नमस्ते|नमस्कार)[!?.…\s]*$/iu.test(raw)
@@ -301,7 +331,7 @@ function isPresenceReassuranceGuidance(text = '') {
 		&& !/(स्क्रिन|स्क्रीन|टर्मिनल|कन्सोल|कंसोल|लॉग|स्टेटस|मेनु|बार|टास्क|कन्फ्लिक्ट|क्लिक|ओपन|पोयम|कविता)/i.test(raw);
 	const nepaliPresence = /(हेलो\s*)?(कता|कहाँ|कताहो|कहां)\s*(हो|छौ|छ|chau|cha|chhau)?\s*(साथी)?/.test(normalized)
 		|| /\b(kata ho|kata chau|kata cha|kahaa chau|kaha chau|sathi)\b/.test(normalized);
-	return asksWhereabouts || asksAvailability || plainGreeting || nepaliPresence || shortNoisyListeningPing;
+	return asksWhereabouts || asksAvailability || plainGreeting || greetsAssistantByName || nepaliPresence || shortNoisyListeningPing;
 }
 
 function isBareAssistantAttentionPing(text = '', context = {}) {
@@ -309,7 +339,7 @@ function isBareAssistantAttentionPing(text = '', context = {}) {
 	if (!raw) return false;
 	const normalized = normalizeText(raw);
 	if (!normalized) return false;
-	const directNamePing = /^(?:hey[,\s]+|ok[,\s]+|okay[,\s]+)?iris(?:[- ]?chan)?[.!?…]*$/i.test(raw);
+	const directNamePing = /^(?:(?:hi|hello|helo|hey|yo|ok|okay|namaste|namaskar)[,\s!?.…-]+)?iris(?:[- ]?chan)?[.!?…]*$/i.test(raw);
 	if (!directNamePing) return false;
 	const recentTurns = Array.isArray(context.recentTurns) ? context.recentTurns.slice(-6) : [];
 	const activeConversation = recentTurns.some((turn) => turn && String(turn.role || '') !== 'user' && String(turn.text || '').trim());
@@ -418,6 +448,14 @@ class LearningClassifier {
 					confidence: 0.97,
 					evidence: text,
 				},
+			};
+		}
+		if (isPositiveFeedbackClosureGuidance(text)) {
+			return {
+				type: 'memory',
+				key: 'policy.positive_feedback_closure',
+				reason: 'positive feedback closure guidance',
+				payload: buildPositiveFeedbackClosurePolicyPayload(text, 0.97),
 			};
 		}
 		if (isEditorSelfImprovementGeneralizationGuidance(text)) {

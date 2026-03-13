@@ -190,9 +190,64 @@ async function testBenchmarkTaskCreationGuidanceLearnsPolicy() {
 	}
 }
 
+async function testHelloIrisPresenceGuidanceLearnsPolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('assistant', 'Working on the active self-improvement task now.');
+	manager.recordConversationTurn('user', 'Hello Iris');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.presence_reassurance' });
+	assert.ok(policy, 'hello-plus-name presence guidance should persist a reusable presence policy');
+	assert.match(
+		String(policy.value?.message || ''),
+		/here and listening/i,
+		'policy should preserve concise presence reassurance'
+	);
+	assert.strictEqual(selfFixCalls, 0, 'hello-plus-name presence guidance should not queue a generic self-fix');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'hello-plus-name presence guidance should be learned as policy instead of a core-gap issue');
+
+	const previous = serviceRef.getMemoryStore();
+	serviceRef.setMemoryStore(memoryStore);
+	try {
+		const prompt = buildCodingPrompt({
+			cwd: irisDir,
+			target: 'iris',
+			description: 'Handle presence pings like Hello Iris during active work without asking the user to restate the task.',
+		});
+		assert.match(prompt, /Learned presence policy:/, 'coding prompt should include the learned presence policy');
+		assert.match(
+			prompt,
+			/Hello Iris/i,
+			'coding prompt should explicitly surface greeting-plus-name presence handling'
+		);
+	} finally {
+		serviceRef.setMemoryStore(previous);
+	}
+}
+
 main()
 	.then(() => testConflictResolutionContinuationGuidanceLearnsPolicy())
 	.then(() => testBenchmarkTaskCreationGuidanceLearnsPolicy())
+	.then(() => testHelloIrisPresenceGuidanceLearnsPolicy())
 	.catch((error) => {
 		console.error(error);
 		process.exit(1);

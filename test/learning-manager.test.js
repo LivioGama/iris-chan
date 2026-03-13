@@ -518,8 +518,13 @@ async function testBareAssistantNamePingDuringActiveWorkLearnsPresencePolicy() {
 		assert.match(prompt, /Presence handling:/, 'coding prompt should include the presence handling rule');
 		assert.match(
 			prompt,
-			/treat it as an attention ping/i,
-			'coding prompt should surface the bare-name attention-ping behavior'
+			/says your name by itself/i,
+			'coding prompt should surface the bare-name presence-ping behavior'
+		);
+		assert.match(
+			prompt,
+			/concise status update/i,
+			'coding prompt should preserve bare-name active-work status handling'
 		);
 	} finally {
 		serviceRef.setMemoryStore(previous);
@@ -662,6 +667,39 @@ async function testNepaliNoNeedToAskGuidanceStoresReusablePolicy() {
 
 	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
 	assert.strictEqual(issues.issues.length, 0, 'Nepali anti-reask guidance should bypass the generic core-gap issue queue');
+}
+
+async function testPositiveFeedbackClosureGuidanceStoresReusablePolicy() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordConversationTurn('assistant', 'I updated the flow and reran the verification.');
+	manager.recordConversationTurn('user', 'ओ दिस इज प्रीटी नाइस नाउ');
+	await wait(80);
+
+	const policy = memoryStore.find({ key: 'policy.positive_feedback_closure' });
+	assert.ok(policy, 'short multilingual approval should be stored as reusable positive-feedback closure policy');
+	assert.strictEqual(policy.kind, 'fallback_policy', 'positive-feedback closure guidance should persist as a fallback policy');
+	assert.match(String(policy.value?.message || ''), /current direction worked/i);
+	assert.strictEqual(selfFixCalls, 0, 'positive-feedback closure guidance should not queue a generic self-fix');
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 0, 'positive-feedback closure guidance should not fall back to the generic nonpointer core-gap issue');
 }
 
 async function testLearningManagerRewritesDefaultAppQueryFromMemory() {
@@ -1562,6 +1600,7 @@ Promise.resolve()
 	.then(testLearningManagerStoresActionVerificationPolicyAndClustersSpecifically)
 	.then(testEditorSelfImprovementFrictionStoresReusablePolicy)
 	.then(testNepaliNoNeedToAskGuidanceStoresReusablePolicy)
+	.then(testPositiveFeedbackClosureGuidanceStoresReusablePolicy)
 	.then(testBuildCodingPromptIncludesAutonomousPolicy)
 	.then(testLearningManagerRewritesDefaultAppQueryFromMemory)
 	.then(testLearningManagerCreatesReusableToolSkill)

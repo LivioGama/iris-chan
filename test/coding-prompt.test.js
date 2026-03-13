@@ -67,9 +67,19 @@ function writeJson(filePath, value) {
 					message: 'When a UI task depends on a specific app or window, open or focus that app first, refresh the screen context, and only then use pointer actions or resolve visible targets. Treat run_ui_task -> open_app recovery as missing preparation rather than a reason to ask for the same guidance again.',
 				};
 			}
+			if (key === 'policy.presence_reassurance') {
+				return {
+					message: 'When the user greets you, says your name to get your attention, or asks where you are, answer briefly that you are here and listening. If active work is already in progress, treat a bare-name ping as a request for a concise status update instead of asking them to restate the task.',
+				};
+			}
 			if (key === 'policy.direct_creative_fulfillment') {
 				return {
 					message: 'When the user makes a short casual creative request such as asking for a poem, joke, caption, or short story, fulfill it directly instead of asking for task clarification or workspace context. Treat brief transliterated variants like "tell me a poem" as the same request when the intent is clear.',
+				};
+			}
+			if (key === 'policy.positive_feedback_closure') {
+				return {
+					message: 'When the user gives a short approval or satisfaction update such as saying the latest result looks good now, treat it as confirmation that the current direction worked. Acknowledge briefly, preserve the current task context, and do not reopen task discovery or ask for the same guidance again.',
 				};
 			}
 			return fallback;
@@ -98,10 +108,15 @@ function writeJson(filePath, value) {
 		assert.match(prompt, /Learned editor-improvement policy:/, 'coding prompt should expose the learned editor self-improvement policy');
 		assert.match(prompt, /Learned action-verification policy:/, 'coding prompt should expose the learned action-verification policy');
 		assert.match(prompt, /Learned UI-preparation policy:/, 'coding prompt should expose the learned UI preparation policy');
+		assert.match(prompt, /Learned presence policy:/, 'coding prompt should expose the learned presence reassurance policy');
 		assert.match(prompt, /Learned direct-creative policy:/, 'coding prompt should expose the learned direct-creative fulfillment policy');
+		assert.match(prompt, /Learned positive-feedback policy:/, 'coding prompt should expose the learned positive-feedback closure policy');
 		assert.match(prompt, /do not say you clicked something, opened a page, or reached a ui state until fresh screen evidence or a semantic checkpoint confirms it/i, 'coding prompt should explicitly block unverified UI success claims');
 		assert.match(prompt, /open or focus that app first, refresh the screen context, and only then use pointer actions/i, 'coding prompt should coach app/window preparation before pointer actions');
+		assert.match(prompt, /Hello Iris/i, 'coding prompt should explicitly treat greeting-plus-name presence pings as status requests');
+		assert.match(prompt, /here and listening/i, 'coding prompt should explicitly coach concise presence reassurance');
 		assert.match(prompt, /brief casual creative request such as "tell me a poem"/i, 'coding prompt should explicitly coach direct fulfillment of short creative asks');
+		assert.match(prompt, /brief approval like "looks good now" or "this is pretty nice now"/i, 'coding prompt should explicitly coach short positive-feedback closure handling');
 		assert.match(prompt, /what you are doing, what is done already, or asks for progress\/status/i, 'coding prompt should explicitly coach status answers for active work');
 		assert.match(prompt, /asks about tasks you created, queued, or opened for this work/i, 'coding prompt should explicitly coach created-task inventory answers');
 		assert.match(prompt, /Check tasks\.json when available before saying the context is missing/i, 'coding prompt should direct the agent to consult tasks.json for task-history answers');

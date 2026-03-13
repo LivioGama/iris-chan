@@ -80,11 +80,25 @@ function buildPreClickPreparationPolicyNote() {
 	return `Learned UI-preparation policy: ${message}`;
 }
 
+function buildPresencePolicyNote() {
+	const policy = getMemoryStore()?.getValue?.('policy.presence_reassurance', null);
+	const message = String(policy?.message || '').trim();
+	if (!message) return '';
+	return `Learned presence policy: ${message}`;
+}
+
 function buildDirectCreativeFulfillmentPolicyNote() {
 	const policy = getMemoryStore()?.getValue?.('policy.direct_creative_fulfillment', null);
 	const message = String(policy?.message || '').trim();
 	if (!message) return '';
 	return `Learned direct-creative policy: ${message}`;
+}
+
+function buildPositiveFeedbackClosurePolicyNote() {
+	const policy = getMemoryStore()?.getValue?.('policy.positive_feedback_closure', null);
+	const message = String(policy?.message || '').trim();
+	if (!message) return '';
+	return `Learned positive-feedback policy: ${message}`;
 }
 
 function buildCodingPrompt({ description, cwd, target = null } = {}) {
@@ -119,7 +133,9 @@ function buildCodingPrompt({ description, cwd, target = null } = {}) {
 		buildScreenReferencePolicyNote(),
 		buildActionVerificationPolicyNote(),
 		buildPreClickPreparationPolicyNote(),
+		buildPresencePolicyNote(),
 		buildDirectCreativeFulfillmentPolicyNote(),
+		buildPositiveFeedbackClosurePolicyNote(),
 		buildScientificMethodGuide(),
 		'Task:',
 		String(description || '').trim(),
@@ -131,7 +147,7 @@ function buildCodingPrompt({ description, cwd, target = null } = {}) {
 		'Conflict-resolution handling: If the user tells you to resolve conflicts without over-reading either change, do a light-touch comparison, preserve compatible intent from both sides, resolve the conflict decisively, and continue the active task without asking for the same guidance again.',
 		'Terminal-log handling: If the user asks whether you can see terminal output, runtime logs, or console lines on screen, inspect the visible terminal/log pane and answer from the current screen evidence. If the text is unreadable or capture is stale, report that blocker instead of asking again.',
 		'Screen-reference handling: If the user gives an ambiguous on-screen correction during active UI work, resolve it from the current screen context, visible target, and readable nearby labels/text before asking them to restate it.',
-		'Presence handling: If the user says your name by itself during active work, treat it as an attention ping. Answer briefly that you are here and include a concise status update instead of asking them to restate the task.',
+		'Presence handling: If the user greets you, says "Hello Iris", says your name by itself, or asks where you are during active work, treat it as a presence ping. Answer briefly that you are here and listening; if active work is in progress, include a concise status update instead of asking them to restate the task.',
 		'Do not ask the user to restate or re-select the same work unless the prior task context is genuinely missing.',
 		'Progress handling: If the user asks what you are doing, what is done already, or asks for progress/status, answer with the current task, concrete completed work so far, the next step, and any blocker instead of asking them to repeat the task.',
 		'Task-history handling: If the user asks about tasks you created, queued, or opened for this work, answer with a concise task inventory from the active work state and task history. Summarize each relevant task, its status, completed work so far, the next step, and any blocker. Check tasks.json when available before saying the context is missing.',
@@ -139,6 +155,7 @@ function buildCodingPrompt({ description, cwd, target = null } = {}) {
 		'Editor self-improvement handling: If repeated user friction points out a reusable editor or self-modification pattern, make the broader code change instead of fixing only the single instance. Generalize the behavior across similar editor tasks and stop requiring the same follow-up guidance.',
 		'UI action verification: Do not say you clicked something, opened a page, or reached a UI state until fresh screen evidence or a semantic checkpoint confirms it. If the action was sent but not verified, say that clearly and keep investigating.',
 		'Direct creative handling: If the user makes a brief casual creative request such as "tell me a poem", fulfill it directly instead of asking for task clarification, workspace context, or project selection.',
+		'Positive-feedback handling: If the user gives brief approval like "looks good now" or "this is pretty nice now", treat it as confirmation that the current approach worked. Acknowledge briefly, preserve the active task context, and do not restart task discovery or ask for the same guidance again.',
 		'Verification loop: After each meaningful change, run the strongest available verification, inspect the real output, and use that evidence to decide the next step.',
 		'Self-input: When one check passes or fails, treat the result as fresh input for the next investigation, edit, or verification step. Drive the loop yourself instead of waiting for more guidance.',
 		'Execution framing: Structure the work as hypothesis -> experiment -> implementation -> verification -> self-review. If configuration or prompt tuning matters, explore a small, justified parameter set instead of a single guess.',

@@ -171,7 +171,7 @@ class MemoryStore {
 			key: 'policy.screen_reference_direct_action',
 			value: {
 				enabled: true,
-				message: 'When the user gives a deictic or otherwise ambiguous pointer correction during active UI work, treat it as a screen-referential request. Use the latest screen context, visible target, and any readable on-screen label or text near that target to resolve what they mean instead of asking them to restate or point again.',
+				message: 'When the user gives a deictic or otherwise ambiguous on-screen correction or question during active UI work, treat it as a screen-referential request. Use the latest screen context, visible target, and any readable on-screen label, text, or value near that target to resolve what they mean instead of asking them to restate or point again.',
 			},
 			source: 'inferred',
 			confidence: 0.95,
@@ -227,6 +227,17 @@ class MemoryStore {
 			value: {
 				enabled: true,
 				message: 'When the user makes a brief casual chat or small-talk request such as "what\'s up", "how are you", or "what\'s up dude", answer directly in a natural conversational way instead of asking for task clarification, workspace context, or project selection. Treat short transliterated or non-English variants as the same request when the intent is clear.',
+			},
+			source: 'inferred',
+			confidence: 0.95,
+		});
+		this.upsert({
+			kind: 'fallback_policy',
+			scope: 'machine',
+			key: 'policy.positive_feedback_closure',
+			value: {
+				enabled: true,
+				message: 'When the user gives a short approval or satisfaction update such as saying the latest result looks good now, treat it as confirmation that the current direction worked. Acknowledge briefly, preserve the current task context, and do not reopen task discovery or ask for the same guidance again.',
 			},
 			source: 'inferred',
 			confidence: 0.95,
