@@ -6,6 +6,7 @@ const log = require('../logger');
 
 let win = null;
 let currentDisplayId = null;
+let displayPollTimer = null;
 
 function getBottomLeftPosition(display) {
 	const { x, y, height } = display.bounds;
@@ -22,7 +23,26 @@ function moveToDisplay(display) {
 	win.setPosition(pos.x, pos.y, false);
 }
 
+function stopDisplayPolling() {
+	if (!displayPollTimer) return;
+	clearInterval(displayPollTimer);
+	displayPollTimer = null;
+}
+
+function startDisplayPolling() {
+	stopDisplayPolling();
+	displayPollTimer = setInterval(() => {
+		const cursor = screen.getCursorScreenPoint();
+		const display = screen.getDisplayNearestPoint(cursor);
+		moveToDisplay(display);
+	}, 500);
+}
+
 function create() {
+	if (win && typeof win.isDestroyed === 'function' && !win.isDestroyed()) {
+		return win;
+	}
+
 	const primaryDisplay = screen.getPrimaryDisplay();
 	const pos = getBottomLeftPosition(primaryDisplay);
 	currentDisplayId = primaryDisplay.id;
@@ -62,12 +82,13 @@ function create() {
 		log.captureRendererConsole(level, 'Renderer', m);
 	});
 
-	// Poll cursor position to follow it across displays
-	setInterval(() => {
-		const cursor = screen.getCursorScreenPoint();
-		const display = screen.getDisplayNearestPoint(cursor);
-		moveToDisplay(display);
-	}, 500);
+	win.on('closed', () => {
+		stopDisplayPolling();
+		win = null;
+		currentDisplayId = null;
+	});
+
+	startDisplayPolling();
 
 	return win;
 }
