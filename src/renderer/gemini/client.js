@@ -14,7 +14,6 @@ const LOW_LATENCY_ACTIVITY_DETECTION = {
 	prefixPaddingMs: 20,
 	silenceDurationMs: 140,
 };
-const DEFAULT_SYSTEM_MODEL_VOICE = null;
 const MAX_SKILL_SECTION_CHARS = 12000;
 const MAX_SKILL_CATALOG_ENTRIES = 40;
 const SYSTEM_PROMPT_VERSION = 'speed-scientific-v1';
@@ -25,25 +24,21 @@ const INBOUND_MESSAGE_BATCH_SIZE = Math.max(1, Number.parseInt(globalThis.proces
 const SETUP_FALLBACK_PROFILES = Object.freeze([
 	Object.freeze({
 		label: 'full',
-		allowVoice: true,
 		includeSkillDeclarations: true,
 		maxSystemInstructionChars: DEFAULT_SETUP_MAX_SYSTEM_CHARS,
 	}),
 	Object.freeze({
 		label: 'no-custom-voice',
-		allowVoice: false,
 		includeSkillDeclarations: true,
 		maxSystemInstructionChars: DEFAULT_SETUP_MAX_SYSTEM_CHARS,
 	}),
 	Object.freeze({
 		label: 'core-tools-only',
-		allowVoice: false,
 		includeSkillDeclarations: false,
 		maxSystemInstructionChars: DEFAULT_SETUP_MAX_SYSTEM_CHARS,
 	}),
 	Object.freeze({
 		label: 'compact-system-instruction',
-		allowVoice: false,
 		includeSkillDeclarations: false,
 		maxSystemInstructionChars: Math.min(DEFAULT_SETUP_MAX_SYSTEM_CHARS, COMPACT_SETUP_MAX_SYSTEM_CHARS),
 	}),
@@ -158,7 +153,6 @@ export class GeminiClient extends Emitter {
 		this._connectId = 0; // guards against stale WS callbacks
 		this._directMode = false;
 		this._autonomousMode = false;
-		this._voiceName = DEFAULT_SYSTEM_MODEL_VOICE;
 		this._cachedSetupPayload = null;
 		this._cachedSetupPayloadJson = '';
 		this._cachedSetupKey = '';
@@ -177,12 +171,6 @@ export class GeminiClient extends Emitter {
 
 	setAutonomousMode(enabled) {
 		this._autonomousMode = !!enabled;
-		this._invalidateSetupCache();
-	}
-
-	setVoiceName(voiceName) {
-		const nextVoice = String(voiceName || '').trim();
-		this._voiceName = nextVoice || null;
 		this._invalidateSetupCache();
 	}
 
@@ -317,7 +305,6 @@ export class GeminiClient extends Emitter {
 		const setupKey = JSON.stringify({
 			directMode: this._directMode,
 			autonomousMode: this._autonomousMode,
-			voiceName: this._voiceName,
 			setupFallbackLevel: this._setupFallbackLevel,
 			skillDeclarations: Array.isArray(this._skillDeclarations)
 				? this._skillDeclarations.length
@@ -354,7 +341,6 @@ export class GeminiClient extends Emitter {
 		this._cachedSetupKey = JSON.stringify({
 			directMode: this._directMode,
 			autonomousMode: this._autonomousMode,
-			voiceName: this._voiceName,
 			setupFallbackLevel: this._setupFallbackLevel,
 			skillDeclarations: Array.isArray(this._skillDeclarations)
 				? this._skillDeclarations.length
@@ -369,15 +355,6 @@ export class GeminiClient extends Emitter {
 		const generationConfig = {
 			responseModalities: ['AUDIO'],
 		};
-		if (fallbackProfile.allowVoice && this._voiceName) {
-			generationConfig.speechConfig = {
-				voiceConfig: {
-					prebuiltVoiceConfig: {
-						voiceName: this._voiceName,
-					},
-				},
-			};
-		}
 		const functionDeclarations = [
 			...toolDeclarations,
 			...(fallbackProfile.includeSkillDeclarations ? (this._skillDeclarations || []) : []),

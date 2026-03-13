@@ -24,27 +24,6 @@ export interface Config {
 		bufferSize: number;
 	};
 	voice: {
-		modelVoiceName: string | null;
-		speechProfile: {
-			playbackRate: number;
-			pitchSemitones: number;
-			lowShelfFrequencyHz: number;
-			lowShelfGainDb: number;
-			warmthFrequencyHz: number;
-			warmthGainDb: number;
-			warmthQ: number;
-			presenceFrequencyHz: number;
-			presenceGainDb: number;
-			presenceQ: number;
-			highShelfFrequencyHz: number;
-			highShelfGainDb: number;
-			outputGain: number;
-			compressorThresholdDb: number;
-			compressorKneeDb: number;
-			compressorRatio: number;
-			compressorAttackSeconds: number;
-			compressorReleaseSeconds: number;
-		};
 		volumeThreshold: number;
 		screenCaptureInterval: number;
 		newTurnThresholdMs: number;
@@ -152,27 +131,6 @@ const config: Config = {
 		bufferSize: 2048,
 	},
 	voice: {
-		modelVoiceName: 'Charon',
-		speechProfile: {
-			playbackRate: 0.93,
-			pitchSemitones: -2.6,
-			lowShelfFrequencyHz: 170,
-			lowShelfGainDb: 3.4,
-			warmthFrequencyHz: 280,
-			warmthGainDb: 2.6,
-			warmthQ: 0.9,
-			presenceFrequencyHz: 2100,
-			presenceGainDb: 0.9,
-			presenceQ: 0.7,
-			highShelfFrequencyHz: 4800,
-			highShelfGainDb: 0.4,
-			outputGain: 1.05,
-			compressorThresholdDb: -22,
-			compressorKneeDb: 8,
-			compressorRatio: 2.8,
-			compressorAttackSeconds: 0.003,
-			compressorReleaseSeconds: 0.22,
-		},
 		volumeThreshold: 0.015,
 		screenCaptureInterval: 10000,
 		newTurnThresholdMs: 3000,
