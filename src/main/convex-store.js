@@ -284,6 +284,14 @@ const convexStore = {
         });
       });
     }
+
+    // Extract and save any URLs found in conversation text
+    const urlMatches = (text || '').match(/https?:\/\/[^\s<>"{}|\\^`\[\]]+/gi);
+    if (urlMatches) {
+      for (const url of urlMatches.slice(0, 5)) {
+        convexStore.saveLink({ url, title: '', snippet: '', source: 'conversation', sessionId }).catch(() => {});
+      }
+    }
   },
 
   async saveToolExecution(name, args, result, success, durationMs) {
