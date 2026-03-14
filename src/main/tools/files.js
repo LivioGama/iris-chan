@@ -156,6 +156,19 @@ function findSourceDmgForVolume(volumePath) {
 	return null;
 }
 
+async function list_mounted_installers() {
+	const images = getMountedDiskImages();
+	if (!images.length) {
+		return { ok: true, result: 'No mounted installer volumes found.', volumes: [] };
+	}
+	const lines = images.map((img) => `${img.volumeName} → ${img.imagePath}`);
+	return {
+		ok: true,
+		result: `Mounted installer volumes:\n${lines.join('\n')}`,
+		volumes: images,
+	};
+}
+
 function finderResolveItemByName(name) {
 	return runFinderAppleScript(`
 		tell application "Finder"
@@ -401,5 +414,6 @@ module.exports = {
 	classifyInstallArtifactPath,
 	getMountedDiskImages,
 	findSourceDmgForVolume,
+	list_mounted_installers,
 	download_browser_image,
 };

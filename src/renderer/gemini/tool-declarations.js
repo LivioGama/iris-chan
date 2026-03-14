@@ -277,6 +277,11 @@ export const toolDeclarations = [
 		},
 	},
 	{
+		name: 'list_mounted_installers',
+		description: 'List all currently mounted installer disk images (non-system volumes). Shows each volume name and the source .dmg file path. Use before cleanup to see what installers are mounted.',
+		parameters: { type: 'OBJECT', properties: {} },
+	},
+	{
 		name: 'recall_link',
 		description: 'Search your saved link history using natural language. Use when the user asks "what was that article about X?", "find that link about Y", "do you remember that page about Z?", or wants to browse previously seen links. Returns matching links ranked by relevance.',
 		parameters: { type: 'OBJECT', properties: {
