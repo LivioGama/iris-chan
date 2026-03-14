@@ -2,6 +2,8 @@ const log = require('../logger');
 const avatarWindow = require('../windows/avatar-window');
 const kanbanWindow = require('../windows/kanban-window');
 
+const { getConvexClient: getUnifiedConvexClient } = require('../runtime/convex-adapter');
+
 const DEFAULT_COUNTDOWN_SECONDS = 10;
 const DEFAULT_COUNTDOWN_TICK_MS = 1000;
 const QUEUE_TASK_FIELDS = new Set([
@@ -32,7 +34,6 @@ const QUEUE_TASK_FIELDS = new Set([
 	'updatedAt',
 ]);
 
-let convexClient = null;
 let behaviorEngineRef = null;
 const countdowns = new Map();
 const EXECUTION_LANE_ALIASES = Object.freeze({
@@ -53,16 +54,12 @@ const EXECUTION_LANE_DEFAULTS = Object.freeze({
 	frustration: Object.freeze({ lane: 'research-observability', profile: 'observability-researcher', queueBucket: 'friction-research' }),
 });
 
-function setConvexClient(client) {
-	convexClient = client;
-}
-
 function setBehaviorEngine(engine) {
 	behaviorEngineRef = engine;
 }
 
 function getConvexClient() {
-	return convexClient;
+	return getUnifiedConvexClient();
 }
 
 function getBehaviorEngine() {
@@ -168,25 +165,34 @@ function createExecutionMetadata(execution = {}) {
 }
 
 function getBroadcastTargets() {
-	return [avatarWindow.get(), kanbanWindow.get()].filter((win, index, all) => {
-		return Boolean(win) && all.findIndex((candidate) => candidate?.webContents?.id === win?.webContents?.id) === index;
+	return [avatarWindow.get(), kanbanWindow.get()].filter(Boolean).filter((win, index, all) => {
+		return all.findIndex((candidate) => candidate.webContents?.id === win.webContents?.id) === index;
 	});
 }
 
 function broadcastTaskUpdate(update) {
-	getBroadcastTargets().forEach((win) => {
-		if (win && !win.isDestroyed()) {
+	const targets = getBroadcastTargets();
+	for (const win of targets) {
+		if (!win.isDestroyed()) {
 			win.webContents.send('tq:task-update', update);
 		}
-	});
+	}
+	// Also notify reconciled catalog
+	try {
+		const { getCatalogService } = require('../controllers/kanbanController');
+		getCatalogService()?.broadcastUpdate(update);
+	} catch {
+		// Controller might not be ready
+	}
 }
 
 function broadcastCountdown(taskId, remaining) {
-	getBroadcastTargets().forEach((win) => {
-		if (win && !win.isDestroyed()) {
+	const targets = getBroadcastTargets();
+	for (const win of targets) {
+		if (!win.isDestroyed()) {
 			win.webContents.send('tq:countdown-state', { taskId, remaining });
 		}
-	});
+	}
 }
 
 function clearCountdown(taskId) {
@@ -199,6 +205,7 @@ function clearCountdown(taskId) {
 
 async function approveQueuedTask(taskId, patch = {}) {
 	clearCountdown(taskId);
+	const convexClient = getConvexClient();
 	if (!convexClient) return { ok: false, error: 'No Convex client' };
 	const result = await convexClient.updateQueueTask(taskId, {
 		status: 'queued',
@@ -212,6 +219,7 @@ async function approveQueuedTask(taskId, patch = {}) {
 
 async function cancelQueuedTask(taskId, reason = 'Cancelled by user') {
 	clearCountdown(taskId);
+	const convexClient = getConvexClient();
 	if (!convexClient) return { ok: false, error: 'No Convex client' };
 	const result = await convexClient.updateQueueTask(taskId, {
 		status: 'cancelled',
@@ -242,6 +250,7 @@ function startCountdown(taskId, options = {}) {
 
 		if (remaining <= 0) {
 			clearCountdown(taskId);
+			const convexClient = getConvexClient();
 			if (!convexClient) return;
 			try {
 				const allTasks = await convexClient.getAllQueueTasks();
@@ -276,6 +285,7 @@ async function createQueuedTask(options) {
 		countdownTickMs,
 	} = options || {};
 
+	const convexClient = getConvexClient();
 	if (!convexClient) {
 		throw new Error('Convex client not initialized');
 	}
@@ -298,6 +308,7 @@ async function createQueuedTask(options) {
 		intake: normalizedIntake,
 		execution: createExecutionMetadata({
 			...extraTaskFields.execution,
+			strategy: options.strategy || extraTaskFields.execution?.strategy || 'watcher-executor',
 			taskKind: normalizedTaskKind,
 			executionLane: options.executionLane || extraTaskFields.executionLane || inferredExecutionLane,
 			hireableProfile: options.hireableProfile || extraTaskFields.hireableProfile,
@@ -341,6 +352,7 @@ async function createQueuedTask(options) {
 		try {
 			const { enrichPrompt } = require('../task-queue/enricher');
 			const enriched = await enrichPrompt(rawPrompt, resolvedPath);
+			const convexClient = getConvexClient();
 			const enrichmentPatch = sanitizeQueueTaskFields({
 				enrichedPrompt: enriched.enrichedPrompt,
 				impactedFiles: enriched.impactedFiles,
@@ -427,7 +439,6 @@ async function createFrustrationQueuedTask(options = {}) {
 }
 
 module.exports = {
-	setConvexClient,
 	setBehaviorEngine,
 	getConvexClient,
 	getBehaviorEngine,

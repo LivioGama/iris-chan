@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('irisPaths', {
 	sourceDirDisplay: formatHomeRelativePath(irisSourceDir),
 });
 
-contextBridge.exposeInMainWorld('electronAPI', {
+const electronAPI = {
 	getApiKey: () => ipcRenderer.invoke(CHANNELS.GET_API_KEY),
 	getVoiceConfig: () => ipcRenderer.invoke(CHANNELS.GET_VOICE_CONFIG),
 	onToggleVoice: (cb) => ipcRenderer.on(CHANNELS.TOGGLE_VOICE, cb),
@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	updateKanbanTask: (taskId, updates) => ipcRenderer.invoke(CHANNELS.UPDATE_KANBAN_TASK, taskId, updates),
 	onClaudeCodeStream: (cb) => ipcRenderer.on(CHANNELS.CLAUDE_CODE_STREAM, (_, data) => cb(data)),
 	kanbanRunTask: (taskId) => ipcRenderer.invoke(CHANNELS.RUN_TASK, taskId),
+	kanbanDeleteTask: (taskId, source) => ipcRenderer.invoke('delete-kanban-task', taskId, source),
+	kanbanAddTask: (task) => ipcRenderer.invoke('add-kanban-task', task),
 	kanbanRunSkill: (skillName, opts) => ipcRenderer.invoke(CHANNELS.RUN_SKILL, skillName, opts),
 	kanbanSetVisible: (visible) => ipcRenderer.invoke(CHANNELS.SET_KANBAN_VISIBLE, visible),
 	kanbanResize: (width, height) => ipcRenderer.invoke(CHANNELS.RESIZE_KANBAN, width, height),
@@ -138,4 +140,103 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	getDirectMode: () => ipcRenderer.invoke(RUNTIME_CHANNELS.DIRECT_MODE_GET),
 	setDirectMode: (enabled) => ipcRenderer.invoke(RUNTIME_CHANNELS.DIRECT_MODE_SET, enabled),
 	onDirectModeChanged: (cb) => ipcRenderer.on('direct-mode-changed', (_, enabled) => cb(enabled)),
-});
+};
+
+// Namespaced API
+electronAPI.runtime = {
+	getHealth: electronAPI.getRuntimeHealth,
+	getProcessMetrics: electronAPI.getBenchmarkProcessMetrics,
+	eventPing: electronAPI.benchmarkRuntimeEventPing,
+	getBehaviorState: electronAPI.getBehaviorState,
+	setBehaviorState: electronAPI.setBehaviorState,
+	getBehaviorMode: electronAPI.getBehaviorMode,
+	setBehaviorMode: electronAPI.setBehaviorMode,
+	onBehaviorStateChanged: electronAPI.onBehaviorStateChanged,
+	onBehaviorModeChanged: electronAPI.onBehaviorModeChanged,
+	subscribeEvents: electronAPI.subscribeEvents,
+	unsubscribeEvents: electronAPI.unsubscribeEvents,
+	onEvent: electronAPI.onEvent,
+	runTask: electronAPI.runTask,
+	stopTask: electronAPI.stopTask,
+	onTaskStream: electronAPI.onTaskStream,
+	runUiTask: electronAPI.runUiTask,
+	stopUiTask: electronAPI.stopUiTask,
+	getUiState: electronAPI.getUiState,
+	onUiTaskStream: electronAPI.onUiTaskStream,
+	verifyHistoryImport: electronAPI.verifyHistoryImport,
+	createDailyDraft: electronAPI.createDailyDraft,
+	getDirectMode: electronAPI.getDirectMode,
+	setDirectMode: electronAPI.setDirectMode,
+	onDirectModeChanged: electronAPI.onDirectModeChanged,
+	reloadSession: electronAPI.reloadSession,
+	onReloadSession: electronAPI.onReloadSession,
+	executeTool: electronAPI.executeTool,
+	getSkillDeclarations: electronAPI.getSkillDeclarations,
+	getSkillPrompts: electronAPI.getSkillPrompts,
+	getSkillCatalog: electronAPI.getSkillCatalog,
+	killSkill: electronAPI.killSkill,
+};
+
+electronAPI.kanban = {
+	loadTasks: electronAPI.loadKanbanTasks,
+	saveTasks: electronAPI.saveKanbanTasks,
+	updateTask: electronAPI.updateKanbanTask,
+	deleteTask: electronAPI.kanbanDeleteTask,
+	addTask: electronAPI.kanbanAddTask,
+	runTask: electronAPI.kanbanRunTask,
+	runSkill: electronAPI.kanbanRunSkill,
+	setVisible: electronAPI.kanbanSetVisible,
+	resize: electronAPI.kanbanResize,
+	removeCompleted: electronAPI.kanbanRemoveCompleted,
+	syncToConvex: electronAPI.kanbanSyncToConvex,
+	gitCommit: electronAPI.kanbanGitCommit,
+	gitPush: electronAPI.kanbanGitPush,
+	specMdExists: electronAPI.kanbanSpecMdExists,
+	tasksFileExists: electronAPI.kanbanTasksFileExists,
+	writeSpecMd: electronAPI.kanbanWriteSpecMd,
+	deleteTasksFile: electronAPI.kanbanDeleteTasksFile,
+	parseSpecMd: electronAPI.kanbanParseSpecMd,
+	onTasksUpdated: electronAPI.onKanbanTasksUpdated,
+	onCodeStream: electronAPI.onKanbanCodeStream,
+};
+
+electronAPI.queue = {
+	createTask: electronAPI.tqCreateTask,
+	approveTask: electronAPI.tqApproveTask,
+	cancelTask: electronAPI.tqCancelTask,
+	detectPath: electronAPI.tqDetectPath,
+	getAll: electronAPI.tqGetAll,
+	getByProject: electronAPI.tqGetByProject,
+	onTaskUpdate: electronAPI.onTqTaskUpdate,
+	onCountdownState: electronAPI.onTqCountdownState,
+};
+
+electronAPI.voice = {
+	getVoiceConfig: electronAPI.getVoiceConfig,
+	onToggleVoice: electronAPI.onToggleVoice,
+	trackVocabulary: electronAPI.trackVocabulary,
+	getVocabulary: electronAPI.getVocabulary,
+	getHotVocabulary: electronAPI.getHotVocabulary,
+	getVocabularyStats: electronAPI.getVocabularyStats,
+	getVocabularyCorrections: electronAPI.getVocabularyCorrections,
+	getVocabularyCore: electronAPI.getVocabularyCore,
+	addCorrection: electronAPI.addCorrection,
+};
+
+electronAPI.window = {
+	captureScreen: electronAPI.captureScreen,
+	setIgnoreMouseEvents: electronAPI.setIgnoreMouseEvents,
+	toggleAvatar: electronAPI.toggleAvatar,
+	onToggleAutonomous: electronAPI.onToggleAutonomous,
+	getWindowGeometry: electronAPI.getWindowGeometry,
+	setWindowGeometry: electronAPI.setWindowGeometry,
+};
+
+electronAPI.search = {
+	spinner: electronAPI.searchSpinner,
+	result: electronAPI.searchResult,
+	hide: electronAPI.searchHide,
+	semantic: electronAPI.semanticSearch,
+};
+
+contextBridge.exposeInMainWorld('electronAPI', electronAPI);

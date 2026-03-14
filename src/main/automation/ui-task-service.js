@@ -1,5 +1,4 @@
 const { EventEmitter } = require('node:events');
-const { URL } = require('node:url');
 const { EVENT_TYPES } = require('../../shared/event-types.js');
 const { runHelper } = require('../native-helper');
 const { open_app, resolveDefaultApp } = require('../tools/apps');
@@ -8,56 +7,18 @@ const log = require('../logger');
 const { BrowserAdapter } = require('./browser-adapter');
 const { InputMonitor } = require('./input-monitor');
 const { isNativeEligiblePlan, isNativeEligibleStep, resolverIdForStep } = require('./native-resolver-registry');
-const { createExecutionPlan } = require('./planner');
 const { planLikelySatisfiesGoal } = require('./skill-policy');
 const { WorldState } = require('./world-state');
 const screenCapture = require('../screen-capture');
 const { requestTarsAction, validateTarsImagePoint, getTarsConfig } = require('./tars-client');
 
+const { PlanningEngine, createPlanSignature, createTaskSignature } = require('./planning-engine');
+const { ExecutionPolicy } = require('./execution-policy');
+const { VerificationEngine } = require('./verification-engine');
+const { makeTaskError, throwIfAborted, stepLabel } = require('./ui-task-service-utils');
+
 function createTaskId() {
 	return `ui_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function normalizeSignatureText(value = '') {
-	return String(value || '')
-		.toLowerCase()
-		.replace(/["'`]/g, '')
-		.replace(/\s+/g, ' ')
-		.trim();
-}
-
-function createTaskSignature({ goal = '', appHint = '', successSignal = '' } = {}) {
-	return JSON.stringify({
-		goal: normalizeSignatureText(goal),
-		appHint: normalizeSignatureText(appHint),
-		successSignal: normalizeSignatureText(successSignal),
-	});
-}
-
-function createPlanSignature(plan = {}) {
-	const steps = Array.isArray(plan.steps) ? plan.steps : [];
-	return JSON.stringify({
-		appHint: normalizeSignatureText(plan.appHint || ''),
-		steps: steps.map((step) => ({
-			type: step.type || '',
-			appName: normalizeSignatureText(step.appName || step.appHint || ''),
-			url: step.url || '',
-			direction: normalizeSignatureText(step.direction || ''),
-			query: normalizeSignatureText(step.query || ''),
-			value: normalizeSignatureText(step.value || ''),
-			resultKind: normalizeSignatureText(step.resultKind || ''),
-			position: Number(step.position || 0),
-			selectorText: normalizeSignatureText(step.selector?.text || ''),
-			selectorRole: normalizeSignatureText(step.selector?.role || ''),
-		})),
-	});
-}
-
-function makeTaskError(message, code = 'ui_task_failed', details = {}) {
-	const err = new Error(message);
-	err.code = code;
-	Object.assign(err, details);
-	return err;
 }
 
 function didBrowserPageChange(beforeInfo, afterInfo) {
@@ -99,37 +60,6 @@ function wait(ms, signal) {
 	});
 }
 
-function throwIfAborted(signal) {
-	if (signal?.aborted) {
-		throw signal.reason || makeTaskError('UI task interrupted', 'aborted');
-	}
-}
-
-function stepLabel(step) {
-	switch (step.type) {
-		case 'openApp':
-			return `Open ${step.appName || step.appHint}`;
-		case 'openUrl':
-			return `Open ${step.url}`;
-		case 'clickElement':
-			return `Click ${step.selector?.text || 'target'}`;
-		case 'selectItemByText':
-			return `Select ${step.selector?.text || 'item'}`;
-		case 'setElementValue':
-			return `Type ${step.value}`;
-		case 'searchInCurrentContext':
-			return `Search for ${step.query}`;
-		case 'clickSearchResult':
-			return `Click first ${step.resultKind || ''} result`;
-		case 'navigateHistory':
-			return step.direction === 'forward' ? 'Go forward' : 'Go back';
-		case 'scrollUntilVisible':
-			return `Scroll ${step.direction}`;
-		default:
-			return step.type;
-	}
-}
-
 function toScreenPoint(x, y, captureId) {
 	const mapping = screenCapture.getMapping(captureId);
 	if (!mapping) return null;
@@ -146,75 +76,6 @@ function classifyOpenAppDomain(appName = '', resolverId = '') {
 		return 'system';
 	}
 	return 'general';
-}
-
-const DESTRUCTIVE_TARGET_PATTERN = /\b(delete|remove|trash|discard|erase|overwrite|replace|eject|detach|empty trash)\b/i;
-const EXPLICIT_DESTRUCTIVE_INTENT_PATTERN = /\b(delete|remove|trash|discard|erase|overwrite|replace|eject|detach|clean(?:\s+up)?)\b/i;
-
-function isDestructiveSelectionStep(step = {}) {
-	return ['clickElement', 'selectItemByText', 'clickSearchResult'].includes(step.type)
-		&& DESTRUCTIVE_TARGET_PATTERN.test(String(step.selector?.text || step.resultKind || ''));
-}
-
-function classifySafetyClass(plan = {}, step = {}) {
-	if (step.type === 'cleanupInstallArtifact') {
-		return 'install_cleanup';
-	}
-	if (isDestructiveSelectionStep(step)) {
-		return 'destructive';
-	}
-	switch (step.type) {
-		case 'openApp':
-		case 'resolveSystemDefault':
-		case 'openUrl':
-		case 'navigateHistory':
-			return 'deterministic';
-		case 'setElementValue':
-		case 'editorCommand':
-		case 'mediaControl':
-			return 'guarded';
-		case 'clickElement':
-		case 'selectItemByText':
-		case 'clickSearchResult':
-		case 'scrollUntilVisible':
-			return 'pointer';
-		default:
-			return 'standard';
-	}
-}
-
-function supportsPrimaryTars(step = {}) {
-	return ['clickElement', 'selectItemByText', 'clickSearchResult'].includes(step.type);
-}
-
-function buildExecutionContract(plan = {}, step = {}, tarsEnabled = false) {
-	const safetyClass = classifySafetyClass(plan, step);
-	const fallbackTiers = [];
-	const blocksPointerAutomation = safetyClass === 'destructive' || safetyClass === 'install_cleanup';
-	if (!blocksPointerAutomation && tarsEnabled && supportsPrimaryTars(step)) {
-		fallbackTiers.push('tars', 'semantic');
-	} else {
-		fallbackTiers.push('semantic');
-		if (!blocksPointerAutomation && (step.type === 'clickElement' || step.type === 'selectItemByText' || step.type === 'clickSearchResult' || step.type === 'scrollUntilVisible')) {
-			fallbackTiers.push('tars-rescue');
-		}
-	}
-	return {
-		safetyClass,
-		checkpointKind: step.checkpoint?.kind || (plan.successSignal ? 'success-signal' : 'none'),
-		confirmationPolicy: safetyClass === 'install_cleanup'
-			? 'explicit-install-cleanup-intent'
-			: safetyClass === 'destructive'
-				? 'explicit-destructive-intent'
-				: 'none',
-		verificationPolicy: safetyClass === 'install_cleanup'
-			? 'artifact-removed-or-detached'
-			: safetyClass === 'destructive'
-				? 'blocked-without-dedicated-flow'
-				: 'standard',
-		primaryTier: fallbackTiers[0] || 'semantic',
-		fallbackTiers,
-	};
 }
 
 class UITaskService extends EventEmitter {
@@ -237,6 +98,11 @@ class UITaskService extends EventEmitter {
 		this._getTarsConfig = deps.getTarsConfig || getTarsConfig;
 		this.browserAdapter = new BrowserAdapter();
 		this.worldState = new WorldState();
+
+		this.planningEngine = new PlanningEngine(this);
+		this.executionPolicy = new ExecutionPolicy(this);
+		this.verificationEngine = new VerificationEngine(this);
+
 		this.activeTask = null;
 		this.lastCompletedTask = null;
 		this.inputMonitor = new InputMonitor({
@@ -304,7 +170,7 @@ class UITaskService extends EventEmitter {
 		let learnedEntry = null;
 		let recoveredFromSkillFailure = false;
 		const explicitAppHint = String(appHint || '').trim();
-		const routeAppHint = explicitAppHint || (await this._getRouteAppHint());
+		const routeAppHint = explicitAppHint || (await this.planningEngine.getRouteAppHint());
 
 		if (this.selfImprovementManager) {
 			learnedEntry = this.selfImprovementManager.findMatchingSkill({ goal: normalizedGoal, appHint: routeAppHint || explicitAppHint });
@@ -331,8 +197,8 @@ class UITaskService extends EventEmitter {
 						});
 						recoveredFromSkillFailure = true;
 					} else {
-					this.selfImprovementManager.recordLearnedOutcome(learnedEntry, true, { result: learnedRun.result });
-					return learnedRun;
+						this.selfImprovementManager.recordLearnedOutcome(learnedEntry, true, { result: learnedRun.result });
+						return learnedRun;
 					}
 				}
 				if (!recoveredFromSkillFailure) {
@@ -342,7 +208,7 @@ class UITaskService extends EventEmitter {
 				}
 			}
 		}
-		const planned = createExecutionPlan({ goal: normalizedGoal, appHint: explicitAppHint || routeAppHint, successSignal });
+		const planned = this.planningEngine.createPlan({ goal: normalizedGoal, appHint: explicitAppHint || routeAppHint, successSignal });
 		if (!planned.ok) {
 			return { ok: false, result: planned.error };
 		}
@@ -372,13 +238,8 @@ class UITaskService extends EventEmitter {
 		return builtinRun;
 	}
 
-	async _getRouteAppHint() {
-		const frontmost = await this.worldState.getFrontmostApp({ force: true });
-		return frontmost.ok ? String(frontmost.name || '').trim() : '';
-	}
-
 	async _runPlannedTask({ goal, plan, planSource = 'builtin', sourceSkill = null } = {}) {
-		const signature = createPlanSignature(plan);
+		const signature = this.planningEngine.createPlanSignature(plan);
 		if (this.activeTask) {
 			if (this.activeTask.signature === signature) {
 				return {
@@ -499,8 +360,8 @@ class UITaskService extends EventEmitter {
 		for (let i = 0; i < plan.steps.length; i++) {
 			throwIfAborted(controller.signal);
 			const step = plan.steps[i];
-			const executionContract = buildExecutionContract(plan, step, this._isTarsRescueEnabled());
-			this._enforceSafetyContract(plan, step, executionContract);
+			const executionContract = this.executionPolicy.buildExecutionContract(plan, step, this._isTarsRescueEnabled());
+			this.executionPolicy.enforceSafetyContract(plan, step, executionContract);
 			activeTask.currentStepIndex = i;
 			this._emitMilestone(taskId, `Step ${i + 1}/${plan.steps.length}: ${stepLabel(step)}`, {
 				step,
@@ -548,7 +409,7 @@ class UITaskService extends EventEmitter {
 		}
 
 		if (plan.successSignal) {
-			await this._verifySuccessSignal(plan, controller.signal);
+			await this.verificationEngine.verifySuccessSignal(plan, controller.signal);
 		}
 
 		const lastTrace = activeTask.trace[activeTask.trace.length - 1];
@@ -587,7 +448,7 @@ class UITaskService extends EventEmitter {
 		try {
 			const outcome = await this._executeStep(step, signal);
 			if (step.checkpoint) {
-				await this._verifyCheckpoint(plan, step, outcome, signal);
+				await this.verificationEngine.verifyCheckpoint(plan, step, outcome, signal);
 			}
 			return {
 				...outcome,
@@ -648,24 +509,6 @@ class UITaskService extends EventEmitter {
 				return this._executeCleanupInstallArtifact(step, signal);
 			default:
 				throw makeTaskError(`Unsupported UI step: ${step.type}`, 'unsupported_step');
-		}
-	}
-
-	_enforceSafetyContract(plan, step, executionContract) {
-		if (executionContract.safetyClass === 'destructive') {
-			throw makeTaskError(
-				`Blocked destructive UI action for "${step.selector?.text || step.resultKind || step.type}". Use a dedicated verified flow instead of a generic GUI click.`,
-				'safety_confirmation_required'
-			);
-		}
-		if (executionContract.safetyClass !== 'install_cleanup') {
-			return;
-		}
-		if (!EXPLICIT_DESTRUCTIVE_INTENT_PATTERN.test(String(plan.goal || ''))) {
-			throw makeTaskError(
-				'Install cleanup requires explicit user intent before removing or ejecting installer artifacts.',
-				'safety_confirmation_required'
-			);
 		}
 	}
 
@@ -1111,7 +954,7 @@ class UITaskService extends EventEmitter {
 	}
 
 	async _attemptPrimaryTars({ taskId, plan, step, signal }) {
-		if (!this._isTarsRescueEnabled() || !supportsPrimaryTars(step)) {
+		if (!this._isTarsRescueEnabled() || !this.executionPolicy.supportsPrimaryTars(step)) {
 			return { ok: false, error: makeTaskError('Primary TARS execution is unavailable', 'tars_unavailable') };
 		}
 
@@ -1176,7 +1019,7 @@ class UITaskService extends EventEmitter {
 
 		try {
 			if (step.checkpoint) {
-				await this._verifyCheckpoint(plan, step, outcome, signal);
+				await this.verificationEngine.verifyCheckpoint(plan, step, outcome, signal);
 			}
 			outcome.successType = 'true_success';
 			outcome.result = `Completed ${stepLabel(step)} via primary TARS execution`;
@@ -1300,7 +1143,7 @@ class UITaskService extends EventEmitter {
 
 			try {
 				if (step.checkpoint) {
-					await this._verifyCheckpoint(plan, step, outcome, signal);
+					await this.verificationEngine.verifyCheckpoint(plan, step, outcome, signal);
 				}
 				outcome.successType = 'true_success';
 				outcome.result = `Completed ${stepLabel(step)} via TARS rescue`;
@@ -1327,75 +1170,6 @@ class UITaskService extends EventEmitter {
 			tarsRescue: { attempts },
 		});
 		return { ok: false, error: finalError };
-	}
-
-	async _verifyCheckpoint(plan, step, outcome, signal) {
-		throwIfAborted(signal);
-		if (step.checkpoint?.kind === 'app-switch' && step.appName) {
-			const frontmost = await this.worldState.getFrontmostApp({ force: true });
-			const expectedName = outcome?.resolvedAppName || step.appName;
-			if (!frontmost.ok || frontmost.name !== expectedName) {
-				throw makeTaskError(`Expected ${expectedName} to be frontmost`, 'checkpoint_failed');
-			}
-			return;
-		}
-
-		if (step.checkpoint?.kind === 'navigation' && step.url) {
-			const frontmost = await this.worldState.getFrontmostApp({ force: true });
-			const appName = frontmost.ok ? frontmost.name : step.appHint;
-			if (this.browserAdapter.isSupported(appName)) {
-				const host = (() => {
-					try {
-						return new URL(step.url).host;
-					} catch {
-						return step.url;
-					}
-				})();
-				const verify = this.browserAdapter.verifySignal({ appName, signal: host });
-				if (!verify.ok) {
-					throw makeTaskError(verify.error || `Navigation checkpoint failed for ${step.url}`, 'checkpoint_failed');
-				}
-				return;
-			}
-		}
-
-		if (step.checkpoint?.kind === 'search' && step.query) {
-			if (plan.successSignal) {
-				await this._verifySuccessSignal(plan, signal);
-			}
-			return;
-		}
-
-		if (step.type === 'editorCommand') {
-			const frontmost = await this.worldState.getFrontmostApp({ force: true });
-			const expectedApp = step.appHint || plan.appHint || '';
-			if (expectedApp && (!frontmost.ok || frontmost.name !== expectedApp)) {
-				throw makeTaskError(`Expected ${expectedApp} to remain frontmost for editor command`, 'checkpoint_failed');
-			}
-		}
-
-		if (step.checkpoint?.kind === 'final' && plan.successSignal) {
-			await this._verifySuccessSignal(plan, signal);
-		}
-
-		if (!outcome?.ok) {
-			throw makeTaskError(`Checkpoint failed after ${stepLabel(step)}`, 'checkpoint_failed');
-		}
-	}
-
-	async _verifySuccessSignal(plan, signal) {
-		throwIfAborted(signal);
-		const frontmost = await this.worldState.getFrontmostApp({ force: true });
-		const appName = frontmost.ok ? frontmost.name : plan.appHint;
-		if (this.browserAdapter.isSupported(appName)) {
-			const verify = this.browserAdapter.verifySignal({ appName, signal: plan.successSignal });
-			if (!verify.ok) throw makeTaskError(verify.error, verify.code || 'verify_failed');
-			return;
-		}
-		const axMatch = await this.worldState.findAccessibilityMatches(plan.successSignal, { limit: 4 });
-		if (!axMatch.ok || axMatch.count < 1) {
-			throw makeTaskError(`Verification signal "${plan.successSignal}" was not found`, 'verify_failed');
-		}
 	}
 }
 

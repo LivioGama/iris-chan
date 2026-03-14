@@ -1,0 +1,15 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.EVENT_TYPES = void 0;
+exports.EVENT_TYPES = {
+    THINKING: 'THINKING',
+    TOOL_START: 'TOOL_START',
+    TOOL_END: 'TOOL_END',
+    ACTION_VERIFY_OK: 'ACTION_VERIFY_OK',
+    ACTION_VERIFY_FAIL: 'ACTION_VERIFY_FAIL',
+    TASK_MILESTONE: 'TASK_MILESTONE',
+    TASK_DONE: 'TASK_DONE',
+    INTERRUPT: 'INTERRUPT',
+    DB_HEALTH: 'DB_HEALTH',
+    PROACTIVE_SUGGESTION: 'PROACTIVE_SUGGESTION',
+};

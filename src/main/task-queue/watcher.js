@@ -11,6 +11,8 @@ const {
 } = require('./dependency-manager');
 const { createExecutionMetadata } = require('./service');
 
+const { getConvexClient } = require('../runtime/convex-adapter');
+
 const POLL_INTERVAL_NORMAL_MS = 3000;
 const POLL_INTERVAL_DIRECT_MS = 1000;
 const EXECUTION_LANE_CAPACITY = Object.freeze({
@@ -29,21 +31,25 @@ const EXECUTION_LANE_PRIORITY = Object.freeze({
 });
 
 let pollTimer = null;
-let convex = null;
 let behaviorEngineRef = null;
 let polling = false;
 const activeTaskIds = new Set();
 const activeTaskLanes = new Map();
 
+function getConvex() {
+	return getConvexClient();
+}
+
 function broadcastTaskUpdate(update) {
 	const seen = new Set();
-	[avatarWindow.get(), kanbanWindow.get()].forEach((win) => {
-		if (!win || win.isDestroyed()) return;
+	const targets = [avatarWindow.get(), kanbanWindow.get()].filter(Boolean);
+	for (const win of targets) {
+		if (win.isDestroyed()) continue;
 		const webContentsId = win.webContents?.id;
-		if (seen.has(webContentsId)) return;
+		if (seen.has(webContentsId)) continue;
 		seen.add(webContentsId);
 		win.webContents.send('tq:task-update', update);
-	});
+	}
 }
 
 function buildPrompt(task) {
@@ -81,6 +87,7 @@ function countActiveTasksByLane() {
 
 async function syncDependencyStates(tasks = []) {
 	const taskMap = new Map(tasks.map((task) => [getTaskIdentifier(task), task]));
+	const convex = getConvex();
 	for (const task of tasks) {
 		const taskId = getTaskIdentifier(task);
 		const status = String(task.status || '').toLowerCase();
@@ -153,6 +160,7 @@ async function dispatchRunnableTasks(tasks = []) {
 		const executionLane = getExecutionLane(task);
 		const laneCapacity = EXECUTION_LANE_CAPACITY[executionLane] || EXECUTION_LANE_CAPACITY.skill;
 		if ((laneActiveCounts.get(executionLane) || 0) >= laneCapacity) continue;
+		const convex = getConvex();
 		const claim = await convex.claimQueueTask(task._id, [currentStatus], {
 			status: 'running',
 			startedAt: task.startedAt || Date.now(),
@@ -183,7 +191,8 @@ async function dispatchRunnableTasks(tasks = []) {
 				const prompt = buildPrompt(task);
 				const result = await executeTask(taskId, prompt, task.projectPath, (line) => {
 					log.info('TaskQueue', `[${taskId}] ${line.substring(0, 100)}`);
-				});
+				}, task.execution?.strategy || 'watcher-executor');
+					const convex = getConvex();
 					await convex.updateQueueTask(task._id, {
 						status: (result.status || '').toUpperCase() === 'COMPLETED' ? 'completed' : 'failed',
 						result: result.summary || '',
@@ -204,6 +213,7 @@ async function dispatchRunnableTasks(tasks = []) {
 					});
 				} catch (err) {
 					log.error('TaskQueue', `Task ${taskId} failed: ${err.message}`);
+					const convex = getConvex();
 					await convex.updateQueueTask(task._id, {
 						status: 'failed',
 						errorMessage: err.message,
@@ -232,6 +242,7 @@ async function dispatchRunnableTasks(tasks = []) {
 }
 
 async function recoverInterruptedTasks() {
+	const convex = getConvex();
 	const result = await convex.getAllQueueTasks();
 	if (!result.ok || !Array.isArray(result.value)) return;
 	const interrupted = result.value.filter((task) => String(task.status || '').toLowerCase() === 'running' && task.resumable !== false);
@@ -260,6 +271,7 @@ async function recoverInterruptedTasks() {
 }
 
 async function poll() {
+	const convex = getConvex();
 	if (!convex || polling) return;
 	polling = true;
 	try {
@@ -281,7 +293,6 @@ function getCurrentPollInterval() {
 }
 
 function start(convexClient, behaviorEngine) {
-	convex = convexClient;
 	behaviorEngineRef = behaviorEngine || null;
 	log.info('TaskQueue', `Watcher started (poll interval: ${getCurrentPollInterval()}ms)`);
 	recoverInterruptedTasks().catch((err) => {
@@ -292,7 +303,6 @@ function start(convexClient, behaviorEngine) {
 }
 
 function restartWithNewInterval() {
-	if (!convex) return;
 	if (pollTimer) clearInterval(pollTimer);
 	const interval = getCurrentPollInterval();
 	log.info('TaskQueue', `Watcher restarted with poll interval: ${interval}ms`);

@@ -4,25 +4,16 @@ const path = require('node:path');
 const fs = require('node:fs');
 const config = require('../../shared/config').default;
 const log = require('../logger');
+const { getGeometry, setGeometry } = require('../runtime/geometry-store');
 
 let win = null;
 let currentDisplayId = null;
 
-const GEOMETRY_PATH = path.join(config.paths.irisDir, 'kanban-geometry.json');
-
-function loadGeometry() {
-	try {
-		return JSON.parse(fs.readFileSync(GEOMETRY_PATH, 'utf-8'));
-	} catch {
-		return null;
-	}
-}
-
-function saveGeometry() {
+async function saveGeometry() {
 	if (!win || win.isDestroyed()) return;
 	try {
 		const bounds = win.getBounds();
-		fs.writeFileSync(GEOMETRY_PATH, JSON.stringify(bounds), 'utf-8');
+		await setGeometry('kanban', bounds);
 	} catch { }
 }
 
@@ -74,17 +65,14 @@ function watchTasksFile() {
 
 function create() {
 	const primaryDisplay = screen.getPrimaryDisplay();
-	const saved = loadGeometry();
-	const pos = saved || getDefaultPosition(primaryDisplay);
 	currentDisplayId = primaryDisplay.id;
 
 	win = new BrowserWindow({
-		width: saved?.width || 720,
-		height: saved?.height || 200,
-		x: pos.x,
-		y: pos.y,
+		width: 720,
+		height: 200,
 		transparent: true,
 		frame: false,
+		show: false, // Don't show until geometry loaded
 		hasShadow: true,
 		alwaysOnTop: false,
 		skipTaskbar: false,
@@ -98,6 +86,20 @@ function create() {
 			sandbox: false,
 			preload: path.join(__dirname, '..', '..', 'preload.js'),
 		},
+	});
+
+	// Load geometry and apply
+	getGeometry('kanban').then(saved => {
+		if (win && !win.isDestroyed()) {
+			const pos = saved || getDefaultPosition(primaryDisplay);
+			win.setBounds({
+				x: pos.x,
+				y: pos.y,
+				width: saved?.width || 720,
+				height: saved?.height || 200
+			});
+			win.show();
+		}
 	});
 
 	// Load the kanban board HTML

@@ -14,6 +14,8 @@ const kanbanWindow = require('./windows/kanban-window');
 const { createTrayController } = require('./status-tray');
 const { registerIpc } = require('./ipc-runtime');
 const { BehaviorModeState } = require('./runtime/behavior-mode');
+const { registerSettingsHandlers } = require('./runtime/settings-handlers');
+const { registerShortcuts, unregisterShortcuts } = require('./runtime/shortcut-manager');
 const { UITaskService } = require('./automation/ui-task-service');
 const { SelfImprovementManager } = require('./automation/self-improvement-manager');
 const { MemoryStore } = require('./automation/memory-store');
@@ -21,15 +23,13 @@ const { LearningManager } = require('./automation/learning-manager');
 const { NativeFallbackManager } = require('./automation/native-fallback-manager');
 const { EpisodeRecorder } = require('./automation/episode-recorder');
 const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager, setEpisodeRecorder, setConvexClient } = require('./automation/service-ref');
+const { setConvexClient: setUnifiedConvexClient } = require('./runtime/convex-adapter');
 const taskQueueWatcher = require('./task-queue/watcher');
-const { setConvexClient: setTqControllerClient, setBehaviorEngine: setTqBehaviorEngine } = require('./controllers/taskQueueController');
-const { setConvexClient: setTqToolClient } = require('./tools/task-queue');
-const { setBehaviorEngine: setTqServiceBehaviorEngine } = require('./task-queue/service');
-const settings = require('./settings');
 
 function startRuntime({ apiKey }) {
 	const eventBus = new RuntimeEventBus();
 	const convexClient = new ConvexClient({ eventBus });
+	setUnifiedConvexClient(convexClient);
 	const taskEngine = new TaskEngine({ eventBus });
 	const behaviorEngine = new BehaviorModeState();
 	const memoryStore = new MemoryStore();
@@ -51,79 +51,12 @@ function startRuntime({ apiKey }) {
 		eventBus,
 	});
 	const statusTray = createTrayController();
-	let runtimeEventSeq = 0;
+	const eventPersistence = new RuntimeEventPersistence({ eventBus, convexClient });
 
-	settings.registerApplyHandler('avatar', (nextAvatar, previousAvatar) => {
-		if (nextAvatar?.current === previousAvatar?.current) return { applied: true, liveApply: true };
-		const win = avatarWindow.get();
-		if (win && !win.isDestroyed()) {
-			win.reload();
-		}
-		return { applied: true, liveApply: true };
-	});
-	settings.registerApplyHandler('behavior', (nextBehavior, previousBehavior) => {
-		const win = avatarWindow.get();
-		behaviorEngine.setState(nextBehavior);
-		if (nextBehavior?.mode !== previousBehavior?.mode && win && !win.isDestroyed()) {
-			win.webContents.send('mode-changed', nextBehavior.mode);
-		}
-		if (nextBehavior?.directMode !== previousBehavior?.directMode) {
-			taskQueueWatcher.restartWithNewInterval();
-			if (win && !win.isDestroyed()) win.webContents.send('direct-mode-changed', nextBehavior.directMode);
-		}
-		if (win && !win.isDestroyed()) win.webContents.send('behavior-state-changed', behaviorEngine.getState());
-		return { applied: true, liveApply: true };
-	});
-	settings.registerApplyHandler('voice', (nextVoice, previousVoice) => {
-		const modelVoiceChanged = nextVoice?.modelVoiceName !== previousVoice?.modelVoiceName;
-		const speechProfileChanged = JSON.stringify(nextVoice?.speechProfile || {}) !== JSON.stringify(previousVoice?.speechProfile || {});
-		return {
-			applied: true,
-			liveApply: true,
-			restartRequired: false,
-			sessionRefreshRequired: modelVoiceChanged,
-			modelVoiceChanged,
-			speechProfileChanged,
-		};
-	});
+	registerSettingsHandlers({ behaviorEngine });
 	const initialSettings = settings.init();
 	behaviorEngine.setState(initialSettings.behavior);
-
-	eventBus.on('event', (evt) => {
-		const idempotencyKey = `runtime_evt_${evt.timestamp}_${runtimeEventSeq++}_${evt.type}`;
-		const serializedEvent = {
-			type: evt.type,
-			timestamp: evt.timestamp,
-			payload: JSON.stringify(evt.payload || {}),
-			source: evt.source || 'runtime',
-		};
-
-		convexClient.saveRuntimeEvent(serializedEvent, idempotencyKey).catch(() => {});
-
-		if (evt.type === 'TASK_MILESTONE' || evt.type === 'TASK_DONE') {
-			const taskId = evt.payload?.taskId || 'unknown';
-			convexClient.saveTaskMilestone({
-				taskId,
-				message: evt.payload?.message || '',
-				importance: evt.payload?.importance || 'medium',
-				status: evt.payload?.status,
-				timestamp: evt.timestamp,
-			}, `task_milestone_${taskId}_${evt.timestamp}`).catch(() => {});
-		}
-
-		if (evt.type === 'PROACTIVE_SUGGESTION') {
-			convexClient.saveProactiveSuggestion({
-				text: evt.payload?.suggestion || evt.payload?.text || '',
-				confidence: Number(evt.payload?.confidence || 0),
-				context: JSON.stringify({
-					kind: evt.payload?.kind || 'next-step',
-					...(evt.payload?.context || {}),
-				}),
-				accepted: evt.payload?.accepted,
-				timestamp: evt.timestamp,
-			}, `proactive_${evt.timestamp}`).catch(() => {});
-		}
-	});
+	eventPersistence.start();
 
 	skills.scan();
 	legacyConvexStore.init();
@@ -155,35 +88,13 @@ function startRuntime({ apiKey }) {
 		statusTray.create();
 		healthService.start();
 		dailyLoop.start();
-		taskQueueWatcher.start(convexClient, behaviorEngine);
+		taskQueueWatcher.start(undefined, behaviorEngine);
 
-		globalShortcut.register('CommandOrControl+I', () => {
-			const w = avatarWindow.get();
-			if (w) w.webContents.send('toggle-voice');
-		});
-		globalShortcut.register('CommandOrControl+K', () => {
-			const kWin = kanbanWindow.get();
-			if (kWin) {
-				if (kWin.isVisible()) {
-					kWin.hide();
-				} else {
-					kWin.showInactive();
-					kWin.focus();
-				}
-			}
-		});
-		globalShortcut.register('CommandOrControl+Shift+M', () => {
-			const nextMode = behaviorEngine.getMode() === 'proactive' ? 'silent' : 'proactive';
-			settings.updateSettings({ behavior: { mode: nextMode } }, { source: 'shortcut:mode-toggle' });
-		});
-		globalShortcut.register('CommandOrControl+Shift+D', () => {
-			const next = !behaviorEngine.getDirectMode();
-			settings.updateSettings({ behavior: { directMode: next } }, { source: 'shortcut:direct-mode-toggle' });
-		});
+		registerShortcuts({ behaviorEngine });
 	});
 
 	app.on('will-quit', () => {
-		globalShortcut.unregisterAll();
+		unregisterShortcuts();
 		healthService.stop();
 		dailyLoop.stop();
 		taskQueueWatcher.stop();

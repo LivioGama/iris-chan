@@ -431,7 +431,6 @@
 		let draggedTask = null;
 		let reloadTimeout = null;
 		let renderTimeout = null;
-
 		const activelyStreamingTasks = new Set();
 		const sdkRunningTasks = new Set();
 		const recentlyCompletedTasks = new Map();
@@ -439,9 +438,8 @@
 
 		function loadDismissedQueueTaskIds() {
 			try {
-				const raw = window.localStorage.getItem('kanban.dismissedQueueTaskIds');
-				const parsed = JSON.parse(raw || '[]');
-				return new Set(Array.isArray(parsed) ? parsed.filter(Boolean) : []);
+				const saved = localStorage.getItem('dismissed-queue-tasks');
+				return new Set(saved ? JSON.parse(saved) : []);
 			} catch {
 				return new Set();
 			}
@@ -449,425 +447,75 @@
 
 		function persistDismissedQueueTaskIds() {
 			try {
-				window.localStorage.setItem(
-					'kanban.dismissedQueueTaskIds',
-					JSON.stringify(Array.from(dismissedQueueTaskIds))
-				);
-			} catch (err) {
-				console.warn('[Kanban] Failed to persist dismissed queue tasks:', err.message);
-			}
-		}
-
-		function queueTaskIdOf(taskLike) {
-			return String(taskLike?.queueTaskId || taskLike?._id || taskLike?.taskId || '').trim();
-		}
-
-		function kanbanTaskIdForQueue(queueTaskId) {
-			return `queue-${queueTaskId}`;
-		}
-
-		function isQueueTask(task) {
-			return task?.origin === 'queue' || Boolean(task?.queueTaskId);
-		}
-
-		function inferQueueTaskTitle(queueTask = {}) {
-			const raw = String(
-				queueTask.title
-				|| queueTask.rawPrompt
-				|| queueTask.enrichedPrompt
-				|| queueTask.prompt
-				|| 'Queued task'
-			).trim();
-			return raw.split('\n')[0].slice(0, 140) || 'Queued task';
+				localStorage.setItem('dismissed-queue-tasks', JSON.stringify([...dismissedQueueTaskIds]));
+			} catch {}
 		}
 
 		function mapTaskStatus(status) {
-			if (!status) return 'TODO';
-			switch (String(status).toUpperCase()) {
-				case 'DRAFT':
-				case 'PENDING':
-				case 'QUEUED':
-				case 'BLOCKED':
-				case 'FAILED':
-				case 'CANCELLED':
-				case 'TODO':
-					return 'TODO';
-				case 'IN_PROGRESS':
-				case 'RUNNING':
-				case 'RESUMING':
-					return 'IN_PROGRESS';
-				case 'COMPLETED':
-				case 'DONE':
-					return 'DONE';
-				default:
-					return 'TODO';
-			}
-		}
-
-		function mapStatusToOriginal(status, originalStatus) {
-			if (status === 'TODO') {
-				const raw = String(originalStatus || '').toLowerCase();
-				if (['queued', 'blocked', 'failed', 'cancelled', 'draft'].includes(raw)) return raw;
-				return 'queued';
-			}
-			if (status === 'IN_PROGRESS') {
-				const raw = String(originalStatus || '').toLowerCase();
-				return raw === 'resuming' ? 'resuming' : 'running';
-			}
-			if (status === 'DONE') return 'completed';
-			return 'queued';
+			const s = String(status || '').toLowerCase();
+			if (['completed', 'done', 'success'].includes(s)) return 'DONE';
+			if (['running', 'resuming', 'active', 'in_progress', 'started'].includes(s)) return 'IN_PROGRESS';
+			return 'TODO';
 		}
 
 		function getStatusBadge(task) {
-			const raw = String(task.originalStatus || task.status || '').toLowerCase();
-			switch (raw) {
-				case 'queued':
-				case 'pending':
-					return 'queued';
-				case 'draft':
-					return typeof task.countdownRemaining === 'number'
-						? `draft ${task.countdownRemaining}s`
-						: 'draft';
-				case 'blocked':
-					return 'blocked';
-				case 'resuming':
-					return 'resuming';
-				case 'running':
-				case 'in_progress':
-					return 'running';
-				case 'completed':
-				case 'done':
-					return 'completed';
-				case 'failed':
-					return 'failed';
-				case 'cancelled':
-					return 'cancelled';
-				default:
-					return raw || 'queued';
-			}
-		}
-
-		function normalizeLoadedTask(task, idx, prevLogsByTaskId) {
-			const id = task.id || `task-${idx + 1}`;
-			const diskLogs = task.logs || '';
-			const preservedLogs = prevLogsByTaskId[id];
-			const finalLogs = preservedLogs && preservedLogs.length > diskLogs.length
-				? preservedLogs
-				: diskLogs;
-
-			let finalStatus = mapTaskStatus(task.status);
-			const recentCompletion = recentlyCompletedTasks.get(id);
-			if (recentCompletion && finalStatus === 'IN_PROGRESS') {
-				finalStatus = recentCompletion.status;
-				console.log(`[Kanban] Preserving recently-completed status for ${id}: ${finalStatus} (disk says IN_PROGRESS)`);
-			}
-
-			return {
-				id,
-				queueTaskId: task.queueTaskId || null,
-				title: task.title || 'Untitled',
-				description: task.description || '',
-				status: finalStatus,
-				originalStatus: task.status,
-				order: Number.isFinite(task.order) ? task.order : idx,
-				files: task.files || [],
-				action: task.action || '',
-				verify: task.verify || '',
-				done: task.done || '',
-				dependencies: task.dependencies || task.dependsOn || [],
-				inferredDependencies: task.inferredDependencies || [],
-				dependencyState: task.dependencyState || 'ready',
-				blockedBy: task.blockedBy || [],
-				origin: task.origin || 'kanban',
-				launchMode: task.launchMode || 'manual',
-				resumable: task.resumable !== false,
-				resumeCount: Number(task.resumeCount || 0),
-				startedAt: task.startedAt || null,
-				projectPath: task.projectPath || null,
-				schedulerSource: task.schedulerSource || 'tasks.json',
-				prompt: task.prompt || null,
-				logs: finalLogs,
-				complexity: task.complexity || null,
-				countdownRemaining: typeof task.countdownRemaining === 'number' ? task.countdownRemaining : undefined,
-			};
-		}
-
-		function normalizeQueueTask(queueTask = {}, existingTask = null) {
-			const queueTaskId = queueTaskIdOf(queueTask);
-			if (!queueTaskId) return null;
-			const status = String(queueTask.status || existingTask?.originalStatus || 'draft').toLowerCase();
-			const existingLogs = String(existingTask?.logs || '').trim();
-			const resultText = String(queueTask.result || queueTask.errorMessage || '').trim();
-			const logs = existingLogs && resultText && !existingLogs.includes(resultText)
-				? `${existingLogs}\n${resultText}`
-				: existingLogs || resultText;
-			return {
-				id: existingTask?.id || kanbanTaskIdForQueue(queueTaskId),
-				queueTaskId,
-				title: inferQueueTaskTitle(queueTask),
-				description: queueTask.enrichedPrompt || queueTask.rawPrompt || existingTask?.description || '',
-				status: mapTaskStatus(status),
-				originalStatus: status,
-				order: Number.isFinite(existingTask?.order) ? existingTask.order : tasks.length,
-				files: Array.isArray(queueTask.impactedFiles) ? queueTask.impactedFiles : (existingTask?.files || []),
-				action: existingTask?.action || '',
-				verify: existingTask?.verify || '',
-				done: existingTask?.done || '',
-				dependencies: Array.isArray(queueTask.dependencies) ? queueTask.dependencies : (existingTask?.dependencies || []),
-				inferredDependencies: Array.isArray(queueTask.inferredDependencies) ? queueTask.inferredDependencies : (existingTask?.inferredDependencies || []),
-				dependencyState: queueTask.dependencyState || existingTask?.dependencyState || 'pending',
-				blockedBy: Array.isArray(queueTask.blockedBy) ? queueTask.blockedBy : (existingTask?.blockedBy || []),
-				origin: 'queue',
-				launchMode: queueTask.launchMode || existingTask?.launchMode || 'queued',
-				resumable: queueTask.resumable !== false,
-				resumeCount: Number(queueTask.resumeCount || existingTask?.resumeCount || 0),
-				startedAt: queueTask.startedAt || existingTask?.startedAt || null,
-				projectPath: queueTask.projectPath || existingTask?.projectPath || null,
-				schedulerSource: 'queue',
-				prompt: queueTask.enrichedPrompt || queueTask.rawPrompt || existingTask?.prompt || null,
-				logs,
-				complexity: queueTask.complexity || existingTask?.complexity || null,
-				countdownRemaining: status === 'draft'
-					? (typeof queueTask.countdownRemaining === 'number'
-						? queueTask.countdownRemaining
-						: existingTask?.countdownRemaining)
-					: undefined,
-			};
-		}
-
-		function normalizeComparableTaskText(value) {
-			return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
-		}
-
-		function queueTaskComparableTexts(taskLike = {}) {
-			return new Set(
-				[
-					taskLike.title,
-					taskLike.rawPrompt,
-					taskLike.enrichedPrompt,
-					taskLike.prompt,
-					inferQueueTaskTitle(taskLike),
-				]
-					.map((value) => normalizeComparableTaskText(value))
-					.filter(Boolean)
-			);
-		}
-
-		function kanbanTaskComparableTexts(taskLike = {}) {
-			return new Set(
-				[
-					taskLike.title,
-					taskLike.description,
-					taskLike.prompt,
-				]
-					.map((value) => normalizeComparableTaskText(value))
-					.filter(Boolean)
-			);
-		}
-
-		function findExistingQueueTaskIndex(queueTask, taskList = tasks) {
-			const queueTaskId = queueTaskIdOf(queueTask);
-			if (queueTaskId) {
-				const directIndex = taskList.findIndex((task) => queueTaskIdOf(task) === queueTaskId);
-				if (directIndex >= 0) return directIndex;
-			}
-
-			const queueTexts = queueTaskComparableTexts(queueTask);
-			if (queueTexts.size === 0) return -1;
-			return taskList.findIndex((task) => {
-				if (isQueueTask(task)) return false;
-				if (String(task.origin || '').toLowerCase() === 'self_fix') return false;
-				if (!['TODO', 'IN_PROGRESS'].includes(String(task.status || '').toUpperCase())) return false;
-				for (const value of kanbanTaskComparableTexts(task)) {
-					if (queueTexts.has(value)) return true;
-				}
-				return false;
-			});
-		}
-
-		function upsertQueueTask(queueTask) {
-			const queueTaskId = queueTaskIdOf(queueTask);
-			if (!queueTaskId || dismissedQueueTaskIds.has(queueTaskId)) return null;
-			const existingIndex = findExistingQueueTaskIndex(queueTask, tasks);
-			const normalized = normalizeQueueTask(queueTask, existingIndex >= 0 ? tasks[existingIndex] : null);
-			if (!normalized) return null;
-			if (existingIndex >= 0) tasks[existingIndex] = normalized;
-			else tasks.push(normalized);
-			return normalized;
-		}
-
-		function removeQueueTask(queueTaskId, { dismiss = false } = {}) {
-			const normalizedId = String(queueTaskId || '').trim();
-			if (!normalizedId) return;
-			if (dismiss) {
-				dismissedQueueTaskIds.add(normalizedId);
-				persistDismissedQueueTaskIds();
-			}
-			tasks = tasks.filter((task) => queueTaskIdOf(task) !== normalizedId);
+			const status = task.status;
+			const normalized = mapTaskStatus(status);
+			if (normalized === 'DONE') return '✓';
+			if (normalized === 'IN_PROGRESS') return '●';
+			return '○';
 		}
 
 		function scheduleReload() {
-			if (reloadTimeout) clearTimeout(reloadTimeout);
-			reloadTimeout = setTimeout(async () => {
-				await loadTasksFromFile();
-				await hydrateQueueTasks();
-				reloadTimeout = null;
-			}, 500);
+			clearTimeout(reloadTimeout);
+			reloadTimeout = setTimeout(loadTasks, 500);
 		}
 
 		function scheduleRender() {
-			if (renderTimeout) clearTimeout(renderTimeout);
-			renderTimeout = setTimeout(() => {
-				renderTasks();
-				renderTimeout = null;
-			}, 50);
+			clearTimeout(renderTimeout);
+			renderTimeout = setTimeout(renderTasks, 50);
 		}
 
 		let resizeTimeout = null;
 		function updateWindowSize() {
-			if (resizeTimeout) clearTimeout(resizeTimeout);
+			clearTimeout(resizeTimeout);
 			resizeTimeout = setTimeout(() => {
 				const totalTasks = tasks.length;
-				if (totalTasks === 0) {
-					window.electronAPI?.kanbanSetVisible(false).catch(() => {});
-					return;
-				}
-				window.electronAPI?.kanbanSetVisible(true).catch(() => {});
-
 				const progressCol = document.querySelector('.col-progress');
 				const doneCol = document.querySelector('.col-done');
+
 				const hasWip = !progressCol.classList.contains('hidden');
 				const hasDone = !doneCol.classList.contains('hidden');
 
-				let width;
-				if (!hasWip && !hasDone) {
-					width = 320 + 12 + 6;
-				} else {
-					width = 240 + 12 + 6;
-					if (hasWip) width += 240 + 6;
-					if (hasDone) width += 240;
-				}
+				let width = 360; // 1 column
+				if (hasWip && hasDone) width = 1000;
+				else if (hasWip || hasDone) width = 720;
 
 				const wipCount = countByStatus('IN_PROGRESS');
 				const maxPerColumn = Math.max(
-					countByStatus('TODO'),
-					hasWip ? wipCount : 0,
-					hasDone ? countByStatus('DONE') : 0
+					tasks.filter(t => mapTaskStatus(t.status) === 'TODO').length,
+					tasks.filter(t => mapTaskStatus(t.status) === 'IN_PROGRESS').length,
+					tasks.filter(t => mapTaskStatus(t.status) === 'DONE').length
 				);
+
 				const logsExtra = wipCount * 110;
 				const height = Math.min(38 + 30 + maxPerColumn * 35 + logsExtra + 30 + 24, 700);
 
-				window.electronAPI?.kanbanResize(width, height).catch((err) => {
-					console.warn('[Kanban] Resize failed:', err.message);
-				});
-			}, 300);
+				window.electronAPI?.kanbanResize(width, height);
+			}, 100);
 		}
 
-		async function loadTasksFromFile() {
-			const prevLogsByTaskId = {};
-			for (const task of tasks) {
-				if (activelyStreamingTasks.has(task.id) && task.logs) {
-					prevLogsByTaskId[task.id] = task.logs;
-				}
-			}
-
-			const now = Date.now();
-			for (const [taskId, info] of recentlyCompletedTasks) {
-				if (now - info.timestamp > 10000) recentlyCompletedTasks.delete(taskId);
-			}
-
+		async function loadTasks() {
 			try {
 				const loaded = await window.electronAPI?.loadKanbanTasks() || [];
-				console.log(`[Kanban] loadKanbanTasks returned ${Array.isArray(loaded) ? loaded.length : 0} task(s)`);
-				const fileTasks = Array.isArray(loaded)
-					? loaded.map((task, idx) => normalizeLoadedTask(task, idx, prevLogsByTaskId))
-					: [];
-				console.log('[Kanban] File-backed normalized statuses:', fileTasks.map((task) => `${task.id}:${task.status}/${task.originalStatus}`).join(', ') || '(none)');
-				tasks = fileTasks;
-				const maxId = Math.max(...tasks.map((task) => {
-					const match = String(task.id || '').match(/task-(\d+)/);
-					return match ? Number.parseInt(match[1], 10) : 0;
-				}), 0);
-				taskIdCounter = maxId + 1;
-				console.log(`[Kanban] File-backed tasks applied: ${tasks.length}`);
-			} catch (err) {
-				console.error('[Kanban] Error loading tasks:', err);
-				tasks = [];
-			}
-
-			renderTasks();
-		}
-
-		async function hydrateQueueTasks() {
-			try {
-				const result = await window.electronAPI?.tqGetAll();
-				if (!result?.ok || !Array.isArray(result.value)) return;
-				const beforeCount = tasks.length;
-				let changed = false;
-				result.value.forEach((queueTask) => {
-					const queueTaskId = queueTaskIdOf(queueTask);
-					const status = String(queueTask.status || '').toLowerCase();
-					if (!queueTaskId) return;
-					if (status === 'cancelled') {
-						const countBeforeRemoval = tasks.length;
-						removeQueueTask(queueTaskId);
-						if (tasks.length !== countBeforeRemoval) changed = true;
-						return;
-					}
-					if (upsertQueueTask(queueTask)) changed = true;
-				});
-				if (changed) {
-					console.log(`[Kanban] Queue hydration adjusted task count: ${beforeCount} -> ${tasks.length}`);
-					renderTasks();
-					saveTasksToFile();
-				}
-			} catch (err) {
-				console.warn('[Kanban] Failed to hydrate queue tasks:', err.message);
-			}
-		}
-
-		async function saveTasksToFile() {
-			try {
-				const toSave = tasks.map((task) => ({
-					id: task.id,
-					title: task.title,
-					description: task.description,
-					status: mapStatusToOriginal(task.status, task.originalStatus),
-					order: task.order,
-					files: task.files,
-					action: task.action,
-					verify: task.verify,
-					done: task.done,
-					dependencies: task.dependencies || [],
-					inferredDependencies: task.inferredDependencies || [],
-					dependencyState: task.dependencyState || 'ready',
-					blockedBy: task.blockedBy || [],
-					origin: task.origin || 'kanban',
-					queueTaskId: task.queueTaskId || null,
-					launchMode: task.launchMode || 'manual',
-					resumable: task.resumable !== false,
-					resumeCount: task.resumeCount || 0,
-					startedAt: task.startedAt || null,
-					projectPath: task.projectPath || null,
-					schedulerSource: task.schedulerSource || 'tasks.json',
-					prompt: task.prompt || null,
-					logs: task.logs || '',
-					complexity: task.complexity || null,
-					countdownRemaining: typeof task.countdownRemaining === 'number' ? task.countdownRemaining : undefined,
-				}));
-				const result = await window.electronAPI?.saveKanbanTasks(toSave);
-				if (result?.ok) {
-					console.log('[Kanban] Tasks saved to tasks.json');
-				} else {
-					console.error('[Kanban] Failed to save tasks:', result?.error);
-				}
-			} catch (err) {
-				console.error('[Kanban] Error saving tasks:', err);
-			}
+				tasks = Array.isArray(loaded) ? loaded : [];
+				updateWindowSize();
+				renderTasks();
+			} catch {}
 		}
 
 		function countByStatus(status) {
-			return tasks.filter((task) => task.status === status).length;
+			return tasks.filter((task) => mapTaskStatus(task.status) === status).length;
 		}
 
 		function updateCounts() {
@@ -883,641 +531,135 @@
 			progressCol.classList.toggle('hidden', wipCount === 0);
 			doneCol.classList.toggle('hidden', doneCount === 0);
 			updateWindowSize();
-
-			const cleanDoneBtn = document.getElementById('clean-done-btn');
-			if (cleanDoneBtn && !cleanDoneBtn.dataset.attached) {
-				cleanDoneBtn.dataset.attached = 'true';
-				cleanDoneBtn.onclick = (e) => {
-					e.stopPropagation();
-					const doneTasks = tasks.filter((task) => task.status === 'DONE');
-					if (doneTasks.length === 0) {
-						alert('No done tasks to clean.');
-						return;
-					}
-					doneTasks
-						.filter((task) => isQueueTask(task))
-						.forEach((task) => dismissedQueueTaskIds.add(task.queueTaskId));
-					persistDismissedQueueTaskIds();
-					tasks = tasks.filter((task) => task.status !== 'DONE');
-					renderTasks();
-					saveTasksToFile();
-					console.log(`[Kanban] Cleaned ${doneTasks.length} done tasks`);
-				};
-			}
 		}
 
 		function renderTasks() {
-			console.log(`[Kanban] renderTasks with ${tasks.length} task(s)`);
 			const columns = {
 				TODO: document.getElementById('todo-tasks'),
 				IN_PROGRESS: document.getElementById('in-progress-tasks'),
 				DONE: document.getElementById('done-tasks'),
 			};
 
-			Object.values(columns).forEach((column) => {
-				column.innerHTML = '';
-			});
+			Object.values(columns).forEach(c => c.innerHTML = '');
 
-			const byStatus = { TODO: [], IN_PROGRESS: [], DONE: [] };
 			tasks.forEach((task) => {
-				if (byStatus[task.status]) byStatus[task.status].push(task);
-			});
-			console.log('[Kanban] renderTasks grouped counts:', JSON.stringify({
-				TODO: byStatus.TODO.length,
-				IN_PROGRESS: byStatus.IN_PROGRESS.length,
-				DONE: byStatus.DONE.length,
-			}));
-
-			Object.entries(byStatus).forEach(([status, statusTasks]) => {
+				const status = mapTaskStatus(task.status);
 				const container = columns[status];
-				if (statusTasks.length === 0) {
-					const empty = document.createElement('div');
-					empty.className = 'empty-state';
-					empty.textContent = status === 'TODO'
-						? 'No tasks yet'
-						: status === 'IN_PROGRESS'
-							? 'Nothing in progress'
-							: 'Nothing completed';
-					container.appendChild(empty);
-					return;
+				if (!container) return;
+
+				const taskEl = document.createElement('div');
+				taskEl.className = 'task' + (status === 'DONE' ? ' task-done' : '');
+				taskEl.dataset.taskId = task.id;
+				taskEl.title = task.description || '';
+
+				const badge = document.createElement('div');
+				badge.className = 'task-status';
+				badge.textContent = getStatusBadge(task);
+				taskEl.appendChild(badge);
+
+				const title = document.createElement('div');
+				title.className = 'title';
+				title.textContent = task.title;
+				taskEl.appendChild(title);
+
+				const actions = document.createElement('div');
+				actions.className = 'task-actions';
+
+				if (status === 'TODO') {
+					const runBtn = document.createElement('button');
+					runBtn.className = 'run-btn';
+					runBtn.textContent = '▶ Run';
+					runBtn.onclick = async () => {
+						runBtn.disabled = true;
+						await window.electronAPI?.kanban.runTask(task.id);
+					};
+					actions.appendChild(runBtn);
 				}
 
-				statusTasks.forEach((task) => {
-					const taskEl = document.createElement('div');
-					taskEl.className = 'task' + (task.status === 'DONE' ? ' task-done' : '');
-					taskEl.draggable = !isQueueTask(task);
-					taskEl.dataset.taskId = task.id;
-					taskEl.title = task.description;
+				const delBtn = document.createElement('button');
+				delBtn.className = 'delete-btn';
+				delBtn.innerHTML = '&times;';
+				delBtn.onclick = async () => {
+					await window.electronAPI?.kanban.deleteTask(task.id, task.source);
+				};
+				actions.appendChild(delBtn);
 
-					taskEl.addEventListener('dragstart', (e) => {
-						if (isQueueTask(task)) {
-							e.preventDefault();
-							return;
-						}
-						draggedTask = task;
-						taskEl.classList.add('dragging');
-						e.dataTransfer.effectAllowed = 'move';
-						e.dataTransfer.setData('text/plain', task.id);
-					});
-					taskEl.addEventListener('dragend', () => {
-						taskEl.classList.remove('dragging');
-						draggedTask = null;
-						document.querySelectorAll('.column').forEach((column) => column.classList.remove('drag-over'));
-					});
 
-					const statusEl = document.createElement('div');
-					statusEl.className = 'task-status';
-					statusEl.textContent = getStatusBadge(task);
+				taskEl.appendChild(actions);
 
-					const titleEl = document.createElement('div');
-					titleEl.className = 'title';
-					titleEl.textContent = task.title;
+				if (task.logs) {
+					const logs = document.createElement('div');
+					logs.className = 'task-logs';
+					logs.textContent = task.logs;
+					taskEl.appendChild(logs);
+				}
 
-					const actionsEl = document.createElement('div');
-					actionsEl.className = 'task-actions';
-
-					if (task.status === 'TODO' && !isQueueTask(task)) {
-						const runBtn = document.createElement('button');
-						runBtn.textContent = '▶ Run';
-						runBtn.className = 'run-btn';
-						runBtn.title = 'Execute autonomously via Claude Code';
-						runBtn.onclick = async () => {
-							runBtn.disabled = true;
-							runBtn.textContent = '⏳';
-							task.status = 'IN_PROGRESS';
-							task.originalStatus = 'running';
-							task.logs = '';
-							sdkRunningTasks.add(task.id);
-							activelyStreamingTasks.add(task.id);
-							renderTasks();
-							saveTasksToFile();
-							try {
-								await window.electronAPI?.kanbanRunTask(task.id);
-								syncTasksToConvex();
-							} catch (err) {
-								sdkRunningTasks.delete(task.id);
-								activelyStreamingTasks.delete(task.id);
-								alert(`Failed to run task: ${err.message}`);
-								await loadTasksFromFile();
-							}
-						};
-						actionsEl.appendChild(runBtn);
-
-						const startBtn = document.createElement('button');
-						startBtn.textContent = '▷ Start';
-						startBtn.className = 'start-btn';
-						startBtn.title = 'Mark as in-progress (manual work)';
-						startBtn.onclick = () => {
-							task.status = 'IN_PROGRESS';
-							task.originalStatus = 'running';
-							task.logs = '';
-							renderTasks();
-							saveTasksToFile();
-							syncTasksToConvex();
-						};
-						actionsEl.appendChild(startBtn);
-					} else if (task.status === 'IN_PROGRESS' && !isQueueTask(task)) {
-						const isRunningSDK = sdkRunningTasks.has(task.id);
-						if (isRunningSDK) {
-							const indicator = document.createElement('button');
-							indicator.innerHTML = '<span class="spinning">⚙</span> Running';
-							indicator.className = 'run-btn loading-indicator';
-							indicator.disabled = true;
-							indicator.style.cursor = 'default';
-							actionsEl.appendChild(indicator);
-						}
-
-						const finishBtn = document.createElement('button');
-						finishBtn.textContent = '✓ Done';
-						finishBtn.className = 'finish-btn';
-						finishBtn.title = 'Mark task as completed';
-						finishBtn.onclick = () => {
-							task.status = 'DONE';
-							task.originalStatus = 'completed';
-							sdkRunningTasks.delete(task.id);
-							activelyStreamingTasks.delete(task.id);
-							renderTasks();
-							saveTasksToFile();
-							syncTasksToConvex();
-						};
-						actionsEl.appendChild(finishBtn);
-					}
-
-					const delBtn = document.createElement('button');
-					delBtn.innerHTML = '&times;';
-					delBtn.className = 'delete-btn';
-					delBtn.title = isQueueTask(task)
-						? (task.status === 'DONE' ? 'Hide task' : 'Cancel task')
-						: 'Delete task';
-					delBtn.onclick = async () => {
-						sdkRunningTasks.delete(task.id);
-						activelyStreamingTasks.delete(task.id);
-						if (isQueueTask(task)) {
-							if (task.status === 'DONE') {
-								removeQueueTask(task.queueTaskId, { dismiss: true });
-							} else {
-								const result = await window.electronAPI?.tqCancelTask(task.queueTaskId);
-								if (!result?.ok) {
-									alert(`Failed to cancel task: ${result?.error || 'Unknown error'}`);
-									return;
-								}
-								removeQueueTask(task.queueTaskId);
-							}
-						} else {
-							tasks = tasks.filter((candidate) => candidate.id !== task.id);
-						}
-						renderTasks();
-						saveTasksToFile();
-						syncTasksToConvex();
-					};
-					actionsEl.appendChild(delBtn);
-
-					taskEl.appendChild(statusEl);
-					taskEl.appendChild(titleEl);
-					taskEl.appendChild(actionsEl);
-
-					if (task.status === 'IN_PROGRESS' || task.logs || task.originalStatus === 'blocked') {
-						const logsEl = document.createElement('div');
-						logsEl.className = 'task-logs';
-						if (task.logs) {
-							logsEl.textContent = task.logs;
-						} else if (task.originalStatus === 'blocked' && Array.isArray(task.blockedBy) && task.blockedBy.length) {
-							logsEl.textContent = `Blocked by: ${task.blockedBy.join(', ')}`;
-							logsEl.style.opacity = '0.55';
-						} else if (task.status === 'IN_PROGRESS' && sdkRunningTasks.has(task.id)) {
-							logsEl.textContent = 'Waiting for output...';
-							logsEl.style.opacity = '0.4';
-						} else if (task.status === 'IN_PROGRESS' && !isQueueTask(task)) {
-							logsEl.textContent = 'No logs yet';
-							logsEl.style.opacity = '0.3';
-						}
-						taskEl.appendChild(logsEl);
-						if (task.status === 'IN_PROGRESS') {
-							requestAnimationFrame(() => {
-								logsEl.scrollTop = logsEl.scrollHeight;
-							});
-						}
-					}
-
-					container.appendChild(taskEl);
-				});
+				container.appendChild(taskEl);
 			});
 
 			updateCounts();
 		}
 
-		document.querySelectorAll('.column').forEach((col) => {
-			col.addEventListener('dragover', (e) => {
-				e.preventDefault();
-				e.dataTransfer.dropEffect = 'move';
-				col.classList.add('drag-over');
-			});
-			col.addEventListener('dragleave', () => {
-				col.classList.remove('drag-over');
-			});
-			col.addEventListener('drop', (e) => {
-				e.preventDefault();
-				col.classList.remove('drag-over');
-				if (draggedTask) {
-					draggedTask.status = col.dataset.status;
-					renderTasks();
-					saveTasksToFile();
-					syncTasksToConvex();
-				}
-			});
-		});
+		// Initial load
+		async function addNewTask(title, description = '') {
+			if (!title) return;
+			const task = {
+				title,
+				description,
+				status: 'queued',
+				createdAt: new Date().toISOString()
+			};
+			await window.electronAPI?.kanban.addTask(task);
+		}
 
 		document.getElementById('add-task').onclick = () => {
-			document.getElementById('todo-input').focus();
+			const title = prompt('Task title:');
+			if (title) addNewTask(title);
 		};
 
-		document.getElementById('todo-input').addEventListener('keydown', (e) => {
-			if (e.key === 'Enter' && e.target.value.trim()) {
-				tasks.push({
-					id: `task-${taskIdCounter++}`,
-					title: e.target.value.trim(),
-					status: 'TODO',
-					description: '',
-					files: [],
-					action: '',
-					verify: '',
-					done: '',
-					logs: '',
-				});
-				e.target.value = '';
-				renderTasks();
-				saveTasksToFile();
-				syncTasksToConvex();
-			}
-			if (e.key === 'Escape') {
-				e.target.value = '';
-				e.target.blur();
-			}
-		});
-
-		document.getElementById('run-all').onclick = async () => {
-			const btnEl = document.getElementById('run-all');
-			const todoTasks = tasks.filter(t => t.status === 'TODO');
-		
-		console.log('[RunAll] Button clicked, TODO tasks found:', todoTasks.length);
-		
-		// Check if spec.md already exists
-		let specExists = false;
-		try {
-			const specCheckResult = await window.electronAPI?.kanbanSpecMdExists();
-			specExists = specCheckResult?.exists || false;
-			console.log('[RunAll] spec.md exists:', specExists);
-		} catch (err) {
-			console.error('[RunAll] Error checking spec-md-exists:', err);
-		}
-		
-		// If spec.md doesn't exist and no TODO tasks, can't proceed
-		if (!specExists && todoTasks.length === 0) {
-			console.warn('[RunAll] No TODO tasks found and no spec.md exists');
-			return;
-		}
-		
-		// If spec.md doesn't exist, create it from TODO tasks
-		let spec = null;
-		if (!specExists) {
-			// Consolidate all TODO tasks into a spec
-			spec = todoTasks
-				.map(t => `## ${t.title}\n${t.description}`)
-				.join('\n\n');
-			console.log('[RunAll] Created spec.md with', spec.length, 'bytes');
-		} else {
-			console.log('[RunAll] Skipping spec.md creation - using existing spec.md');
-		}
-		
-		btnEl.disabled = true;
-		btnEl.innerHTML = '<span class="spinning">⌛️</span>';
-		
-		// Safety timeout: always restore button after 60 seconds
-		const safetyTimeout = setTimeout(() => {
-			console.error('[RunAll] Safety timeout triggered - button forced to restore');
-			btnEl.textContent = 'Run All';
-			btnEl.disabled = false;
-		}, 60000);
-		
-		try {
-			// Determine if we need to run the skill
-			// Run skill if: 
-			// 1. spec.md was just created (normal flow), OR
-			// 2. spec.md exists but tasks.json doesn't (leverage existing spec)
-			let shouldRunSkill = !specExists; // Always run if we just created spec.md
-			let tasksFileExists = false;
-			
-			// Check if tasks.json exists
-			try {
-				const tasksCheckResult = await window.electronAPI?.kanbanTasksFileExists();
-				tasksFileExists = tasksCheckResult?.exists || false;
-				console.log('[RunAll] tasks.json exists:', tasksFileExists);
-			} catch (err) {
-				console.error('[RunAll] Error checking tasks-file-exists:', err);
-			}
-			
-			// If spec.md exists and tasks.json doesn't, still run skill to leverage spec.md
-			if (specExists && !tasksFileExists) {
-				shouldRunSkill = true;
-				console.log('[RunAll] spec.md exists but tasks.json missing - will run skill to leverage spec');
-			}
-			
-			// Step 1: Write spec.md only if it doesn't exist
-			if (!specExists) {
-				console.log('[RunAll] Step 1: Writing spec.md...');
-				const specResult = await window.electronAPI?.kanbanWriteSpecMd(spec);
-				console.log('[RunAll] write-spec-md result:', specResult);
-				if (!specResult?.ok) {
-					const err = `Failed to write spec.md: ${specResult?.error || 'Unknown error'}`;
-					console.error('[RunAll]', err);
-					btnEl.textContent = `❌ ${err.slice(0, 30)}...`;
-					await new Promise(r => setTimeout(r, 2000));
-					btnEl.textContent = 'Run All';
-					btnEl.disabled = false;
-					clearTimeout(safetyTimeout);
-					return;
+		document.getElementById('todo-input').onkeydown = async (e) => {
+			if (e.key === 'Enter') {
+				const title = e.target.value.trim();
+				if (title) {
+					e.target.value = '';
+					await addNewTask(title);
 				}
+			}
+		};
 
-				// Step 2: Remove tasks.json only if spec.md was just created
-				console.log('[RunAll] Step 2: Deleting tasks.json...');
-				const deleteResult = await window.electronAPI?.kanbanDeleteTasksFile();
-				console.log('[RunAll] delete-tasks-file result:', deleteResult);
-				if (!deleteResult?.ok) {
-					const err = `Failed to delete tasks.json: ${deleteResult?.error || 'Unknown error'}`;
-					console.error('[RunAll]', err);
-					btnEl.textContent = `❌ ${err.slice(0, 30)}...`;
-					await new Promise(r => setTimeout(r, 2000));
-					btnEl.textContent = 'Run All';
-					btnEl.disabled = false;
-					clearTimeout(safetyTimeout);
-					return;
-				}
-			} else {
-				console.log('[RunAll] Skipping Steps 1-2: Using existing spec.md');
+		document.getElementById('commit-push-btn').onclick = async () => {
+			const msg = prompt('Commit message:');
+			if (msg) {
+				await window.electronAPI?.kanban.gitCommit(msg);
+				await window.electronAPI?.kanban.gitPush();
 			}
-
-			// Step 3: Run claude-code-assistant skill if needed
-			if (shouldRunSkill) {
-				console.log('[RunAll] Step 3: Running claude-code-assistant skill...');
-				console.log('[RunAll] Calling run-skill with description length:', spec ? spec.length : 'N/A (using existing spec.md)');
-				const result = await window.electronAPI?.kanbanRunSkill('claude-code-assistant', {
-					description: spec || ''
-				});
-				console.log('[RunAll] run-skill result:', result);
-				console.log('[RunAll] result?.ok:', result?.ok, 'typeof:', typeof result?.ok);
-				console.log('[RunAll] Full result object:', JSON.stringify(result));
-			} else {
-				console.log('[RunAll] Step 3 (skipped): Spec exists and tasks already loaded, not running skill');
-			}
-			
-			// Parse spec.md and recreate tasks.json (regardless of skill success/failure)
-			// This ensures we have tasks even if the skill failed
-			console.log('[RunAll] Step 4: Parsing spec.md...');
-			const parseResult = await window.electronAPI?.kanbanParseSpecMd();
-			console.log('[RunAll] parse-spec-md result:', parseResult);
-			console.log('[RunAll] parseResult?.ok:', parseResult?.ok, 'type:', typeof parseResult?.ok);
-			
-			if (parseResult?.ok) {
-				// Reload tasks from the newly created tasks.json
-				console.log('[RunAll] Step 5: Reloading tasks...');
-				await loadTasksFromFile();
-				syncTasksToConvex();
-				
-				let taskCountMsg;
-				if (!specExists) {
-					taskCountMsg = `aggregated ${todoTasks.length} task(s)`;
-				} else if (!tasksFileExists) {
-					taskCountMsg = 'leveraged existing spec (no tasks.json)';
-				} else {
-					taskCountMsg = 'processed existing spec with tasks';
-				}
-				console.log(`[Kanban] Executed claude-code-assistant ${taskCountMsg}, created ${parseResult.count} tasks`);
-				btnEl.textContent = '✓ Done';
-				clearTimeout(safetyTimeout);
-				setTimeout(() => { btnEl.textContent = 'Run All'; btnEl.disabled = false; }, 1500);
-			} else {
-				// Parse failed - this is more serious since we can't even read spec.md
-				const err = `Parse failed: ${parseResult?.error || 'Unknown error'}`;
-				console.error('[RunAll]', err);
-				btnEl.textContent = `❌ ${err.slice(0, 30)}...`;
-				await new Promise(r => setTimeout(r, 2000));
-				btnEl.textContent = 'Run All';
-				btnEl.disabled = false;
-				clearTimeout(safetyTimeout);
-			}
-		} catch (err) {
-			const msg = `Error: ${err.message}`;
-			console.error('[RunAll]', msg);
-			console.error('[RunAll] Stack:', err.stack);
-			btnEl.textContent = `❌ ${msg.slice(0, 30)}...`;
-			await new Promise(r => setTimeout(r, 2000));
-			btnEl.textContent = 'Run All';
-			btnEl.disabled = false;
-			clearTimeout(safetyTimeout);
-		}
 		};
 
 		document.getElementById('clean-tasks').onclick = async () => {
-			try {
-				const doneQueueTasks = tasks.filter((task) => isQueueTask(task) && task.status === 'DONE');
-				doneQueueTasks.forEach((task) => dismissedQueueTaskIds.add(task.queueTaskId));
-				if (doneQueueTasks.length > 0) {
-					persistDismissedQueueTaskIds();
-					tasks = tasks.filter((task) => !(isQueueTask(task) && task.status === 'DONE'));
-				}
-				const result = await window.electronAPI?.kanbanRemoveCompleted();
-				if (result?.ok) {
-					if (result.removed > 0 || doneQueueTasks.length > 0) {
-						console.log(`[Kanban] Cleaned ${result.removed} completed tasks`);
-						await loadTasksFromFile();
-						await hydrateQueueTasks();
-						syncTasksToConvex();
-					} else {
-						alert('No completed tasks to clean.');
-					}
-				} else {
-					alert(`Error: ${result?.error || 'Unknown error'}`);
-				}
-			} catch (err) {
-				alert(`Failed to clean tasks: ${err.message}`);
-			}
+			await window.electronAPI?.kanban.removeCompleted();
 		};
 
-		async function syncTasksToConvex() {
-			try {
-				await window.electronAPI?.kanbanSyncToConvex(tasks);
-				console.log('[Kanban] Tasks synced to Convex');
-			} catch (err) {
-				console.warn('[Kanban] Convex sync failed:', err);
-			}
-		}
-
-		// Commit & Push button (combined)
-		document.getElementById('commit-push-btn').onclick = async () => {
-			const btn = document.getElementById('commit-push-btn');
-			const msg = prompt('Commit message:', 'Update tasks');
-			if (msg === null) return;
-
-			btn.disabled = true;
-			btn.textContent = '⏳';
-
-			try {
-				// Commit first
-				const commitResult = await window.electronAPI?.kanbanGitCommit(msg);
-				if (!commitResult?.ok) {
-					alert(`Commit failed: ${commitResult?.error || 'Unknown error'}`);
-					btn.textContent = '📝 Commit & Push';
-					btn.disabled = false;
-					return;
-				}
-
-				// Then push
-				const pushResult = await window.electronAPI?.kanbanGitPush();
-				if (pushResult?.ok) {
-					alert('✓ Committed and pushed to git');
-					btn.textContent = '✓ Done';
-					setTimeout(() => { btn.textContent = '📝 Commit & Push'; btn.disabled = false; }, 1000);
-				} else {
-					alert(`Push failed: ${pushResult?.error || 'Unknown error'}`);
-					btn.textContent = '📝 Commit & Push';
-					btn.disabled = false;
-				}
-			} catch (err) {
-				alert(`Error: ${err.message}`);
-				btn.textContent = '📝 Commit & Push';
-				btn.disabled = false;
-			}
+		document.getElementById('clean-done-btn').onclick = async () => {
+			await window.electronAPI?.kanban.removeCompleted();
 		};
 
-		// Reorganize button - AI reorganization
-		document.getElementById('reorganize-btn').onclick = async () => {
-			const btn = document.getElementById('reorganize-btn');
-			const todoTasks = tasks.filter(t => t.status === 'TODO');
-
-			if (todoTasks.length === 0) {
-				alert('No tasks to reorganize. Add tasks in the TODO column first.');
-				return;
-			}
-
-			btn.disabled = true;
-			btn.textContent = '⏳';
-
-			try {
-				// Create a reorganization spec
-				const spec = `Reorganize the following tasks into a better structure with subtasks, dependencies, and clear ordering:\n\n${todoTasks.map((t, i) => `${i + 1}. ${t.title}\n   ${t.description}`).join('\n\n')}\n\nReturn the reorganized tasks as a structured list with clear hierarchy.`;
-
-				const result = await window.electronAPI?.kanbanRunSkill('claude-code-assistant', {
-					description: spec
-				});
-
-				if (result?.ok) {
-					alert('✓ Tasks reorganized! The AI has restructured your tasks.');
-					// Mark all TODO tasks as IN_PROGRESS to show work is being done
-					todoTasks.forEach(t => t.status = 'IN_PROGRESS');
-					renderTasks();
-					saveTasksToFile();
-					syncTasksToConvex();
-					btn.textContent = '✓ Reorganize';
-					setTimeout(() => { btn.textContent = '🔄 Reorganize'; btn.disabled = false; }, 1000);
-				} else {
-					alert(`Reorganization failed: ${result?.result?.result || result?.result || 'Unknown error'}`);
-					btn.textContent = '🔄 Reorganize';
-					btn.disabled = false;
-				}
-			} catch (err) {
-				alert(`Error: ${err.message}`);
-				btn.textContent = '🔄 Reorganize';
-				btn.disabled = false;
-			}
-		};
-
-		loadTasksFromFile().then(() => hydrateQueueTasks());
+		loadTasks();
 
 		if (window.electronAPI) {
-			window.electronAPI.onKanbanTasksUpdated(() => {
-				if (activelyStreamingTasks.size > 0) return;
-				console.log('[Kanban] Detected tasks.json change, scheduling reload...');
-				scheduleReload();
-			});
+			window.electronAPI.kanban.onTasksUpdated(() => loadTasks());
 
-			window.electronAPI.onTqTaskUpdate((data) => {
-				const queueTaskId = queueTaskIdOf(data);
-				if (!queueTaskId) return;
-				if (String(data.status || '').toLowerCase() === 'cancelled') {
-					removeQueueTask(queueTaskId);
-					renderTasks();
-					saveTasksToFile();
-					return;
-				}
+			window.electronAPI.queue.onTaskUpdate(() => loadTasks());
 
-				const existingTask = tasks.find((task) => queueTaskIdOf(task) === queueTaskId);
-				const queueTask = {
-					...(existingTask || {}),
-					...(data.task || {}),
-					...data,
-					_id: queueTaskId,
-					status: data.status || data.task?.status || existingTask?.originalStatus || 'draft',
-					countdownRemaining: existingTask?.countdownRemaining,
-				};
-				const normalized = upsertQueueTask(queueTask);
-				if (!normalized) return;
-				if (['completed', 'done', 'failed'].includes(String(queueTask.status || '').toLowerCase())) {
-					recentlyCompletedTasks.set(normalized.id, { status: normalized.status, timestamp: Date.now() });
-				}
-				renderTasks();
-				saveTasksToFile();
-			});
+			window.electronAPI.onClaudeCodeStream((data) => {
 
-			window.electronAPI.onTqCountdownState((data) => {
-				const queueTaskId = queueTaskIdOf(data);
-				if (!queueTaskId) return;
-				const task = tasks.find((candidate) => queueTaskIdOf(candidate) === queueTaskId);
-				if (!task) return;
-				task.countdownRemaining = data.remaining;
-				task.originalStatus = 'draft';
-				task.status = 'TODO';
-				scheduleRender();
-				saveTasksToFile();
-			});
-
-			window.electronAPI.onKanbanCodeStream((data) => {
 				if (data.type === 'log' && data.taskId) {
-					activelyStreamingTasks.add(data.taskId);
-					const task = tasks.find((candidate) => candidate.id === data.taskId);
+					const task = tasks.find(t => t.id === data.taskId);
 					if (task) {
-						task.logs = (task.logs || '') + (task.logs ? '\n' : '') + data.line;
-						const lines = task.logs.split('\n');
-						if (lines.length > 50) task.logs = lines.slice(-50).join('\n');
-						const logsEl = document.querySelector(`[data-task-id="${data.taskId}"] .task-logs`);
-						if (logsEl) {
-							logsEl.textContent = task.logs;
-							logsEl.style.opacity = '';
-							logsEl.scrollTop = logsEl.scrollHeight;
-						} else {
-							scheduleRender();
-						}
+						task.logs = (task.logs || '') + data.line + '\n';
+						renderTasks();
 					}
-				} else if (data.type === 'done' && data.taskId) {
-					const task = tasks.find((candidate) => candidate.id === data.taskId);
-					const newStatus = data.status === 'COMPLETED' ? 'DONE' : 'TODO';
-					if (task) {
-						task.status = newStatus;
-						task.originalStatus = data.status === 'COMPLETED' ? 'completed' : 'failed';
-						if (data.summary) {
-							task.logs = (task.logs || '') + '\n' + (newStatus === 'DONE' ? '✅' : '❌') + ' ' + data.summary;
-							const lines = task.logs.split('\n');
-							if (lines.length > 50) task.logs = lines.slice(-50).join('\n');
-						}
-					}
-					recentlyCompletedTasks.set(data.taskId, { status: newStatus, timestamp: Date.now() });
-					sdkRunningTasks.delete(data.taskId);
-					activelyStreamingTasks.delete(data.taskId);
-					renderTasks();
-					saveTasksToFile();
-					syncTasksToConvex();
-					setTimeout(() => {
-						loadTasksFromFile();
-					}, 2000);
+				} else if (data.type === 'done') {
+					loadTasks();
 				}
 			});
 		}

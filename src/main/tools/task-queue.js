@@ -28,6 +28,7 @@ async function add_task(args) {
 			rawPrompt: description,
 			projectPath,
 			origin: 'tool:add_task',
+			strategy: args.strategy,
 			executionLane: args.execution_lane || args.executionLane,
 			hireableProfile: args.hireable_profile || args.hireableProfile,
 			queueBucket: args.queue_bucket || args.queueBucket,

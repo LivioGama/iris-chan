@@ -1,12 +1,21 @@
 // Avatar overlay window creation & display tracking
 const { BrowserWindow, screen } = require('electron');
-const path = require('path');
+const path = require('node:path');
 const config = require('../../shared/config').default;
 const log = require('../logger');
+const { getGeometry, setGeometry } = require('../runtime/geometry-store');
 
 let win = null;
 let currentDisplayId = null;
 let displayPollTimer = null;
+
+async function saveGeometry() {
+	if (!win || win.isDestroyed()) return;
+	try {
+		const bounds = win.getBounds();
+		await setGeometry('avatar', bounds);
+	} catch { }
+}
 
 function getBottomLeftPosition(display) {
 	const { x, y, height } = display.bounds;
@@ -44,15 +53,13 @@ function create() {
 	}
 
 	const primaryDisplay = screen.getPrimaryDisplay();
-	const pos = getBottomLeftPosition(primaryDisplay);
 	currentDisplayId = primaryDisplay.id;
 	win = new BrowserWindow({
 		width: config.window.avatarWidth,
 		height: config.window.avatarHeight,
-		x: pos.x,
-		y: pos.y,
 		transparent: true,
 		frame: false,
+		show: false, // Wait for geometry
 		hasShadow: false,
 		alwaysOnTop: true,
 		skipTaskbar: true,
@@ -66,9 +73,29 @@ function create() {
 		},
 	});
 
+	// Load geometry and apply
+	getGeometry('avatar').then(saved => {
+		if (win && !win.isDestroyed()) {
+			const pos = saved || getBottomLeftPosition(primaryDisplay);
+			win.setBounds({
+				x: pos.x,
+				y: pos.y,
+				width: config.window.avatarWidth,
+				height: config.window.avatarHeight
+			});
+			win.show();
+		}
+	});
+
 	win.setIgnoreMouseEvents(true, { forward: true });
 	const rendererPath = path.join(__dirname, '..', '..', 'renderer', 'index.html');
 	win.loadFile(rendererPath);
+
+	// Save geometry on resize/move (debounced)
+	let geoDebounce = null;
+	const persistGeo = () => { clearTimeout(geoDebounce); geoDebounce = setTimeout(saveGeometry, 300); };
+	win.on('resize', persistGeo);
+	win.on('move', persistGeo);
 
 	// Forward renderer console output to unified log (skip messages already sent via IPC logToFile)
 	win.webContents.on('console-message', (ev) => {

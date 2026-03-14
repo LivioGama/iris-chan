@@ -7,6 +7,22 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 const taskState = require('../tasks/task-state');
+const { TaskCatalogService } = require('../tasks/task-catalog-service');
+const { FileTaskRepository } = require('../tasks/repositories/file-task-repository');
+const { QueueTaskRepository } = require('../tasks/repositories/queue-task-repository');
+
+let catalogService: any = null;
+
+export function getCatalogService() {
+    if (!catalogService) {
+        const tasksPath = path.join(process.cwd(), 'tasks.json');
+        const fileRepo = new FileTaskRepository(tasksPath, { cwd: process.cwd() });
+        const { getConvexClient } = require('../runtime/convex-adapter');
+        const queueRepo = new QueueTaskRepository(getConvexClient(), { projectPath: process.cwd() });
+        catalogService = new TaskCatalogService({ fileRepo, queueRepo, kanbanWindow });
+    }
+    return catalogService;
+}
 
 export interface Task {
     id: string;
@@ -86,17 +102,11 @@ function getGitErrorMessage(err: any): string {
 
 export function register() {
     // Kanban tasks
-    ipcMain.handle(ch.LOAD_KANBAN_TASKS, () => {
-        const tasksPath = path.join(process.cwd(), 'tasks.json');
-
+    ipcMain.handle(ch.LOAD_KANBAN_TASKS, async () => {
         try {
-            if (!fs.existsSync(tasksPath)) {
-                return [];
-            }
-            const data = taskState.loadTasksFile(tasksPath, { cwd: process.cwd() });
-            return data.tasks || [];
+            return await getCatalogService().getAllTasks();
         } catch (err: any) {
-            log.error('Kanban', `Failed to load tasks.json: ${err.message}`);
+            log.error('Kanban', `Failed to load reconciled tasks: ${err.message}`);
             return [];
         }
     });
@@ -283,6 +293,26 @@ export function register() {
             return { ok: false, error: 'Task not found' };
         } catch (err: any) {
             log.error('Kanban', `Failed to update task logs: ${err.message}`);
+            return { ok: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('delete-kanban-task', async (_, taskId: string, source?: 'file' | 'queue') => {
+        try {
+            await getCatalogService().deleteTask(taskId, source);
+            return { ok: true };
+        } catch (err: any) {
+            log.error('Kanban', `Failed to delete task ${taskId}: ${err.message}`);
+            return { ok: false, error: err.message };
+        }
+    });
+
+    ipcMain.handle('add-kanban-task', async (_, task: any) => {
+        try {
+            await getCatalogService().saveTask(task);
+            return { ok: true };
+        } catch (err: any) {
+            log.error('Kanban', `Failed to add task: ${err.message}`);
             return { ok: false, error: err.message };
         }
     });
