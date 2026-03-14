@@ -175,8 +175,91 @@ func startInputMonitor() -> Never {
 	exit(0)
 }
 
+// MARK: - Notification Monitor (AXObserver on NotificationCenter)
+
+func extractAllTexts(from element: AXUIElement, depth: Int = 0, limit: Int = 40) -> [String] {
+	if depth > 6 { return [] }
+	var texts: [String] = []
+	let fields = [
+		kAXTitleAttribute as String,
+		kAXValueAttribute as String,
+		kAXDescriptionAttribute as String,
+		kAXHelpAttribute as String,
+	]
+	for field in fields {
+		let s = stringAttribute(element, field)
+		if !s.isEmpty && s.count >= 2 && s.count <= 500 {
+			texts.append(s)
+		}
+	}
+	if texts.count >= limit { return Array(texts.prefix(limit)) }
+	for child in childElements(of: element) {
+		texts.append(contentsOf: extractAllTexts(from: child, depth: depth + 1, limit: limit - texts.count))
+		if texts.count >= limit { break }
+	}
+	return texts
+}
+
+func notificationObserverCallback(_ observer: AXObserver, _ element: AXUIElement, _ notification: CFString, _ refcon: UnsafeMutableRawPointer?) {
+	let texts = extractAllTexts(from: element)
+	if texts.isEmpty { return }
+	// Deduplicate
+	var seen = Set<String>()
+	let unique = texts.filter { seen.insert($0).inserted }
+	let escaped = unique.map { t in
+		t.replacingOccurrences(of: "\\", with: "\\\\")
+		 .replacingOccurrences(of: "\"", with: "\\\"")
+		 .replacingOccurrences(of: "\n", with: "\\n")
+		 .replacingOccurrences(of: "\r", with: "")
+		 .replacingOccurrences(of: "\t", with: " ")
+	}
+	let jsonTexts = escaped.map { "\"\($0)\"" }.joined(separator: ",")
+	let ts = Int(Date().timeIntervalSince1970 * 1000)
+	writeStdoutLine("{\"type\":\"notification\",\"texts\":[\(jsonTexts)],\"timestamp\":\(ts)}")
+}
+
+func startNotificationMonitor() -> Never {
+	requireAccessibility("notification monitoring")
+
+	// Find the NotificationCenter process
+	let apps = NSWorkspace.shared.runningApplications
+	guard let ncApp = apps.first(where: { $0.bundleIdentifier == "com.apple.notificationcenterui" }) else {
+		writeStdoutLine("{\"type\":\"error\",\"message\":\"NotificationCenter process not found\"}")
+		exit(1)
+	}
+	let pid = ncApp.processIdentifier
+	let appElement = AXUIElementCreateApplication(pid)
+
+	// Create AXObserver
+	var observer: AXObserver?
+	let err = AXObserverCreate(pid, notificationObserverCallback, &observer)
+	guard err == .success, let obs = observer else {
+		writeStdoutLine("{\"type\":\"error\",\"message\":\"Failed to create AXObserver: \\(err.rawValue)\"}")
+		exit(1)
+	}
+
+	// Observe element creation and value changes
+	let notifications: [String] = [
+		kAXCreatedNotification as String,
+		kAXValueChangedNotification as String,
+		kAXLayoutChangedNotification as String,
+	]
+	for notif in notifications {
+		AXObserverAddNotification(obs, appElement, notif as CFString, nil)
+	}
+
+	CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(obs), .defaultMode)
+	writeStdoutLine("{\"type\":\"ready\",\"pid\":\(pid),\"timestamp\":\(Int(Date().timeIntervalSince1970 * 1000))}")
+	CFRunLoopRun()
+	exit(0)
+}
+
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--monitor-input" {
 	startInputMonitor()
+}
+
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--monitor-notifications" {
+	startNotificationMonitor()
 }
 
 guard CommandLine.arguments.count > 1 else {
