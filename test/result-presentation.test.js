@@ -181,6 +181,10 @@ assert.ok(
 	appInit.includes('Action not verified yet, checking again.'),
 	'app init should show softer retry copy in context bubbles'
 );
+assert.ok(
+	appInit.includes("showBubble('context', `DB ${ok} (${evt.payload?.latencyMs ?? -1} ms)`);"),
+	'app init should keep the DB health bubble copy for top-of-screen status changes'
+);
 
 const fakeDocument = new FakeDocument();
 global.document = fakeDocument;
@@ -213,6 +217,14 @@ const timelineRoot = fakeDocument.registerElement('activity-timeline', fakeDocum
 fakeDocument.body.appendChild(timelineRoot);
 const { pushTimelineEvent } = loadEsmExports(timelineFile, ['pushTimelineEvent']);
 
+pushTimelineEvent({ type: 'DB_HEALTH', timestamp: Date.now(), payload: { ok: true, latencyMs: 8 } });
+assert.strictEqual(
+	timelineRoot.children.length,
+	1,
+	'timeline helper still renders DB health cards when called directly; filtering belongs in app init'
+);
+timelineRoot.innerHTML = '';
+
 pushTimelineEvent({ type: 'ACTION_VERIFY_FAIL', timestamp: Date.now(), payload: {} });
 const timelineCard = timelineRoot.children[0];
 assert.ok(timelineCard, 'timeline should render a card for verify retry events');
@@ -225,6 +237,24 @@ assert.strictEqual(
 	timelineCard.querySelector('.tl-msg')?.textContent,
 	'Visual check needs another pass.',
 	'timeline body should use neutral retry wording'
+);
+
+const appInitModule = loadEsmExports(
+	path.join(process.cwd(), 'src/renderer/app-init.js'),
+	['onRuntimeEvent'],
+	{
+		pushTimelineEvent,
+		showBubble() {},
+		summarizeMilestoneLine,
+		shouldNarrateMilestone: () => false,
+	}
+);
+
+appInitModule.onRuntimeEvent({ type: 'DB_HEALTH', timestamp: Date.now(), payload: { ok: true, latencyMs: 8 } });
+assert.strictEqual(
+	timelineRoot.children.length,
+	1,
+	'app init should not send DB health events into the bottom activity timeline'
 );
 
 console.log('Result presentation tests passed.');

@@ -17,8 +17,8 @@ export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 		evt.type === 'INTERRUPT'
 	);
 	if (isUiTaskEvent) return;
-	pushTimelineEvent(evt);
 	if (evt.type === 'THINKING') {
+		pushTimelineEvent(evt);
 		showBubble('thinking', evt.payload?.message || 'Thinking...');
 		return;
 	}
@@ -33,26 +33,31 @@ export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 	}
 
 	if (evt.type === 'TOOL_START') {
+		pushTimelineEvent(evt);
 		const toolName = evt.payload?.toolName || evt.payload?.name || null;
 		showBubble('context', toolName ? `Using ${toolName}...` : 'Running tool...');
 		return;
 	}
 
 	if (evt.type === 'TOOL_END') {
+		pushTimelineEvent(evt);
 		return;
 	}
 
 	if (evt.type === 'ACTION_VERIFY_FAIL') {
+		pushTimelineEvent(evt);
 		showBubble('context', 'Action not verified yet, checking again.');
 		return;
 	}
 
 	if (evt.type === 'ACTION_VERIFY_OK') {
+		pushTimelineEvent(evt);
 		showBubble('context', 'Action verified.');
 		return;
 	}
 
 	if (evt.type === 'PROACTIVE_SUGGESTION') {
+		pushTimelineEvent(evt);
 		if (Array.isArray(evt.payload?.replyOptions) && evt.payload.replyOptions.length) {
 			const title = evt.payload?.replyPrompt ? 'Want a suggested reply here?' : 'Reply suggestions:';
 			const lines = evt.payload.replyOptions.map((option, index) => `${index + 1}. ${option}`);
@@ -65,9 +70,13 @@ export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 	}
 
 	if (evt.type === 'TASK_MILESTONE' || evt.type === 'TASK_DONE') {
+		pushTimelineEvent(evt);
 		const summarized = summarizeMilestoneLine(evt.payload?.message || '');
 		if (summarized && shouldNarrateMilestone(summarized, { askedProgress })) {
 			showBubble('chat', summarized.summary, { role: 'iris' });
 		}
+		return;
 	}
+
+	pushTimelineEvent(evt);
 }
