@@ -1,14 +1,11 @@
 const crypto = require('node:crypto');
-const { exec } = require('child_process');
-const { runHelper } = require('../native-helper');
 const { getConvexClient, getMemoryStore } = require('../automation/service-ref');
 const config = require('../../shared/config').default;
 const convexStore = require('../convex-store');
 
 const SEARCH_PROVIDER_KEY = 'search.provider.preferred';
 const PROVIDER_PERPLEXITY = 'perplexity';
-const PROVIDER_OLLAMA = 'ollama';
-const KNOWN_PROVIDERS = new Set([PROVIDER_PERPLEXITY, PROVIDER_OLLAMA]);
+const KNOWN_PROVIDERS = new Set([PROVIDER_PERPLEXITY]);
 
 function normalizeProvider(value = '') {
 	return String(value || '').trim().toLowerCase();
@@ -105,7 +102,6 @@ function resolveProviderOrder(args = {}, env = process.env, memoryStore = getMem
 		...envProviders,
 		...configProviders.map(normalizeProvider),
 		PROVIDER_PERPLEXITY,
-		PROVIDER_OLLAMA,
 	]).filter((provider) => KNOWN_PROVIDERS.has(provider));
 }
 
@@ -122,86 +118,6 @@ async function emitSearchRuntimeEvent(payload) {
 			payload: JSON.stringify(payload),
 		}, idempotencyKey);
 	} catch {}
-}
-
-async function runOllamaSearch(query, env = process.env) {
-	const apiKey = env.OLLAMA_API_KEY || process.env.OLLAMA_API_KEY || '';
-	if (!apiKey) {
-		throw new Error('OLLAMA_API_KEY not configured');
-	}
-
-	const headers = {
-		'Content-Type': 'application/json',
-		Authorization: `Bearer ${apiKey}`,
-	};
-
-	const startedAt = Date.now();
-	const searchResp = await fetch(`${config.search.ollamaHost}/api/web_search`, {
-		method: 'POST',
-		headers,
-		body: JSON.stringify({ query, max_results: 5 }),
-		signal: AbortSignal.timeout(config.search.requestTimeoutMs),
-	});
-	if (!searchResp.ok) {
-		throw new Error(`Search API error: ${searchResp.status}`);
-	}
-
-	const searchData = await searchResp.json();
-	const results = Array.isArray(searchData.results) ? searchData.results : [];
-	if (!results.length) {
-		return {
-			ok: true,
-			provider: PROVIDER_OLLAMA,
-			result: 'No search results found.',
-			rawResults: [],
-			sources: [],
-			latencyMs: Date.now() - startedAt,
-		};
-	}
-
-	const rawResults = results
-		.map((entry) => `## ${entry.title}\nURL: ${entry.url}\n${(entry.content || entry.snippet || '').slice(0, 1500)}`)
-		.join('\n\n---\n\n')
-		.slice(0, 8000);
-
-	const synthResp = await fetch(`${config.search.ollamaHost}/api/chat`, {
-		method: 'POST',
-		headers,
-		body: JSON.stringify({
-			model: config.search.synthesisModel,
-			messages: [
-				{ role: 'system', content: 'You are a search-result synthesizer. Your output feeds directly into another LLM — not a human. Rules: Return ONLY factual data. No greetings, disclaimers, or filler. Use compact bullet points. Include source URLs as [title](url). Max 400 words.' },
-				{ role: 'user', content: `Query: ${query}\n\nSearch results:\n${rawResults}\n\nSynthesize these results into a concise, structured answer.` },
-			],
-			stream: false,
-			think: false,
-		}),
-		signal: AbortSignal.timeout(config.search.requestTimeoutMs),
-	});
-
-	if (!synthResp.ok) {
-		const sources = uniqueSources(results);
-		return {
-			ok: true,
-			provider: PROVIDER_OLLAMA,
-			result: appendSources(rawResults.slice(0, 4000), sources),
-			rawResults: results,
-			sources,
-			latencyMs: Date.now() - startedAt,
-		};
-	}
-
-	const synthData = await synthResp.json();
-	const answer = String(synthData.message?.content || '').trim();
-	const sources = uniqueSources(results);
-	return {
-		ok: true,
-		provider: PROVIDER_OLLAMA,
-		result: appendSources((answer.length >= 20 ? answer : rawResults).slice(0, 4000), sources),
-		rawResults: results,
-		sources,
-		latencyMs: Date.now() - startedAt,
-	};
 }
 
 async function runPerplexitySearch(query, env = process.env) {
@@ -255,7 +171,6 @@ async function runPerplexitySearch(query, env = process.env) {
 
 async function runSearchWithProvider(provider, query, env = process.env) {
 	if (provider === PROVIDER_PERPLEXITY) return runPerplexitySearch(query, env);
-	if (provider === PROVIDER_OLLAMA) return runOllamaSearch(query, env);
 	throw new Error(`Unsupported search provider: ${provider}`);
 }
 
@@ -341,7 +256,6 @@ module.exports = {
 		rememberProvider,
 		emitSearchRuntimeEvent,
 		runPerplexitySearch,
-		runOllamaSearch,
 		hashQuery,
 		appendSources,
 		uniqueSources,

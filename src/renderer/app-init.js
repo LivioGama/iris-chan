@@ -69,6 +69,11 @@ export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 		return;
 	}
 
+	if (evt.type === 'INTENT_PREDICTION') {
+		pushTimelineEvent(evt);
+		return;
+	}
+
 	if (evt.type === 'TASK_MILESTONE' || evt.type === 'TASK_DONE') {
 		pushTimelineEvent(evt);
 		const summarized = summarizeMilestoneLine(evt.payload?.message || '');

@@ -61,6 +61,7 @@ function phaseFromType(type) {
 	if (type === 'DB_HEALTH') return 'db';
 	if (type === 'INTERRUPT') return 'interrupt';
 	if (type === 'TASK_DONE') return 'done';
+	if (type === 'INTENT_PREDICTION') return 'thinking';
 	return 'task';
 }
 
@@ -76,6 +77,7 @@ function titleFromType(type) {
 		case 'INTERRUPT': return 'Paused';
 		case 'DB_HEALTH': return 'Database Health';
 		case 'PROACTIVE_SUGGESTION': return 'Proactive Suggestion';
+		case 'INTENT_PREDICTION': return 'Intent Predicted';
 		default: return String(type || 'Event');
 	}
 }
@@ -91,6 +93,11 @@ function formatMessage(evt) {
 		const kind = evt.payload?.kind ? `[${evt.payload.kind}] ` : '';
 		const app = evt.payload?.context?.app ? ` (${evt.payload.context.app})` : '';
 		return `${kind}${evt.payload?.suggestion || 'High-confidence suggestion'}${app}`;
+	}
+	if (evt.type === 'INTENT_PREDICTION') {
+		const intents = evt.payload?.intents || [];
+		if (!intents.length) return 'No confident predictions.';
+		return intents.map((i) => `${i.type}@${(i.confidence || 0).toFixed(2)}: ${i.suggestedAction || i.description || ''}`).join(' | ');
 	}
 	if (evt.type === 'ACTION_VERIFY_FAIL') return 'Visual check needs another pass.';
 	if (evt.type === 'ACTION_VERIFY_OK') return 'Visual check passed.';

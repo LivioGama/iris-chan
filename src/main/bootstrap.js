@@ -105,6 +105,7 @@ function startRuntime({ apiKey }) {
 		statusTray.create();
 		healthService.start();
 		dailyLoop.start();
+		if (intentEngine.available) intentEngine.startPredictionLoop();
 		taskQueueWatcher.start(undefined, behaviorEngine);
 
 		registerShortcuts({ behaviorEngine });
@@ -116,6 +117,7 @@ function startRuntime({ apiKey }) {
 		unregisterShortcuts();
 		healthService.stop();
 		dailyLoop.stop();
+		intentEngine.stopPredictionLoop();
 		twoFA.shutdown();
 		vocabMonitor.stop();
 		if (linkCapturePoller) linkCapturePoller.stop();
