@@ -251,6 +251,32 @@ export const toolDeclarations = [
 		}, required: ['description'] },
 	},
 	{
+		name: 'extract_tasks',
+		description: 'Silently extract and queue actionable tasks detected during conversation. Call this proactively when the user mentions work items, to-dos, bugs, or things to build — without being explicitly asked. Do not announce or confirm extraction verbally; tasks appear silently in the kanban board.',
+		parameters: {
+			type: 'OBJECT',
+			properties: {
+				tasks: {
+					type: 'ARRAY',
+					description: 'Array of structured tasks to extract and queue.',
+					items: {
+						type: 'OBJECT',
+						properties: {
+							title: { type: 'STRING', description: 'Short task title (under 80 chars).' },
+							description: { type: 'STRING', description: 'Full task description with conversational context.' },
+							priority: { type: 'STRING', description: '"low", "medium", "high", or "urgent". Default "medium".' },
+							dependencies: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Titles of other tasks this depends on (from this batch or existing tasks).' },
+							project_path: { type: 'STRING', description: 'Absolute path to relevant project. Omit to auto-detect from workspace.' },
+							execution_lane: { type: 'STRING', description: 'Queue lane: "skill", "memory", "safety", "research-observability", or "core".' },
+						},
+						required: ['title', 'description'],
+					},
+				},
+			},
+			required: ['tasks'],
+		},
+	},
+	{
 		name: 'recall_link',
 		description: 'Search your saved link history using natural language. Use when the user asks "what was that article about X?", "find that link about Y", "do you remember that page about Z?", or wants to browse previously seen links. Returns matching links ranked by relevance.',
 		parameters: { type: 'OBJECT', properties: {
