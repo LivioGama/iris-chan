@@ -22,7 +22,8 @@ const { MemoryStore } = require('./automation/memory-store');
 const { LearningManager } = require('./automation/learning-manager');
 const { NativeFallbackManager } = require('./automation/native-fallback-manager');
 const { EpisodeRecorder } = require('./automation/episode-recorder');
-const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager, setEpisodeRecorder, setConvexClient, setIntentPredictionEngine } = require('./automation/service-ref');
+const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager, setEpisodeRecorder, setConvexClient, setIntentPredictionEngine, setFeedbackStore } = require('./automation/service-ref');
+const { FeedbackStore } = require('./feedback/store');
 const { GroqClient } = require('./automation/groq-client');
 const { IntentPredictionEngine } = require('./automation/intent-prediction-engine');
 const { setConvexClient: setUnifiedConvexClient } = require('./runtime/convex-adapter');
@@ -42,6 +43,7 @@ function startRuntime({ apiKey }) {
 	const taskEngine = new TaskEngine({ eventBus });
 	const behaviorEngine = new BehaviorModeState();
 	const memoryStore = new MemoryStore();
+	const feedbackStore = new FeedbackStore();
 	const nativeFallbackManager = new NativeFallbackManager();
 	const episodeRecorder = new EpisodeRecorder();
 	const selfImprovementManager = new SelfImprovementManager({ skillsEngine: skills });
@@ -75,6 +77,7 @@ function startRuntime({ apiKey }) {
 	setUiTaskService(uiTaskService);
 	setSelfImprovementManager(selfImprovementManager);
 	setMemoryStore(memoryStore);
+	setFeedbackStore(feedbackStore);
 	setLearningManager(learningManager);
 	setNativeFallbackManager(nativeFallbackManager);
 	setEpisodeRecorder(episodeRecorder);
