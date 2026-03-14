@@ -3,6 +3,8 @@ const { detect2FAField } = require('./detector');
 const { gatherCodes } = require('./sources');
 const { computeConfidence } = require('./confidence');
 const { fillCode, verifyFill } = require('./fill');
+const { extractOTP } = require('../tools/auth');
+const { NotificationMonitor } = require('./notification-monitor');
 const log = require('../logger');
 
 class TwoFAOrchestrator {
@@ -18,6 +20,10 @@ class TwoFAOrchestrator {
 		this._filling = false;
 		this._recentFills = new Map(); // fingerprint → timestamp
 		this._enabled = settings.enabled !== false;
+		this._lastFieldInfo = null; // cached from last detection for instant notification fill
+		this._notifMonitor = new NotificationMonitor({
+			onNotification: (evt) => this._onNotificationReceived(evt),
+		});
 	}
 
 	start() {
@@ -27,6 +33,7 @@ class TwoFAOrchestrator {
 		}
 		log.info('2FA', `Starting proactive detector (poll: ${this._pollIntervalMs}ms, threshold: ${this._confidenceThreshold})`);
 		this._timer = setInterval(() => this._tick(), this._pollIntervalMs);
+		this._notifMonitor.start().catch(err => log.warn('2FA', `Notification monitor failed to start: ${err.message}`));
 	}
 
 	stop() {
@@ -34,6 +41,8 @@ class TwoFAOrchestrator {
 			clearInterval(this._timer);
 			this._timer = null;
 		}
+		this._notifMonitor.stop();
+		this._lastFieldInfo = null;
 	}
 
 	updateSettings(settings = {}) {
@@ -89,6 +98,7 @@ class TwoFAOrchestrator {
 			// 1. Detect 2FA field
 			const fieldInfo = await detect2FAField();
 			if (!fieldInfo.detected) {
+				this._lastFieldInfo = null;
 				log.debug('2FA', `No 2FA field detected (app: ${fieldInfo.appName || 'unknown'}, window: ${fieldInfo.windowTitle || 'unknown'})`);
 				return;
 			}
@@ -99,6 +109,9 @@ class TwoFAOrchestrator {
 
 			// 3. Skip if already filled
 			if (fieldInfo.focusedValue && fieldInfo.focusedValue.length >= 4) return;
+
+			// Cache field info for instant notification-driven fills
+			this._lastFieldInfo = { ...fieldInfo, fingerprint };
 
 			this._emit('TWO_FA_FIELD_DETECTED', {
 				appName: fieldInfo.appName,
@@ -160,6 +173,75 @@ class TwoFAOrchestrator {
 			}
 		} catch (err) {
 			log.error('2FA', 'Orchestrator tick error:', err.message);
+		} finally {
+			this._filling = false;
+		}
+	}
+
+	async _onNotificationReceived(evt) {
+		if (this._filling) return;
+		const fieldInfo = this._lastFieldInfo;
+		if (!fieldInfo) {
+			log.debug('2FA', 'Notification received but no active 2FA field');
+			return;
+		}
+
+		const texts = Array.isArray(evt.texts) ? evt.texts : [];
+		if (!texts.length) return;
+
+		const allText = texts.join(' ');
+		const code = extractOTP(allText);
+		if (!code) {
+			log.debug('2FA', `Notification text has no OTP: ${allText.slice(0, 80)}`);
+			return;
+		}
+
+		// Check dedup
+		if (this._recentFills.has(fieldInfo.fingerprint)) return;
+
+		// Build a source result matching gatherCodes shape
+		const codeResult = { code, confidence: 0.8, timestamp: Date.now(), source: 'notifications' };
+		const overallConfidence = computeConfidence(fieldInfo, codeResult);
+		if (overallConfidence < this._confidenceThreshold) {
+			this._emit('TWO_FA_LOW_CONFIDENCE', {
+				confidence: overallConfidence,
+				source: 'notifications',
+				threshold: this._confidenceThreshold,
+			});
+			return;
+		}
+
+		this._filling = true;
+		try {
+			const maskedCode = code.slice(0, 2) + '*'.repeat(code.length - 2);
+			log.info('2FA', `Instant-filling ${code.length}-digit code (${maskedCode}) from notification into ${fieldInfo.appName}`);
+			this._emit('TWO_FA_FILL_START', {
+				source: 'notifications',
+				codeLength: code.length,
+				app: fieldInfo.appName,
+				confidence: overallConfidence,
+			});
+
+			const fillResult = await fillCode(code, fieldInfo);
+			if (fillResult.ok) {
+				this._recentFills.set(fieldInfo.fingerprint, Date.now());
+				this._lastFieldInfo = null;
+				const verification = await verifyFill();
+				this._emit('TWO_FA_FILL_SUCCESS', {
+					source: 'notifications',
+					method: fillResult.method,
+					verified: verification.verified,
+				});
+				log.info('2FA', `Instant fill success via ${fillResult.method}, verified: ${verification.verified}`);
+			} else {
+				this._emit('TWO_FA_FILL_FAILED', {
+					source: 'notifications',
+					error: fillResult.error,
+				});
+				log.warn('2FA', `Instant fill failed: ${fillResult.error}`);
+			}
+		} catch (err) {
+			log.error('2FA', 'Notification fill error:', err.message);
 		} finally {
 			this._filling = false;
 		}
