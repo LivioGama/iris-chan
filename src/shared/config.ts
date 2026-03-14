@@ -161,6 +161,11 @@ export interface Config {
 	avatar: {
 		current: 'original' | 'tripo3d';
 	};
+	linkCapture: {
+		enabled: boolean;
+		pollIntervalMs: number;
+		maxSeenCacheSize: number;
+	};
 }
 
 const config: Config = {
@@ -406,6 +411,11 @@ const config: Config = {
 	avatar: {
 		// 'original' or 'tripo3d'
 		current: 'original',
+	},
+	linkCapture: {
+		enabled: (process.env.IRIS_LINK_CAPTURE_ENABLED || '1') !== '0',
+		pollIntervalMs: Math.max(5000, Number(process.env.IRIS_LINK_CAPTURE_INTERVAL_MS || 10000)),
+		maxSeenCacheSize: 5000,
 	},
 };
 

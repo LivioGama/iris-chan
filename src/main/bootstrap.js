@@ -30,6 +30,8 @@ const settings = require('./settings');
 const taskQueueService = require('./task-queue/service');
 const twoFA = require('./two-fa');
 const vocabMonitor = require('./vocab/monitor');
+const { LinkCapturePoller } = require('./link-capture/poller');
+const appConfig = require('../shared/config').default;
 
 function startRuntime({ apiKey }) {
 	const eventBus = new RuntimeEventBus();
@@ -77,6 +79,13 @@ function startRuntime({ apiKey }) {
 	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow });
 	taskQueueService.setBehaviorEngine(behaviorEngine);
 
+	const linkCapturePoller = appConfig.linkCapture.enabled
+		? new LinkCapturePoller({
+			pollIntervalMs: appConfig.linkCapture.pollIntervalMs,
+			maxSeenCacheSize: appConfig.linkCapture.maxSeenCacheSize,
+		})
+		: null;
+
 	app.whenReady().then(async () => {
 		if (process.platform === 'darwin') {
 			await systemPreferences.askForMediaAccess('microphone');
@@ -95,6 +104,7 @@ function startRuntime({ apiKey }) {
 
 		registerShortcuts({ behaviorEngine });
 		vocabMonitor.start(apiKey, () => avatarWindow.getWindow());
+		if (linkCapturePoller) linkCapturePoller.start();
 	});
 
 	app.on('will-quit', () => {
@@ -103,6 +113,7 @@ function startRuntime({ apiKey }) {
 		dailyLoop.stop();
 		twoFA.shutdown();
 		vocabMonitor.stop();
+		if (linkCapturePoller) linkCapturePoller.stop();
 		taskQueueWatcher.stop();
 		statusTray.destroy();
 		legacyConvexStore.shutdown();
