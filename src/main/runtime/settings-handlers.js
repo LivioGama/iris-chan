@@ -32,6 +32,7 @@ function registerSettingsHandlers({ behaviorEngine }) {
 		return { applied: true, liveApply: true };
 	});
 
+
 	settings.registerApplyHandler('voice', (nextVoice, previousVoice) => {
 		const modelVoiceChanged = nextVoice?.modelVoiceName !== previousVoice?.modelVoiceName;
 		const speechProfileChanged = JSON.stringify(nextVoice?.speechProfile || {}) !== JSON.stringify(previousVoice?.speechProfile || {});
