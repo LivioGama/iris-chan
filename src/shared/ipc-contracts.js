@@ -18,6 +18,7 @@ const CHANNELS = {
 	SEARCH_HIDE: 'search-hide',
 	MESSAGING_APP_FOCUSED: 'messaging-app-focused',
 	MESSAGING_APP_LEFT: 'messaging-app-left',
+	AX_VOCAB_TERMS: 'ax-vocab-terms',
 	GET_SKILL_DECLARATIONS: 'get-skill-declarations',
 	GET_SKILL_PROMPTS: 'get-skill-prompts',
 	GET_SKILL_CATALOG: 'get-skill-catalog',

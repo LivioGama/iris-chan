@@ -40,6 +40,7 @@ const electronAPI = {
 	addCorrection: (wrong, right) => ipcRenderer.send(CHANNELS.ADD_CORRECTION, wrong, right),
 	onMessagingAppFocused: (cb) => ipcRenderer.on(CHANNELS.MESSAGING_APP_FOCUSED, (_, app) => cb(app)),
 	onMessagingAppLeft: (cb) => ipcRenderer.on(CHANNELS.MESSAGING_APP_LEFT, cb),
+	onAxVocabTerms: (cb) => ipcRenderer.on(CHANNELS.AX_VOCAB_TERMS, (_, data) => cb(data)),
 	getSkillDeclarations: () => ipcRenderer.invoke(CHANNELS.GET_SKILL_DECLARATIONS),
 	getSkillPrompts: () => ipcRenderer.invoke(CHANNELS.GET_SKILL_PROMPTS),
 	getSkillCatalog: () => ipcRenderer.invoke(CHANNELS.GET_SKILL_CATALOG),
@@ -221,6 +222,7 @@ electronAPI.voice = {
 	getVocabularyCorrections: electronAPI.getVocabularyCorrections,
 	getVocabularyCore: electronAPI.getVocabularyCore,
 	addCorrection: electronAPI.addCorrection,
+	onAxVocabTerms: electronAPI.onAxVocabTerms,
 };
 
 electronAPI.window = {
