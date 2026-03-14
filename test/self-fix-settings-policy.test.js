@@ -23,7 +23,13 @@ async function main() {
 			systemPrompt.includes('update_settings'),
 			'system prompt should prefer update_settings when a stable setting already exists',
 		);
+		assert.ok(
+			systemPrompt.includes('query_settings'),
+			'system prompt should expose query_settings for read-only settings questions',
+		);
 
+		const querySettingsTool = toolDeclarations.find((tool) => tool.name === 'query_settings');
+		assert.ok(querySettingsTool, 'tool declarations should expose query_settings');
 		const updateSettingsTool = toolDeclarations.find((tool) => tool.name === 'update_settings');
 		assert.ok(updateSettingsTool, 'tool declarations should expose update_settings');
 		assert.match(
@@ -32,9 +38,19 @@ async function main() {
 			'update_settings tool description should point at the unified settings file',
 		);
 		assert.match(
+			querySettingsTool.description,
+			/read-only|voice presets|current voice/i,
+			'query_settings tool description should advertise settings queries',
+		);
+		assert.match(
 			updateSettingsTool.description,
-			/voice presets|pitch|compression/i,
-			'update_settings tool description should advertise preset queries and tuning changes',
+			/pitch|compression/i,
+			'update_settings tool description should advertise settings mutations',
+		);
+		assert.doesNotMatch(
+			updateSettingsTool.description,
+			/read-only settings query|what voice presets do you have/i,
+			'update_settings should no longer advertise read-only query examples',
 		);
 
 		const selfFixTool = toolDeclarations.find((tool) => tool.name === 'self_fix');
@@ -45,8 +61,8 @@ async function main() {
 		);
 		assert.match(
 			systemPrompt,
-			/Voice presets, voice model selection, and voice shaping changes/i,
-			'system prompt should explicitly block self_fix for voice preset and voice shaping requests',
+			/query_settings\/update_settings/i,
+			'system prompt should explicitly direct voice preset reads/writes through the settings tools',
 		);
 	} finally {
 		if (originalWindow === undefined) {

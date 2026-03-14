@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-console.log('Running update_settings tool tests...');
+console.log('Running settings tool tests...');
 
 async function main() {
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'iris-update-settings-'));
@@ -16,7 +16,7 @@ async function main() {
 
 	const settings = require('../src/main/settings.js');
 	settings.init();
-	const { update_settings, route_request } = require('../src/main/tools/system.js');
+	const { query_settings, update_settings, route_request } = require('../src/main/tools/system.js');
 
 	const result = await update_settings({
 		patch: JSON.stringify({
@@ -65,10 +65,10 @@ async function main() {
 	assert.strictEqual(introversionModeResult.ok, true, 'introversion mode requests should succeed');
 	assert.strictEqual(settings.getSettings().behavior.introversionEnabled, true, 'introversion mode should persist in behavior settings');
 
-	const presetListResult = await update_settings({
+	const presetListResult = await query_settings({
 		request: 'list available voice presets',
 	});
-	assert.strictEqual(presetListResult.ok, true, 'voice preset listing should succeed');
+	assert.strictEqual(presetListResult.ok, true, 'voice preset listing should succeed through query_settings');
 	assert.strictEqual(presetListResult.queryKind, 'voice_preset_list', 'voice preset listing should use the structured query kind');
 	assert.match(presetListResult.summary, /Available voice presets:/, 'voice preset listing should include a natural-language summary');
 	const presetList = JSON.parse(presetListResult.result);
@@ -76,6 +76,19 @@ async function main() {
 	assert.ok(Array.isArray(presetList.data.presets), 'preset listing should return a presets array');
 	assert.ok(presetList.data.presets.length >= 3, 'preset listing should include the built-in catalog');
 	assert.ok(presetList.data.presets.every((preset) => preset.name && preset.description), 'preset listing should include names and descriptions');
+
+	const currentVoiceResult = await query_settings({
+		request: 'what voice are you using',
+	});
+	assert.strictEqual(currentVoiceResult.ok, true, 'current voice query should succeed');
+	assert.strictEqual(currentVoiceResult.queryKind, 'voice_current', 'current voice query should use a dedicated query kind');
+	assert.match(currentVoiceResult.summary, /Current voice (preset|model):/, 'current voice query should summarize the active voice');
+
+	const queryRejectedByMutationTool = await update_settings({
+		request: 'what voice presets do you have available',
+	});
+	assert.strictEqual(queryRejectedByMutationTool.ok, false, 'update_settings should reject read-only settings questions');
+	assert.match(queryRejectedByMutationTool.result, /query_settings/i, 'mutation tool should point read-only callers to query_settings');
 
 	const switchPresetResult = await update_settings({
 		request: 'switch to soft bloom voice preset',
@@ -213,7 +226,7 @@ async function main() {
 	}
 	settings.shutdown();
 
-	console.log('update_settings tool tests passed.');
+	console.log('settings tool tests passed.');
 }
 
 main().catch((err) => {

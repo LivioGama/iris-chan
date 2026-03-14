@@ -10,7 +10,7 @@ function loadEsmExports(filePath, exportNames) {
 	return loader();
 }
 
-function loadToolHandlerModule(filePath) {
+function loadToolHandlerModule(filePath, overrides = {}) {
 	const src = fs.readFileSync(filePath, 'utf-8')
 		.replace(/^import .*$/gm, '')
 		.replace(/\bexport\s+/g, '');
@@ -29,23 +29,23 @@ function loadToolHandlerModule(filePath) {
 		`${src}\nreturn { createToolCallHandler, shouldDeferForegroundUiTool, shouldRefreshScreenAfterTool, formatToolResponseText };`
 	);
 	return loader(
-		{ TOOL_START: 'TOOL_START', TOOL_END: 'TOOL_END' },
-		() => {},
-		() => {},
-		() => {},
-		() => ({ label: 'Tool', detail: '' }),
-		() => {},
-		() => {},
-		() => {},
-		({ toolName, result, intentText }) => {
+		overrides.EVENT_TYPES || { TOOL_START: 'TOOL_START', TOOL_END: 'TOOL_END' },
+		overrides.showToolStart || (() => {}),
+		overrides.showToolDone || (() => {}),
+		overrides.hideToolLog || (() => {}),
+		overrides.getToolDisplay || (() => ({ label: 'Tool', detail: '' })),
+		overrides.setPresence || (() => {}),
+		overrides.clearPresence || (() => {}),
+		overrides.updateIfWorkspaceTool || (() => {}),
+		overrides.shouldAutoEscalateFromToolFailure || (({ toolName, result, intentText }) => {
 			if (toolName === 'run_ui_task') return false;
 			if (!['click_at', 'double_click', 'press_key', 'type_text'].includes(toolName)) return false;
 			if (!result || result.ok !== false) return false;
 			if (/\b(delete|remove|trash|discard|send|submit|purchase|buy|pay|confirm|replace|overwrite)\b/i.test(intentText || '')) return false;
 			return /\b(click|open|go to|goto|select|search|find|navigate|visit|follow|choose)\b/i.test(intentText || '');
-		},
-		() => {},
-		() => {},
+		}),
+		overrides.logInfo || (() => {}),
+		overrides.logError || (() => {}),
 	);
 }
 
@@ -292,6 +292,56 @@ async function testPointerToolsUseLatestInteractiveCaptureId() {
 	global.window = originalWindow;
 }
 
+async function testPointerToolsPreflightFreshCaptureWhenLatestContextIsMissing() {
+	const originalWindow = global.window;
+	const executed = [];
+	let captureCalls = 0;
+	const screen = {
+		latestCapture: null,
+		lastCaptureId: '',
+		lastInteractiveCaptureId: '',
+		async capture() {
+			captureCalls += 1;
+			const capture = {
+				ok: true,
+				context: {
+					captureId: 'cap_refreshed',
+				},
+			};
+			this.latestCapture = { capturedAt: Date.now(), context: capture.context };
+			this.lastCaptureId = capture.context.captureId;
+			this.lastInteractiveCaptureId = capture.context.captureId;
+			return capture;
+		},
+	};
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				executed.push({ name, args });
+				return { ok: true, result: `Executed ${name}` };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse() {},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen,
+	});
+
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 10, y: 20 }, id: 'call-1' }]);
+
+	assert.strictEqual(captureCalls, 2, 'pointer tool should preflight a fresh capture and still perform its post-action refresh');
+	assert.strictEqual(executed.length, 1, 'pointer tool should still execute after preflight capture succeeds');
+	assert.strictEqual(executed[0].args.capture_id, 'cap_refreshed', 'pointer tool should inherit the fresh interactive capture id');
+
+	global.window = originalWindow;
+}
+
 async function testPointerRetryBudgetSuppressesClickCycling() {
 	const originalWindow = global.window;
 	const executed = [];
@@ -435,6 +485,74 @@ async function testFailedNavigationalClickAutoEscalatesToUiTask() {
 		responses.some((entry) => entry.id === 'call-1' && /Completed UI task: click the Theo channel result/.test(entry.result)),
 		true,
 		'original tool call should receive the escalated UI task outcome'
+	);
+
+	global.window = originalWindow;
+}
+
+async function testStalePointerFailureRefreshesScreenAndRequestsRetry() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	let captureCalls = 0;
+	const screen = {
+		latestCapture: { capturedAt: Date.now(), context: { captureId: 'cap_latest' } },
+		lastInteractiveCaptureId: 'cap_latest',
+		lastCaptureId: 'cap_latest',
+		async capture() {
+			captureCalls += 1;
+			const capture = {
+				ok: true,
+				context: {
+					captureId: 'cap_retry',
+				},
+			};
+			this.latestCapture = { capturedAt: Date.now(), context: capture.context };
+			this.lastInteractiveCaptureId = capture.context.captureId;
+			this.lastCaptureId = capture.context.captureId;
+			return capture;
+		},
+	};
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				if (name === 'route_request') {
+					return { ok: true, result: JSON.stringify({ route: 'ui_task', settingsCapable: false }) };
+				}
+				executed.push({ name, args });
+				return {
+					ok: false,
+					result: 'Cannot click without a fresh screen capture. No recent screen frame is available. Screen Recording permission: granted. Last successful screen frame was 10s ago.',
+				};
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen,
+		getLastUserIntent: () => 'open the Theo channel',
+	});
+
+	await handler.handleToolCalls([{ name: 'click_at', args: { x: 10, y: 20, capture_id: 'cap_stale' }, id: 'call-1' }]);
+
+	assert.deepStrictEqual(
+		executed.map((entry) => entry.name),
+		['click_at'],
+		'stale pointer failures should refresh screen context instead of auto-escalating immediately'
+	);
+	assert.strictEqual(captureCalls, 2, 'stale pointer failures should refresh once for recovery and once for post-tool verification');
+	assert.strictEqual(
+		responses.some((entry) => entry.id === 'call-1' && /Captured a fresh screenshot with capture_id "cap_retry"/.test(entry.result)),
+		true,
+		'response should tell Gemini to retry against the fresh screenshot'
 	);
 
 	global.window = originalWindow;
@@ -619,14 +737,128 @@ async function testSettingsCapableSelfFixReroutesToUpdateSettings() {
 	});
 
 	await handler.handleToolCalls([{ name: 'self_fix', args: { description: 'Enumerate the available voice presets.' }, id: 'call-1' }]);
+	await Promise.resolve();
+	await Promise.resolve();
 
 	assert.deepStrictEqual(
 		executed,
-		[{ name: 'update_settings', args: { request: 'What voice presets do you have available' } }],
-		'settings-capable self-fix requests should reroute to update_settings'
+		[{ name: 'query_settings', args: { request: 'What voice presets do you have available' } }],
+		'settings-capable self-fix requests should reroute to query_settings for read-only settings intents'
 	);
 	assert.strictEqual(responses[0]?.name, 'self_fix', 'rerouted calls should still satisfy the original tool response contract');
 	assert.match(responses[0]?.result || '', /Available presets:/, 'rerouted settings response should flow back to the model');
+
+	global.window = originalWindow;
+}
+
+async function testStructuredSelfFixSpecDoesNotRerouteToSettings() {
+	const originalWindow = global.window;
+	const executed = [];
+	const responses = [];
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				if (name === 'route_request') {
+					return { ok: true, result: JSON.stringify({ route: 'self_fix', settingsCapable: false }) };
+				}
+				executed.push({ name, args });
+				return { ok: true, result: 'queued' };
+			},
+			saveToolExecution() {},
+		},
+	};
+
+	const handler = createToolCallHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {},
+		onEvent() {},
+		screen: { capture: async () => {} },
+		getLastUserIntent: () => 'fix the repetitive direct-turn reprompt bug',
+	});
+
+	await handler.handleToolCalls([{
+		name: 'self_fix',
+		args: {
+			description: 'PROBLEM: repetitive direct-turn reprompt. DESIRED BEHAVIOR: transcript-aware recovery. IMPLEMENTATION: patch voice-engine.js to salvage from transcript and fence stale fallback output.',
+		},
+		id: 'call-1',
+	}]);
+	await Promise.resolve();
+	await Promise.resolve();
+
+	assert.deepStrictEqual(
+		executed,
+		[{
+			name: 'self_fix',
+			args: {
+				description: 'PROBLEM: repetitive direct-turn reprompt. DESIRED BEHAVIOR: transcript-aware recovery. IMPLEMENTATION: patch voice-engine.js to salvage from transcript and fence stale fallback output.',
+			},
+		}],
+		'structured self-fix specs should stay on self_fix instead of being mistaken for settings updates'
+	);
+	assert.strictEqual(responses[0]?.name, 'self_fix', 'structured self-fix should still resolve through the original tool response contract');
+
+	global.window = originalWindow;
+}
+
+async function testSettingsQueryStaysOffVisibleToolUi() {
+	const originalWindow = global.window;
+	const responses = [];
+	const runtimeEvents = [];
+	const toolStarts = [];
+	const savedExecutions = [];
+	const handlerModule = loadToolHandlerModule(filePath, {
+		showToolStart(name) {
+			toolStarts.push(name);
+		},
+	});
+	const { createToolCallHandler: createSilentQueryHandler } = handlerModule;
+
+	global.window = {
+		electronAPI: {
+			executeTool: async (name, args) => {
+				if (name === 'route_request') {
+					return { ok: true, result: JSON.stringify({ route: 'settings_query', settingsCapable: true, settingsNamespace: 'voice' }) };
+				}
+				if (name === 'query_settings') {
+					return { ok: true, summary: 'Available presets: soft bloom, clear guide', result: 'Available presets: soft bloom, clear guide' };
+				}
+				throw new Error(`unexpected tool ${name}`);
+			},
+			saveToolExecution(...args) {
+				savedExecutions.push(args);
+			},
+		},
+	};
+
+	const handler = createSilentQueryHandler({
+		gemini: {
+			sendToolResponse(id, name, result) {
+				responses.push({ id, name, result });
+			},
+		},
+		onStateChange() {
+			throw new Error('query_settings should not enter TOOL_EXECUTING state');
+		},
+		onEvent(type, payload) {
+			runtimeEvents.push({ type, payload });
+		},
+		screen: { capture: async () => {} },
+		getLastUserIntent: () => 'What voice presets do you have available',
+	});
+
+	await handler.handleToolCalls([{ name: 'query_settings', args: { request: 'What voice presets do you have available' }, id: 'call-1' }]);
+	await Promise.resolve();
+	await Promise.resolve();
+
+	assert.deepStrictEqual(toolStarts, [], 'settings queries should not show tool-log entries');
+	assert.deepStrictEqual(savedExecutions, [], 'settings queries should not persist tool execution telemetry');
+	assert.deepStrictEqual(runtimeEvents, [], 'settings queries should not emit visible TOOL_START/TOOL_END runtime events');
+	assert.match(responses[0]?.result || '', /Available presets:/, 'query result should still flow back to the model');
 
 	global.window = originalWindow;
 }
@@ -673,13 +905,17 @@ Promise.resolve()
 	.then(testDeferredUiTaskSupersedesOlderTranscript)
 	.then(testSameTurnUiTaskExecutesOnlyOnce)
 	.then(testPointerToolsUseLatestInteractiveCaptureId)
+	.then(testPointerToolsPreflightFreshCaptureWhenLatestContextIsMissing)
 	.then(testPointerRetryBudgetSuppressesClickCycling)
 	.then(testSuppressedTurnBlocksRawToolCalls)
 	.then(testFailedNavigationalClickAutoEscalatesToUiTask)
+	.then(testStalePointerFailureRefreshesScreenAndRequestsRetry)
 	.then(testFailedPointerOnlyActionDoesNotAutoEscalateWithoutNavigationalIntent)
 	.then(testFailedNavigationalClickEscalatesOnlyOnce)
 	.then(testSelfFixPreambleBlocksDispatch)
 	.then(testSettingsCapableSelfFixReroutesToUpdateSettings)
+	.then(testStructuredSelfFixSpecDoesNotRerouteToSettings)
+	.then(testSettingsQueryStaysOffVisibleToolUi)
 	.then(testRoutingFailureFailsClosed)
 	.then(() => {
 		console.log('Tool call handler tests passed.');

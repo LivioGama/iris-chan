@@ -204,13 +204,20 @@ export const toolDeclarations = [
 		}, required: ['description'] },
 	},
 	{
+		name: 'query_settings',
+		description: 'Query existing runtime-tunable Iris settings in ~/.iris/settings.json without modifying source code. Use this for read-only settings questions such as listing voice presets, checking the current voice/avatar/mode, or reading logging/direct-mode status.',
+		parameters: { type: 'OBJECT', properties: {
+			request: { type: 'STRING', description: 'Natural-language read-only settings query like "what voice presets do you have", "what voice are you using", or "is direct mode on".' },
+		}, required: ['request'] },
+	},
+	{
 		name: 'update_settings',
-		description: 'Update existing runtime-tunable Iris settings in ~/.iris/settings.json without modifying source code. Prefer this over self_fix whenever the request is already covered by stable settings. Supports querying and changing voice presets, switching voices by preset name, and tuning voice characteristics like pitch, playback rate, EQ warmth/brightness, and compression, along with other settings-backed behavior such as avatar, behavior mode, direct mode, and logging.',
+		description: 'Update existing runtime-tunable Iris settings in ~/.iris/settings.json without modifying source code. Prefer this over self_fix whenever the request is already covered by stable settings. Supports changing voice presets, switching voices by preset name, and tuning voice characteristics like pitch, playback rate, EQ warmth/brightness, and compression, along with other settings-backed behavior such as avatar, behavior mode, direct mode, and logging.',
 		parameters: { type: 'OBJECT', properties: {
 			patch: { type: 'STRING', description: 'Optional JSON object patch for ~/.iris/settings.json.' },
 			key: { type: 'STRING', description: 'Optional single settings key path like voice.modelVoiceName.' },
 			value: { type: 'STRING', description: 'Optional value paired with key.' },
-			request: { type: 'STRING', description: 'Optional natural-language settings request, including list/query operations like "what voice presets do you have" and mutations like "switch to soft bloom" or "make it warmer and slower".' },
+			request: { type: 'STRING', description: 'Optional natural-language mutation request like "switch to soft bloom" or "make it warmer and slower". Read-only questions should use query_settings.' },
 		} },
 	},
 	{

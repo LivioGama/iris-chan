@@ -7,7 +7,8 @@ import { shouldAutoEscalateFromToolFailure } from '../interaction/interaction-po
 
 // Tools that return immediately (fire-and-forget in main process).
 // These must NOT block voice capture or enter TOOL_EXECUTING state.
-const BACKGROUND_TOOLS = new Set(['fix_project', 'self_fix', 'add_task']);
+const BACKGROUND_TOOLS = new Set(['fix_project', 'self_fix', 'add_task', 'query_settings']);
+const SILENT_QUERY_TOOLS = new Set(['query_settings']);
 const SCREEN_REFRESH_TOOLS = new Set([
 	'type_text',
 	'press_key',
@@ -21,6 +22,7 @@ const SCREEN_REFRESH_TOOLS = new Set([
 	'activate_app',
 ]);
 const POINTER_TOOLS = new Set(['click_at', 'double_click', 'mouse_move', 'drag']);
+const POINTER_CAPTURE_MAX_AGE_MS = 5000;
 const FOREGROUND_UI_STABILIZE_MS = 350;
 const SAME_TURN_UI_TASK_MESSAGE = 'Ignored repeated UI task in the same spoken turn';
 const SAME_TURN_POINTER_RETRY_MESSAGE = 'Ignored repeated pointer retries in the same spoken turn';
@@ -63,6 +65,14 @@ function searchLabel(name, args) {
 	return args?.query || 'Searching...';
 }
 
+function shouldShowVisibleToolUi(name) {
+	return !SILENT_QUERY_TOOLS.has(name);
+}
+
+function shouldPersistToolExecution(name) {
+	return !SILENT_QUERY_TOOLS.has(name);
+}
+
 export function formatToolResponseText(result) {
 	if (!result || typeof result !== 'object') return 'done';
 	if (typeof result.summary === 'string' && result.summary.trim()) {
@@ -92,6 +102,17 @@ function isNavigationalUiIntent(intentText = '') {
 	if (!text) return false;
 	if (DESTRUCTIVE_UI_INTENT_PATTERN.test(text)) return false;
 	return NAVIGATIONAL_UI_INTENT_PATTERN.test(text);
+}
+
+function isFreshCaptureFailureResult(result) {
+	const text = String(result?.result || '');
+	return result?.ok === false && /without a fresh screen capture/i.test(text);
+}
+
+function getLatestCaptureAgeMs(screen) {
+	const capturedAt = Number(screen?.latestCapture?.capturedAt || 0);
+	if (!capturedAt) return null;
+	return Date.now() - capturedAt;
 }
 
 export function createToolCallHandler({
@@ -176,14 +197,41 @@ export function createToolCallHandler({
 		};
 	}
 
+	async function ensureFreshPointerContext(name, args) {
+		if (!POINTER_TOOLS.has(name) || !screen) return args || {};
+		const ageMs = getLatestCaptureAgeMs(screen);
+		const latestCaptureId = String(screen?.lastInteractiveCaptureId || screen?.lastCaptureId || '').trim();
+		if (latestCaptureId && ageMs != null && ageMs <= POINTER_CAPTURE_MAX_AGE_MS) {
+			return args || {};
+		}
+		await screen.capture({ passive: false, force: true });
+		return attachPointerCaptureId(name, args);
+	}
+
+	async function rescueFreshCaptureFailure(name, args, result) {
+		if (!POINTER_TOOLS.has(name) || !screen || !isFreshCaptureFailureResult(result)) return result;
+		const refreshed = await screen.capture({ passive: false, force: true });
+		const freshCaptureId = String(refreshed?.context?.captureId || screen?.lastInteractiveCaptureId || screen?.lastCaptureId || '').trim();
+		if (!freshCaptureId) return result;
+		return {
+			...result,
+			result: `${result.result} Captured a fresh screenshot with capture_id "${freshCaptureId}". Re-evaluate the target on the latest screenshot before retrying ${name}.`,
+			recoveredFreshCaptureId: freshCaptureId,
+			recoveredFromStaleCapture: true,
+		};
+	}
+
 	const _executeOne = async (name, args, id, index, total, options = {}) => {
 		const { allowAutoEscalation = true } = options;
 		const dispatchName = options.dispatchName || name;
 		const responseName = options.responseName || name;
-		const toolArgs = attachPointerCaptureId(dispatchName, args);
-		activeToolCount++;
-		updateToolPresence(dispatchName, toolArgs, index, total);
-		showToolStart(dispatchName, toolArgs, index, total);
+		const toolArgs = await ensureFreshPointerContext(dispatchName, attachPointerCaptureId(dispatchName, args));
+		const visibleToolUi = shouldShowVisibleToolUi(dispatchName);
+		if (visibleToolUi) {
+			activeToolCount++;
+			updateToolPresence(dispatchName, toolArgs, index, total);
+			showToolStart(dispatchName, toolArgs, index, total);
+		}
 		logInfo('Tool', `Executing: ${dispatchName}(${JSON.stringify(toolArgs || {})})`.slice(0, 500));
 
 		const isSearch = isSearchTool(dispatchName, toolArgs);
@@ -194,28 +242,31 @@ export function createToolCallHandler({
 		const toolStart = Date.now();
 		try {
 			let result = await window.electronAPI.executeTool(dispatchName, toolArgs);
-			const escalationGoal = normalizeAutoEscalationIntent(readLastUserIntent());
-			if (allowAutoEscalation && shouldAutoEscalateFromToolFailure({
-				toolName: dispatchName,
-				result,
-				intentText: escalationGoal,
-			})) {
-				const failureReason = result?.result || 'unknown failure';
-				logInfo('Tool', `Auto-escalating ${dispatchName} → run_ui_task. goal="${escalationGoal}" reason="${failureReason}"`);
-				markUiTaskDispatched('run_ui_task');
-				const escalatedResult = await window.electronAPI.executeTool('run_ui_task', { goal: escalationGoal });
-				const escalatedText = formatToolResponseText(escalatedResult);
-				logInfo('Tool', `Auto-escalation outcome: source=${name} escalated=${escalatedResult.ok !== false ? 'OK' : 'FAIL'} result=${escalatedText.slice(0, 300)}`);
-				result = {
-					...escalatedResult,
-					autoEscalatedFrom: dispatchName,
-					autoEscalationGoal: escalationGoal,
-					autoEscalationReason: failureReason,
-					autoEscalationSourceOk: result.ok !== false,
-					result: escalatedResult.ok !== false
-						? `${escalatedResult.result || 'done'}`
-						: escalatedResult.result || failureReason,
-				};
+			result = await rescueFreshCaptureFailure(dispatchName, toolArgs, result);
+			if (!result?.recoveredFromStaleCapture) {
+				const escalationGoal = normalizeAutoEscalationIntent(readLastUserIntent());
+				if (allowAutoEscalation && shouldAutoEscalateFromToolFailure({
+					toolName: dispatchName,
+					result,
+					intentText: escalationGoal,
+				})) {
+					const failureReason = result?.result || 'unknown failure';
+					logInfo('Tool', `Auto-escalating ${dispatchName} → run_ui_task. goal="${escalationGoal}" reason="${failureReason}"`);
+					markUiTaskDispatched('run_ui_task');
+					const escalatedResult = await window.electronAPI.executeTool('run_ui_task', { goal: escalationGoal });
+					const escalatedText = formatToolResponseText(escalatedResult);
+					logInfo('Tool', `Auto-escalation outcome: source=${name} escalated=${escalatedResult.ok !== false ? 'OK' : 'FAIL'} result=${escalatedText.slice(0, 300)}`);
+					result = {
+						...escalatedResult,
+						autoEscalatedFrom: dispatchName,
+						autoEscalationGoal: escalationGoal,
+						autoEscalationReason: failureReason,
+						autoEscalationSourceOk: result.ok !== false,
+						result: escalatedResult.ok !== false
+							? `${escalatedResult.result || 'done'}`
+							: escalatedResult.result || failureReason,
+					};
+				}
 			}
 			const toolResponseText = formatToolResponseText(result);
 			if (dispatchName === 'self_fix' && result?.ok !== false) {
@@ -224,27 +275,37 @@ export function createToolCallHandler({
 			if (screen && shouldRefreshScreenAfterTool(dispatchName, result)) {
 				await screen.capture({ passive: false, force: true });
 			}
-			showToolDone(dispatchName, index, result.ok !== false);
+			if (visibleToolUi) {
+				showToolDone(dispatchName, index, result.ok !== false);
+			}
 			updateIfWorkspaceTool(dispatchName);
 			logInfo('Tool', `Result: ${dispatchName} → ${result.ok !== false ? 'OK' : 'FAIL'}: ${toolResponseText.slice(0, 300)}`);
 			gemini.sendToolResponse(id, responseName, toolResponseText);
-			window.electronAPI.saveToolExecution(dispatchName, toolArgs, toolResponseText, result.ok !== false, Date.now() - toolStart);
+			if (shouldPersistToolExecution(dispatchName)) {
+				window.electronAPI.saveToolExecution(dispatchName, toolArgs, toolResponseText, result.ok !== false, Date.now() - toolStart);
+			}
 
 			if (isSearch) {
 				window.electronAPI.searchResult(searchLabel(dispatchName, toolArgs), result.ok ? toolResponseText : toolResponseText);
 			}
 		} catch (err) {
-			showToolDone(dispatchName, index, false);
+			if (visibleToolUi) {
+				showToolDone(dispatchName, index, false);
+			}
 			logError('Tool', `Error: ${dispatchName} → ${err.message}`);
 			gemini.sendToolResponse(id, responseName, 'Error: ' + err.message);
-			window.electronAPI.saveToolExecution(dispatchName, toolArgs, err.message, false, Date.now() - toolStart);
+			if (shouldPersistToolExecution(dispatchName)) {
+				window.electronAPI.saveToolExecution(dispatchName, toolArgs, err.message, false, Date.now() - toolStart);
+			}
 			if (isSearch) {
 				window.electronAPI.searchResult(searchLabel(dispatchName, toolArgs), 'Error: ' + err.message);
 			}
 		} finally {
-			activeToolCount = Math.max(0, activeToolCount - 1);
-			if (activeToolCount === 0) {
-				clearPresence('tool');
+			if (visibleToolUi) {
+				activeToolCount = Math.max(0, activeToolCount - 1);
+				if (activeToolCount === 0) {
+					clearPresence('tool');
+				}
 			}
 		}
 	};
@@ -319,10 +380,14 @@ export function createToolCallHandler({
 
 	function deriveSettingsRequestFromSelfFixCall(call) {
 		if (call?.name !== 'self_fix') return null;
-		const candidates = [
-			normalizeAutoEscalationIntent(readLastUserIntent()),
-			normalizeAutoEscalationIntent(call.args?.description || ''),
-		].filter(Boolean);
+		const userIntent = normalizeAutoEscalationIntent(readLastUserIntent());
+		const selfFixDescription = normalizeAutoEscalationIntent(call.args?.description || '');
+		const looksStructuredSelfFix = /(?:^|\s)(problem|desired behavior|implementation|files|context|settings contract)\s*:/i.test(selfFixDescription)
+			|| selfFixDescription.length > 240;
+		if (looksStructuredSelfFix) {
+			return SETTINGS_CAPABILITY_PATTERNS.some((pattern) => pattern.test(userIntent)) ? userIntent : null;
+		}
+		const candidates = [userIntent, selfFixDescription].filter(Boolean);
 		return candidates.find((text) => SETTINGS_CAPABILITY_PATTERNS.some((pattern) => pattern.test(text))) || null;
 	}
 
@@ -369,9 +434,9 @@ export function createToolCallHandler({
 		if (route?.route === 'settings_query' || route?.route === 'settings_mutation') {
 			calls = [{
 				...calls[0],
-				name: 'update_settings',
+				name: route.route === 'settings_query' ? 'query_settings' : 'update_settings',
 				args: { request: routedIntent },
-				__responseName: calls[0]?.name || 'update_settings',
+				__responseName: calls[0]?.name || (route.route === 'settings_query' ? 'query_settings' : 'update_settings'),
 			}];
 		}
 
@@ -382,7 +447,7 @@ export function createToolCallHandler({
 			if (settingsRequest) {
 				executableCalls.push({
 					...call,
-					name: 'update_settings',
+					name: route?.route === 'settings_query' ? 'query_settings' : 'update_settings',
 					args: { request: settingsRequest },
 					__responseName: call.name,
 				});
@@ -435,7 +500,10 @@ export function createToolCallHandler({
 			}
 		}
 
-		onEvent(EVENT_TYPES.TOOL_START, { tools: executableCalls.map(c => c.name) });
+		const visibleExecutableCalls = executableCalls.filter((call) => shouldShowVisibleToolUi(call.name));
+		if (visibleExecutableCalls.length) {
+			onEvent(EVENT_TYPES.TOOL_START, { tools: visibleExecutableCalls.map(c => c.name) });
+		}
 
 		// Background tools: execute WITHOUT blocking voice engine.
 		// They resolve quickly (fire-and-forget in main process) and send their
@@ -464,17 +532,21 @@ export function createToolCallHandler({
 			onStateChange('TOOL_EXECUTING', false);
 		}
 
-		hideToolLog();
+		if (visibleExecutableCalls.length) {
+			hideToolLog();
+		}
 
 		if (calls.some(c => c.name === 'manage_vocabulary' && (c.args?.action === 'add' || c.args?.action === 'remove'))) {
 			onEvent('VOCAB_CHANGED');
 		}
 
-		if (screen && blockingCalls.every((call) => !shouldRefreshScreenAfterTool(call.name))) {
+		if (screen && blockingCalls.length > 0 && blockingCalls.every((call) => !shouldRefreshScreenAfterTool(call.name))) {
 			await screen.capture({ passive: false, force: true });
 		}
 
-		onEvent(EVENT_TYPES.TOOL_END, { tools: executableCalls.map(c => c.name) });
+		if (visibleExecutableCalls.length) {
+			onEvent(EVENT_TYPES.TOOL_END, { tools: visibleExecutableCalls.map(c => c.name) });
+		}
 	};
 
 	const handleToolCalls = async (calls) => {

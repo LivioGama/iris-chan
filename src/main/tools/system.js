@@ -260,6 +260,20 @@ function summarizePatch(patch = {}) {
 	return changed;
 }
 
+function buildQueryResponse(queryKind, summary, data = {}) {
+	return {
+		ok: true,
+		queryKind,
+		summary,
+		data,
+		result: JSON.stringify({
+			queryKind,
+			summary,
+			data,
+		}),
+	};
+}
+
 function listVoicePresets() {
 	const presets = settings.getVoicePresets().map((preset) => ({
 		name: preset.name,
@@ -269,20 +283,95 @@ function listVoicePresets() {
 	const summary = presets.length
 		? `Available voice presets: ${presets.map((preset) => `${preset.name} — ${preset.description}`).join('; ')}.`
 		: 'No voice presets are currently available.';
-	return {
-		ok: true,
-		applied: false,
-		restartRequired: false,
-		changedKeys: [],
-		queryKind: 'voice_preset_list',
-		summary,
-		data: { presets },
-		result: JSON.stringify({
-			queryKind: 'voice_preset_list',
-			summary,
-			data: { presets },
-		}),
-	};
+	return buildQueryResponse('voice_preset_list', summary, { presets });
+}
+
+function findCurrentVoicePreset(voiceSettings = {}) {
+	const currentVoiceName = String(voiceSettings?.modelVoiceName || '').trim().toLowerCase();
+	if (!currentVoiceName) return null;
+	return settings.getVoicePresets().find((preset) => String(preset.modelVoiceName || '').trim().toLowerCase() === currentVoiceName) || null;
+}
+
+function isSettingsQueryRequest(request = '') {
+	const text = String(request || '').trim();
+	if (!text) return false;
+	return [
+		/\blist\b.*\bvoice preset(s)?\b/i,
+		/\bwhat voice presets\b/i,
+		/\bwhat voice options\b/i,
+		/\bwhat voice are you using\b/i,
+		/\bwhich voice\b/i,
+		/\bwhat avatar is selected\b/i,
+		/\bwhich avatar\b/i,
+		/\bwhat mode are you in\b/i,
+		/\bis direct mode on\b/i,
+		/\bis feedback mode on\b/i,
+		/\bis introversion mode on\b/i,
+		/\bwhat logging level are you using\b/i,
+	].some((pattern) => pattern.test(text));
+}
+
+async function query_settings(args = {}) {
+	const requestText = String(args.request || '').trim();
+	if (!requestText) {
+		return { ok: false, result: 'No settings query provided.' };
+	}
+	if (/\blist\b.*\bvoice preset(s)?\b/i.test(requestText) || /\bwhat voice presets\b/i.test(requestText) || /\bwhat voice options\b/i.test(requestText)) {
+		return listVoicePresets();
+	}
+
+	const currentSettings = settings.getSettings();
+	if (/\bwhat voice are you using\b/i.test(requestText) || /\bwhich voice\b/i.test(requestText)) {
+		const preset = findCurrentVoicePreset(currentSettings.voice);
+		if (preset) {
+			return buildQueryResponse(
+				'voice_current',
+				`Current voice preset: ${preset.name} (${preset.modelVoiceName}).`,
+				{
+					preset: {
+						name: preset.name,
+						description: preset.description,
+						modelVoiceName: preset.modelVoiceName,
+					},
+				},
+			);
+		}
+		const modelVoiceName = String(currentSettings?.voice?.modelVoiceName || '').trim() || 'unknown';
+		return buildQueryResponse('voice_current', `Current voice model: ${modelVoiceName}.`, {
+			modelVoiceName,
+		});
+	}
+	if (/\bwhat avatar is selected\b/i.test(requestText) || /\bwhich avatar\b/i.test(requestText)) {
+		const avatar = String(currentSettings?.avatar?.current || 'unknown');
+		return buildQueryResponse('avatar_current', `Current avatar: ${avatar}.`, { avatar });
+	}
+	if (/\bwhat mode are you in\b/i.test(requestText)) {
+		const mode = String(currentSettings?.behavior?.mode || 'unknown');
+		return buildQueryResponse('behavior_mode', `Current behavior mode: ${mode}.`, { mode });
+	}
+	if (/\bis direct mode on\b/i.test(requestText)) {
+		const enabled = !!currentSettings?.behavior?.directMode;
+		return buildQueryResponse('behavior_direct_mode', `Direct mode is ${enabled ? 'on' : 'off'}.`, { enabled });
+	}
+	if (/\bis feedback mode on\b/i.test(requestText)) {
+		const enabled = !!currentSettings?.behavior?.feedbackEnabled;
+		return buildQueryResponse('behavior_feedback_mode', `Feedback mode is ${enabled ? 'on' : 'off'}.`, { enabled });
+	}
+	if (/\bis introversion mode on\b/i.test(requestText)) {
+		const enabled = !!currentSettings?.behavior?.introversionEnabled;
+		return buildQueryResponse('behavior_introversion_mode', `Introversion mode is ${enabled ? 'on' : 'off'}.`, { enabled });
+	}
+	if (/\bwhat logging level are you using\b/i.test(requestText)) {
+		const consoleLevel = String(currentSettings?.logging?.console?.level || 'info');
+		const persistLevel = String(currentSettings?.logging?.persist?.level || 'info');
+		return buildQueryResponse(
+			'logging_level',
+			`Logging levels: console ${consoleLevel}, file ${persistLevel}.`,
+			{ consoleLevel, persistLevel },
+		);
+	}
+
+	return { ok: false, result: 'Unsupported settings query.' };
 }
 
 function buildRoutingRegistrySummary() {
@@ -397,8 +486,8 @@ async function route_request(args = {}) {
 
 async function update_settings(args = {}) {
 	const requestText = String(args.request || '').trim();
-	if (/\blist\b.*\bvoice preset(s)?\b/i.test(requestText) || /\bwhat presets\b/i.test(requestText)) {
-		return listVoicePresets();
+	if (isSettingsQueryRequest(requestText)) {
+		return { ok: false, result: 'This is a read-only settings query. Use query_settings instead.' };
 	}
 	const requestedPresetIntent = /\b(?:voice preset|preset)\b/i.test(requestText) || /\b(?:switch to|use|try)\b.+\b(?:voice|preset)\b/i.test(requestText);
 	const explicitPatch = parsePatchInput(args.patch);
@@ -510,4 +599,4 @@ async function run_terminal_command(args) {
 	});
 }
 
-module.exports = { set_volume, notify, run_terminal_command, check_permissions, update_settings, route_request };
+module.exports = { set_volume, notify, run_terminal_command, check_permissions, query_settings, update_settings, route_request };
