@@ -6,6 +6,7 @@ let nativeFallbackManagerRef = null;
 let episodeRecorderRef = null;
 let convexClientRef = null;
 let intentPredictionEngineRef = null;
+let feedbackStoreRef = null;
 
 function setUiTaskService(service) {
 	uiTaskServiceRef = service || null;
@@ -71,6 +72,14 @@ function getIntentPredictionEngine() {
 	return intentPredictionEngineRef;
 }
 
+function setFeedbackStore(store) {
+	feedbackStoreRef = store || null;
+}
+
+function getFeedbackStore() {
+	return feedbackStoreRef;
+}
+
 module.exports = {
 	setUiTaskService,
 	getUiTaskService,
@@ -88,4 +97,6 @@ module.exports = {
 	getConvexClient,
 	setIntentPredictionEngine,
 	getIntentPredictionEngine,
+	setFeedbackStore,
+	getFeedbackStore,
 };
