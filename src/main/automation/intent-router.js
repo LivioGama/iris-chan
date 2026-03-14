@@ -237,6 +237,7 @@ function parseInstallCleanupClause(clause, appHint) {
 		appHint: appHint || 'Finder',
 		action,
 		target,
+		combined: true,
 	};
 }
 

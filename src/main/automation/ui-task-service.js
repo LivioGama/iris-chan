@@ -878,6 +878,7 @@ class UITaskService extends EventEmitter {
 			target: step.target || '',
 			action: step.action || '',
 			name: step.target || '',
+			combined: step.combined !== false,
 		});
 		if (cleanup.ok === false) {
 			throw makeTaskError(cleanup.result || 'Installer cleanup failed', 'install_cleanup_failed');
@@ -895,6 +896,7 @@ class UITaskService extends EventEmitter {
 			cleanupAction: cleanup.cleanupAction || '',
 			cleanupKind: cleanup.kind || '',
 			path: cleanup.path || '',
+			sourceDmgPath: cleanup.sourceDmgPath || '',
 		};
 	}
 
