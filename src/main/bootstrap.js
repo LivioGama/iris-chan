@@ -14,8 +14,10 @@ const kanbanWindow = require('./windows/kanban-window');
 const { createTrayController } = require('./status-tray');
 const { registerIpc } = require('./ipc-runtime');
 const { BehaviorModeState } = require('./runtime/behavior-mode');
+const settings = require('./settings');
 const { registerSettingsHandlers } = require('./runtime/settings-handlers');
 const { registerShortcuts, unregisterShortcuts } = require('./runtime/shortcut-manager');
+const { RuntimeEventPersistence } = require('./runtime/event-persistence');
 const { UITaskService } = require('./automation/ui-task-service');
 const { SelfImprovementManager } = require('./automation/self-improvement-manager');
 const { MemoryStore } = require('./automation/memory-store');
@@ -29,6 +31,9 @@ const { IntentPredictionEngine } = require('./automation/intent-prediction-engin
 const { WorldState } = require('./automation/world-state');
 const { IntentPatternStore } = require('./automation/intent-pattern-store');
 const { setConvexClient: setUnifiedConvexClient } = require('./runtime/convex-adapter');
+const { setConvexClient: setTqControllerClient, setBehaviorEngine: setTqBehaviorEngine } = require('./controllers/taskQueueController');
+const { setConvexClient: setTqToolClient } = require('./tools/task-queue');
+const { setBehaviorEngine: setTqServiceBehaviorEngine } = require('./task-queue/service');
 const taskQueueWatcher = require('./task-queue/watcher');
 const { RuntimeEventPersistence } = require('./runtime/event-persistence');
 const settings = require('./settings');
@@ -69,6 +74,7 @@ function startRuntime({ apiKey }) {
 	});
 	const statusTray = createTrayController();
 	const eventPersistence = new RuntimeEventPersistence({ eventBus, convexClient });
+	eventPersistence.start();
 
 	registerSettingsHandlers({ behaviorEngine });
 	const initialSettings = settings.init();

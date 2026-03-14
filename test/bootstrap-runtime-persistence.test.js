@@ -221,6 +221,31 @@ Module._load = function patchedLoad(request, parent, isMain) {
 				};
 			},
 			updateSettings() {},
+			getNamespace() {
+				return {};
+			},
+			onChange() {},
+			DEFAULT_SETTINGS: {
+				logging: {
+					level: 'info',
+				},
+			},
+		};
+	}
+	if (request === './logger') {
+		return {
+			captureRendererConsole() {},
+			log: () => {},
+			error: () => {},
+			warn: () => {},
+			info: () => {},
+			debug: () => {},
+		};
+	}
+	if (request === './runtime/geometry-store') {
+		return {
+			getGeometry: () => Promise.resolve(null),
+			setGeometry: () => Promise.resolve(),
 		};
 	}
 	return originalLoad.apply(this, arguments);
@@ -263,8 +288,9 @@ registeredEventHandler({
 	source: 'proactive-engine',
 });
 
-assert.strictEqual(savedRuntimeEvents.length, 4, 'every runtime event should be mirrored to Convex');
-assert.deepStrictEqual(savedRuntimeEvents[0], {
+setTimeout(() => {
+	assert.strictEqual(savedRuntimeEvents.length, 4, 'every runtime event should be mirrored to Convex');
+	assert.deepStrictEqual(savedRuntimeEvents[0], {
 	event: {
 		type: 'DB_HEALTH',
 		timestamp: 111,
@@ -309,8 +335,9 @@ assert.deepStrictEqual(savedProactiveSuggestions[0], {
 		timestamp: 444,
 	},
 	idempotencyKey: 'proactive_444',
-});
+	});
 
-console.log('Bootstrap runtime persistence tests passed.');
+	console.log('Bootstrap runtime persistence tests passed.');
 
-Module._load = originalLoad;
+	Module._load = originalLoad;
+}, 50);

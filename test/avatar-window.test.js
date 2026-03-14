@@ -42,6 +42,14 @@ class FakeBrowserWindow {
 		for (const handler of this.listeners.get(eventName) || []) handler();
 	}
 
+	setBounds(bounds) {
+		this.bounds = bounds;
+	}
+
+	show() {
+		this.visible = true;
+	}
+
 	isDestroyed() {
 		return this.destroyed;
 	}
@@ -83,6 +91,12 @@ Module._load = function patchedLoad(request, parent, isMain) {
 	}
 	if (request === '../logger') {
 		return { captureRendererConsole() {} };
+	}
+	if (request === '../runtime/geometry-store') {
+		return {
+			getGeometry: () => Promise.resolve(null),
+			setGeometry: () => Promise.resolve(),
+		};
 	}
 	return originalLoad.apply(this, arguments);
 };
