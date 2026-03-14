@@ -259,19 +259,66 @@ async function resolve_install_cleanup_target(args = {}) {
 async function cleanup_install_artifact(args = {}) {
 	const resolved = await resolve_install_cleanup_target(args);
 	if (!resolved.ok) return resolved;
+	const combined = args.combined !== false;
 
 	try {
 		if (resolved.cleanupAction === 'eject') {
+			// Discover source DMG BEFORE ejecting (mapping is lost after detach)
+			const sourceDmg = combined ? findSourceDmgForVolume(resolved.path) : null;
+
 			execSync(`hdiutil detach "${resolved.path.replace(/"/g, '\\"')}"`, { timeout: 15000, stdio: ['pipe', 'pipe', 'pipe'] });
 			if (fs.existsSync(resolved.path)) {
 				return { ok: false, result: `Mounted volume is still present after eject attempt: ${resolved.path}` };
 			}
+
+			// Combined flow: also trash the source DMG
+			if (sourceDmg) {
+				try {
+					runFinderAppleScript(`
+						tell application "Finder"
+							delete POSIX file "${sourceDmg.replace(/"/g, '\\"')}"
+						end tell
+					`);
+					if (fs.existsSync(sourceDmg)) {
+						return {
+							ok: true,
+							result: `Ejected ${path.basename(resolved.path)} but could not trash ${path.basename(sourceDmg)} (file still present)`,
+							path: resolved.path,
+							sourceDmgPath: sourceDmg,
+							kind: resolved.kind,
+							cleanupAction: 'eject',
+							verificationMode: 'volume-detached',
+						};
+					}
+					return {
+						ok: true,
+						result: `Ejected ${path.basename(resolved.path)} and moved ${path.basename(sourceDmg)} to the Trash`,
+						path: resolved.path,
+						sourceDmgPath: sourceDmg,
+						kind: resolved.kind,
+						cleanupAction: 'eject+trash',
+						verificationMode: 'volume-detached-and-dmg-trashed',
+					};
+				} catch (trashErr) {
+					return {
+						ok: true,
+						result: `Ejected ${path.basename(resolved.path)} but failed to trash source DMG: ${trashErr.message}`,
+						path: resolved.path,
+						sourceDmgPath: sourceDmg,
+						kind: resolved.kind,
+						cleanupAction: 'eject',
+						verificationMode: 'volume-detached',
+					};
+				}
+			}
+
 			return {
 				ok: true,
-				result: `Ejected installer volume ${path.basename(resolved.path)}`,
+				result: `Ejected installer volume ${path.basename(resolved.path)}` + (combined ? ' (source DMG not found — eject only)' : ''),
 				path: resolved.path,
+				sourceDmgPath: null,
 				kind: resolved.kind,
-				cleanupAction: resolved.cleanupAction,
+				cleanupAction: 'eject',
 				verificationMode: 'volume-detached',
 			};
 		}
