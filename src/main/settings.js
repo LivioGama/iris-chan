@@ -69,6 +69,21 @@ const DEFAULT_SETTINGS = Object.freeze({
 			other: true,
 		},
 	},
+	twoFA: {
+		enabled: true,
+		pollIntervalMs: 3000,
+		confidenceThreshold: 0.85,
+		fillCooldownMs: 60000,
+		sources: {
+			keychainTotp: true,
+			onePassword: true,
+			localTotp: true,
+			messages: true,
+			mail: true,
+			notifications: true,
+		},
+		maxCodeAgeSeconds: 300,
+	},
 });
 
 const REGISTRY = Object.freeze({
@@ -110,6 +125,16 @@ const REGISTRY = Object.freeze({
 			mutationIntents: ['change logging level', 'turn logging off'],
 			examples: ['set logging.console.level = warn'],
 			keyPaths: ['logging.console.*', 'logging.persist.*', 'logging.sources.*', 'logging.categories.*'],
+		},
+	},
+	twoFA: {
+		liveApply: true,
+		normalize: normalizeTwoFASettings,
+		capabilities: {
+			queryIntents: ['is 2FA auto-fill enabled', 'what 2FA sources are active'],
+			mutationIntents: ['toggle 2FA auto-fill', 'disable 2FA', 'enable 2FA', 'change 2FA confidence threshold'],
+			examples: ['disable 2FA auto-fill', 'set twoFA.confidenceThreshold to 0.9'],
+			keyPaths: ['twoFA.enabled', 'twoFA.confidenceThreshold', 'twoFA.sources.*'],
 		},
 	},
 });
@@ -299,6 +324,19 @@ function normalizeLoggingSettings(input = {}) {
 	return merged;
 }
 
+function normalizeTwoFASettings(input = {}) {
+	const merged = mergeDeep(DEFAULT_SETTINGS.twoFA, sanitizeKeys('twoFA', input));
+	merged.enabled = normalizeBoolean(merged.enabled, DEFAULT_SETTINGS.twoFA.enabled);
+	merged.pollIntervalMs = clampNumber(merged.pollIntervalMs, DEFAULT_SETTINGS.twoFA.pollIntervalMs, 1000, 30000);
+	merged.confidenceThreshold = clampNumber(merged.confidenceThreshold, DEFAULT_SETTINGS.twoFA.confidenceThreshold, 0.5, 1.0);
+	merged.fillCooldownMs = clampNumber(merged.fillCooldownMs, DEFAULT_SETTINGS.twoFA.fillCooldownMs, 5000, 300000);
+	merged.maxCodeAgeSeconds = clampNumber(merged.maxCodeAgeSeconds, DEFAULT_SETTINGS.twoFA.maxCodeAgeSeconds, 30, 600);
+	for (const key of Object.keys(DEFAULT_SETTINGS.twoFA.sources)) {
+		merged.sources[key] = normalizeBoolean(merged.sources[key], DEFAULT_SETTINGS.twoFA.sources[key]);
+	}
+	return merged;
+}
+
 function normalizeSettings(input = {}) {
 	const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
 	return {
@@ -306,6 +344,7 @@ function normalizeSettings(input = {}) {
 		avatar: normalizeAvatarSettings(raw.avatar),
 		behavior: normalizeBehaviorSettings(raw.behavior),
 		logging: normalizeLoggingSettings(raw.logging),
+		twoFA: normalizeTwoFASettings(raw.twoFA),
 	};
 }
 

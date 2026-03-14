@@ -1,6 +1,7 @@
 const { avatarWindow } = require('../windows/avatar-window');
 const settings = require('../settings');
 const taskQueueWatcher = require('../task-queue/watcher');
+const twoFA = require('../two-fa');
 
 function registerSettingsHandlers({ behaviorEngine }) {
 	settings.registerApplyHandler('avatar', (nextAvatar, previousAvatar) => {
@@ -23,6 +24,11 @@ function registerSettingsHandlers({ behaviorEngine }) {
 			if (win && !win.isDestroyed()) win.webContents.send('direct-mode-changed', nextBehavior.directMode);
 		}
 		if (win && !win.isDestroyed()) win.webContents.send('behavior-state-changed', behaviorEngine.getState());
+		return { applied: true, liveApply: true };
+	});
+
+	settings.registerApplyHandler('twoFA', (nextTwoFA) => {
+		twoFA.updateSettings(nextTwoFA);
 		return { applied: true, liveApply: true };
 	});
 

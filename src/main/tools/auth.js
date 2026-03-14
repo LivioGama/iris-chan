@@ -167,4 +167,4 @@ async function auto_2fa(args) {
 	}
 }
 
-module.exports = { auto_2fa };
+module.exports = { auto_2fa, readMessages, readMail, readNotifications, extractOTP };
