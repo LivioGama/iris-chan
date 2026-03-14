@@ -426,7 +426,111 @@ function validateTarsImagePoint(response, captureContext = {}) {
 	return validateTarsAction(response, captureContext);
 }
 
-async function requestTarsAction({ screenshotBase64, instruction }) {
+const UI_TARS_VLM_SYSTEM_PROMPT = [
+	'You are a GUI automation agent. You are given a screenshot of a macOS desktop and a task instruction.',
+	'Analyze the screenshot and determine the single best next action to accomplish the task.',
+	'',
+	'Output format: First optionally state your reasoning on a line starting with "Thought:", then output exactly one action call on a new line.',
+	'',
+	'Available actions:',
+	'- click(x, y) — left click at coordinates',
+	'- left_double(x, y) — double click at coordinates',
+	'- right_single(x, y) — right click at coordinates',
+	'- drag(x1, y1, x2, y2) — drag from start to end',
+	'- type(text) — type the given text',
+	'- hotkey(keys) — press key combination (e.g., cmd+c)',
+	'- scroll(direction, amount) — scroll up/down/left/right by amount',
+	'- wait(seconds) — wait before next action',
+	'- finished(status) — task is complete, with status description',
+	'- call_user(reason) — cannot proceed, need user help',
+	'',
+	'Coordinates are in the range [0, 1000] relative to the screenshot dimensions.',
+	'Return only the action call. Do not wrap in markdown or JSON.',
+].join('\n');
+
+async function requestTarsActionVLM({ screenshotBase64, instruction, imageWidth, imageHeight }) {
+	const tars = getTarsConfig();
+	if (!tars.enabled || !tars.endpoint || !tars.apiKey) {
+		return { ok: false, code: 'tars_disabled', error: 'TARS is not configured' };
+	}
+	if (!screenshotBase64 || !instruction) {
+		return { ok: false, code: 'tars_invalid_request', error: 'Missing screenshot or instruction for TARS VLM request' };
+	}
+
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), tars.timeoutMs);
+
+	try {
+		const response = await fetch(tars.endpoint, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'Authorization': `Bearer ${tars.apiKey}`,
+			},
+			body: JSON.stringify({
+				model: tars.model,
+				messages: [
+					{ role: 'system', content: UI_TARS_VLM_SYSTEM_PROMPT },
+					{
+						role: 'user',
+						content: [
+							{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${screenshotBase64}` } },
+							{ type: 'text', text: instruction },
+						],
+					},
+				],
+				max_tokens: 256,
+				temperature: 0,
+			}),
+			signal: controller.signal,
+		});
+
+		const rawText = await response.text();
+		let payload = null;
+		try {
+			payload = rawText ? JSON.parse(rawText) : null;
+		} catch {
+			return {
+				ok: false,
+				code: 'tars_invalid_response',
+				error: `UI-TARS VLM returned non-JSON response (HTTP ${response.status})`,
+				status: response.status,
+				rawText,
+			};
+		}
+
+		if (!response.ok) {
+			return {
+				ok: false,
+				code: response.status === 401 || response.status === 403 ? 'tars_auth_failed' : 'tars_http_error',
+				error: payload?.error?.message || payload?.detail || `UI-TARS VLM request failed with HTTP ${response.status}`,
+				status: response.status,
+				raw: payload,
+			};
+		}
+
+		const content = payload?.choices?.[0]?.message?.content;
+		if (typeof content !== 'string' || !content.trim()) {
+			return buildInvalidResponse('UI-TARS VLM returned empty or missing content', payload);
+		}
+
+		const parsed = parseUITarsModelOutput(content, imageWidth || 0, imageHeight || 0);
+		if (!parsed) {
+			return buildInvalidResponse(`UI-TARS VLM output could not be parsed: ${content}`, payload);
+		}
+
+		return normalizeTarsResponse(parsed);
+	} catch (err) {
+		if (err?.name === 'AbortError') {
+			return { ok: false, code: 'tars_timeout', error: `UI-TARS VLM request timed out after ${tars.timeoutMs}ms` };
+		}
+		return { ok: false, code: 'tars_network_error', error: err?.message || 'UI-TARS VLM request failed' };
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function requestTarsAction({ screenshotBase64, instruction, imageWidth, imageHeight }) {
 	const tars = getTarsConfig();
 	if (!tars.enabled || !tars.endpoint || !tars.apiKey) {
 		return {
