@@ -3,6 +3,7 @@ const { exec } = require('child_process');
 const { runHelper } = require('../native-helper');
 const { getConvexClient, getMemoryStore } = require('../automation/service-ref');
 const config = require('../../shared/config').default;
+const convexStore = require('../convex-store');
 
 const SEARCH_PROVIDER_KEY = 'search.provider.preferred';
 const PROVIDER_PERPLEXITY = 'perplexity';
@@ -321,6 +322,13 @@ async function web_search(args = {}) {
 				resultLength: String(response.result || '').length,
 				sourceCount: Array.isArray(response.sources) ? response.sources.length : 0,
 			});
+			if (convexStore.saveLink && Array.isArray(response.sources)) {
+				for (const src of response.sources) {
+					if (src.url) {
+						convexStore.saveLink({ url: src.url, title: src.title || '', snippet: src.snippet || '', source: 'web_search' }).catch(() => {});
+					}
+				}
+			}
 			return {
 				ok: true,
 				result: response.result,
