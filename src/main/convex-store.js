@@ -123,6 +123,14 @@ function generateSessionId() {
   return `session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function normalizeLink(url) {
+  try {
+    return new URL(String(url || '')).toString();
+  } catch {
+    return '';
+  }
+}
+
 function cleanText(text) {
   if (!text) return '';
   let cleaned = text.replace(/\*\*[^*]+\*\*/g, '');
@@ -292,6 +300,68 @@ const convexStore = {
       timestamp,
       durationMs,
     });
+  },
+
+  async saveLink({ url, title, snippet, source, sessionId } = {}) {
+    const config = initConfig();
+    if (!config.url) return;
+    const normalized = normalizeLink(url);
+    if (!normalized) return;
+    let domain = '';
+    try { domain = new URL(normalized).hostname.replace(/^www\./, ''); } catch {}
+    const now = Date.now();
+    const embeddingText = `${title || ''} ${snippet || ''}`.trim();
+    const result = await httpRunWithExtraFieldFallback('links:upsertLink', {
+      url: normalized,
+      title: (title || '').slice(0, 500),
+      snippet: (snippet || '').slice(0, 500),
+      domain,
+      embedding: new Array(1024).fill(0),
+      embeddingStatus: embeddingText ? 'pending' : 'unavailable',
+      source: source || 'unknown',
+      sessionId: sessionId || currentSessionId || undefined,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      seenCount: 1,
+    });
+    if (result.error) {
+      console.warn('[ConvexStore] saveLink error:', result.error);
+      return;
+    }
+    const docId = result?.value;
+    if (docId && typeof docId === 'string' && embeddingText) {
+      generateEmbedding(embeddingText).then(({ embedding, status }) => {
+        httpRunWithExtraFieldFallback('links:patchLinkEmbedding', {
+          id: docId,
+          embedding,
+          embeddingStatus: status,
+          embeddingUpdatedAt: Date.now(),
+        }).catch(err => {
+          console.error('[ConvexStore] patchLinkEmbedding error:', err.message);
+        });
+      });
+    }
+  },
+
+  async searchLinks(queryText, limit = 5, domainFilter = null) {
+    const config = initConfig();
+    if (!config.url) return [];
+    const clean = cleanText(queryText);
+    if (!clean) return [];
+    const { embedding, status } = await generateEmbedding(clean);
+    if (status !== 'ready') return [];
+    try {
+      const result = await httpRun('links:semanticLinkSearch', {
+        embedding,
+        limit,
+        minScore: 0.3,
+        domainFilter: domainFilter || undefined,
+      });
+      return Array.isArray(result?.value) ? result.value : [];
+    } catch (err) {
+      console.error('[ConvexStore] searchLinks error:', err.message);
+      return [];
+    }
   },
 
   async semanticSearch(queryText, limit = 5, roleFilter = null) {
