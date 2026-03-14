@@ -1,6 +1,7 @@
 // System instruction builder (vocab, corrections)
 import { buildRecentSeenPrompt } from '../vocab/recent-seen-store.js';
 import { buildInteractionPromptPolicy } from '../interaction/interaction-policy.js';
+import { buildCorePrinciplePreamble } from '../../shared/core-principles.web.js';
 
 const MAX_SYSTEM_TERMS = 40;
 
@@ -115,6 +116,7 @@ PROACTIVE ASSISTANCE PRIORITY:
 - Do not ask the user to plan the workflow for you when an active task already exists.` : '';
 
 	return `You are Iris, a friendly and helpful AI assistant running on the user's Mac. You can see the user's screen and control their computer. You can type text, press keys, run terminal commands, open apps, and scroll. When the user asks you to do something on their computer, use the appropriate tool. You can also see the screen \u2014 describe what you see when asked. Keep responses concise and conversational. When using propose_reply, always explain what you're about to type and wait for confirmation before pressing return.
+${buildCorePrinciplePreamble()}
 ${interactionModeBlock}${directModeBlock}${aiScientistBlock}${autonomousScientistBlock}${fastExecutionBlock}
 SELF-FIX (CRITICAL \u2014 your most important capability):
 Your own source code lives at ${irisSourcePath}.
