@@ -152,6 +152,10 @@ async function testHandlesTimeout() {
 	}
 }
 
+const vlmFixture = JSON.parse(
+	fs.readFileSync(path.join(process.cwd(), 'test', 'fixtures', 'tars-vlm-response.json'), 'utf8')
+);
+
 // --- parseUITarsModelOutput tests ---
 
 function testParsesClickAction() {
@@ -269,6 +273,70 @@ function testReadsProviderAndModelEnvVars() {
 	}
 }
 
+async function testVlmProviderMockFetch() {
+	const originalFetch = global.fetch;
+	global.fetch = async () => ({
+		ok: true,
+		status: 200,
+		text: async () => JSON.stringify(vlmFixture),
+	});
+	process.env.TARS_ENABLED = '1';
+	process.env.UI_TARS_URL = 'https://example.com/v1/chat/completions';
+	process.env.UI_TARS_API_KEY = 'test-key';
+	process.env.UI_TARS_PROVIDER = 'openai-compatible';
+	process.env.UI_TARS_MODEL = 'ui-tars-7b-dpo';
+	try {
+		const result = await tarsClient.requestTarsAction({
+			screenshotBase64: 'abc',
+			instruction: 'Click the search button',
+			imageWidth: 1920,
+			imageHeight: 1080,
+		});
+		assert.strictEqual(result.ok, true, 'VLM provider should return ok result');
+		assert.strictEqual(result.actionType, 'click', 'should parse click action');
+		// 850/1000 * 1920 = 1632, 45/1000 * 1080 = 48.6
+		assert.strictEqual(result.x, 1632, 'x should be denormalized to pixel coords');
+		assert.ok(Math.abs(result.y - 48.6) < 0.01, 'y should be denormalized to pixel coords');
+		assert.strictEqual(result.thought, 'The search button is in the top-right area of the toolbar');
+	} finally {
+		global.fetch = originalFetch;
+		process.env.UI_TARS_PROVIDER = '';
+		process.env.UI_TARS_MODEL = '';
+		process.env.UI_TARS_URL = '';
+		process.env.UI_TARS_API_KEY = '';
+	}
+}
+
+async function testVlmProviderHandlesEmptyContent() {
+	const originalFetch = global.fetch;
+	global.fetch = async () => ({
+		ok: true,
+		status: 200,
+		text: async () => JSON.stringify({
+			choices: [{ message: { content: '' } }],
+		}),
+	});
+	process.env.TARS_ENABLED = '1';
+	process.env.UI_TARS_URL = 'https://example.com/v1/chat/completions';
+	process.env.UI_TARS_API_KEY = 'test-key';
+	process.env.UI_TARS_PROVIDER = 'openai-compatible';
+	try {
+		const result = await tarsClient.requestTarsAction({
+			screenshotBase64: 'abc',
+			instruction: 'Click the button',
+			imageWidth: 1000,
+			imageHeight: 1000,
+		});
+		assert.strictEqual(result.ok, false, 'empty VLM content should fail');
+		assert.strictEqual(result.code, 'tars_invalid_response');
+	} finally {
+		global.fetch = originalFetch;
+		process.env.UI_TARS_PROVIDER = '';
+		process.env.UI_TARS_URL = '';
+		process.env.UI_TARS_API_KEY = '';
+	}
+}
+
 Promise.resolve()
 	.then(testNormalizeFixtureResponse)
 	.then(testNormalizesDragAction)
@@ -295,6 +363,8 @@ Promise.resolve()
 	.then(testReturnsNullForUnparseableOutput)
 	.then(testParsedOutputNormalizesThroughPipeline)
 	.then(testReadsProviderAndModelEnvVars)
+	.then(testVlmProviderMockFetch)
+	.then(testVlmProviderHandlesEmptyContent)
 	.then(() => {
 		console.log('TARS client tests passed.');
 	})
