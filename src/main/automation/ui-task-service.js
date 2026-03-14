@@ -1141,6 +1141,8 @@ class UITaskService extends EventEmitter {
 			const tarsResponse = await this._requestTarsAction({
 				screenshotBase64: captureResult.data,
 				instruction,
+				imageWidth: captureResult.context.imageWidth,
+				imageHeight: captureResult.context.imageHeight,
 			});
 			const normalized = this._validateTarsAction(tarsResponse, captureResult.context);
 			const attemptRecord = this._createTarsAttemptRecord({ attempt, captureResult, instruction, normalized, tarsResponse });
@@ -1292,6 +1294,8 @@ class UITaskService extends EventEmitter {
 			const tarsResponse = await this._requestTarsAction({
 				screenshotBase64: captureResult.data,
 				instruction,
+				imageWidth: captureResult.context.imageWidth,
+				imageHeight: captureResult.context.imageHeight,
 			});
 			const normalized = this._validateTarsImagePoint(tarsResponse, captureResult.context);
 			const attemptRecord = {
