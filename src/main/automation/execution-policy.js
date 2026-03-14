@@ -2,6 +2,16 @@ const { makeTaskError } = require('./ui-task-service-utils');
 
 const DESTRUCTIVE_TARGET_PATTERN = /\b(delete|remove|trash|discard|erase|overwrite|replace|eject|detach|empty trash)\b/i;
 const EXPLICIT_DESTRUCTIVE_INTENT_PATTERN = /\b(delete|remove|trash|discard|erase|overwrite|replace|eject|detach|clean(?:\s+up)?)\b/i;
+const PRIMARY_TARS_STEP_TYPES = new Set([
+	'genericTarsGoal',
+	'clickElement',
+	'selectItemByText',
+	'clickSearchResult',
+	'setElementValue',
+	'searchInCurrentContext',
+	'scrollUntilVisible',
+	'navigateHistory',
+]);
 
 function isDestructiveSelectionStep(step = {}) {
 	return ['clickElement', 'selectItemByText', 'clickSearchResult'].includes(step.type)
@@ -36,7 +46,7 @@ function classifySafetyClass(plan = {}, step = {}) {
 }
 
 function supportsPrimaryTars(step = {}) {
-	return ['clickElement', 'selectItemByText', 'clickSearchResult'].includes(step.type);
+	return PRIMARY_TARS_STEP_TYPES.has(step.type);
 }
 
 function buildExecutionContract(plan = {}, step = {}, tarsEnabled = false) {
@@ -44,7 +54,7 @@ function buildExecutionContract(plan = {}, step = {}, tarsEnabled = false) {
 	const fallbackTiers = [];
 	const blocksPointerAutomation = safetyClass === 'destructive' || safetyClass === 'install_cleanup';
 	if (!blocksPointerAutomation && tarsEnabled && supportsPrimaryTars(step)) {
-		fallbackTiers.push('tars', 'semantic');
+		fallbackTiers.push('tars');
 	} else {
 		fallbackTiers.push('semantic');
 		if (!blocksPointerAutomation && (step.type === 'clickElement' || step.type === 'selectItemByText' || step.type === 'clickSearchResult' || step.type === 'scrollUntilVisible')) {
