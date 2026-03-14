@@ -294,6 +294,82 @@ const convexStore = {
     }
   },
 
+  async saveObservation(observation) {
+    const config = initConfig();
+    if (!config.url) return;
+
+    const timestamp = observation.timestamp || Date.now();
+    const embedding = new Array(1024).fill(0);
+    const idempotencyKey = observation.captureId || `obs_${timestamp}`;
+
+    const result = await httpRunWithExtraFieldFallback('observations:saveObservation', {
+      observation: {
+        ...observation,
+        timestamp,
+        embedding,
+        embeddingStatus: 'pending',
+      },
+      idempotencyKey,
+    });
+
+    if (result.error) {
+      console.warn('[ConvexStore] saveObservation error:', result.error);
+      return;
+    }
+
+    const docId = result?.value;
+    if (docId && typeof docId === 'string' && observation.description) {
+      generateEmbedding(observation.description).then(({ embedding: nextEmbedding, status }) => {
+        httpRunWithExtraFieldFallback('observations:patchObservationEmbedding', {
+          id: docId,
+          embedding: nextEmbedding,
+          embeddingStatus: status,
+        }).catch(err => {
+          console.error('[ConvexStore] Failed to patch observation embedding:', err.message);
+        });
+      });
+    }
+  },
+
+  async searchObservations(queryText, limit = 5, appFilter = null) {
+    const config = initConfig();
+    if (!config.url) return [];
+
+    const cleanQuery = cleanText(queryText);
+    if (!cleanQuery) return [];
+
+    const { embedding, status } = await generateEmbedding(cleanQuery);
+    if (status !== 'ready') return [];
+
+    try {
+      const result = await httpRun('observations:searchObservations', {
+        embedding,
+        limit,
+        appFilter,
+        minScore: 0.35,
+      });
+      return Array.isArray(result?.value) ? result.value : [];
+    } catch (err) {
+      console.error('[ConvexStore] searchObservations error:', err.message);
+      return [];
+    }
+  },
+
+  async getRecentObservations(limit = 10, sessionId = null) {
+    const config = initConfig();
+    if (!config.url) return [];
+
+    try {
+      const args = { limit };
+      if (sessionId) args.sessionId = sessionId;
+      const result = await httpRun('observations:getRecentObservations', args);
+      return Array.isArray(result?.value) ? result.value : [];
+    } catch (err) {
+      console.error('[ConvexStore] getRecentObservations error:', err.message);
+      return [];
+    }
+  },
+
   async saveToolExecution(name, args, result, success, durationMs) {
     const config = initConfig();
     if (!config.url || !currentSessionId) return;
