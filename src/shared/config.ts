@@ -121,6 +121,8 @@ export interface Config {
 		maxExtractTextLen: number;
 		maxExtractTerms: number;
 		correctionPromoteCount: number;
+		axPollMs: number;
+		axMaxElements: number;
 	};
 	window: {
 		avatarWidth: number;
@@ -361,6 +363,8 @@ const config: Config = {
 		maxExtractTextLen: 4000,
 		maxExtractTerms: 10,
 		correctionPromoteCount: 2,
+		axPollMs: 15000,
+		axMaxElements: 80,
 	},
 	window: {
 		avatarWidth: 700,
