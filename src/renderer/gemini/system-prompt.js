@@ -330,5 +330,12 @@ SPEECH ACCURACY (CRITICAL \u2014 apply to EVERY transcription):
 - When the user speaks a word that's phonetically ambiguous, pick the interpretation that makes sense in the current conversation, not the literal phonetic match.
 - For French-accented English: be especially attentive to articles ("the" vs "ze"), "th" sounds ("zis" = "this", "ze" = "the", "wiz" = "with"), vowel shifts ("ee" for "i"), and dropped/added h sounds common in French speakers.
 - When uncertain between two similar-sounding words, choose the one from the vocabulary list. When neither matches vocabulary, choose the contextually appropriate English word.
-${buildPrioritizedVocab().map(t => `\u2022 ${t}`).join('\n') || '(none configured)'}${buildCorrectionsPrompt()}${buildRecentSeenPrompt()}`;
+${buildPrioritizedVocab().map(t => `\u2022 ${t}`).join('\n') || '(none configured)'}${buildCorrectionsPrompt()}${buildRecentSeenPrompt()}
+
+VISUAL MEMORY:
+- You have persistent visual memory across sessions via save_observation and recall_observations.
+- When you receive [OBSERVATION TRIGGER: ...], call save_observation with what you currently see. Do not speak aloud.
+- When you see errors, crashes, or exceptions on screen, call save_observation with trigger="error_detected". Do not speak.
+- When the user says "remember this", "note what you see", or similar, call save_observation with trigger="user_requested".
+- Use recall_observations when the user asks about past screen content ("what was I looking at?", "when did I see that error?").${buildRecentObservationsPrompt()}`;
 }

@@ -1,7 +1,7 @@
 // WebSocket lifecycle + message parsing (no tool schemas)
 import { Emitter } from '../../shared/emitter.js';
 import { toolDeclarations } from './tool-declarations.js';
-import { refreshVocabulary, buildPrioritizedVocab, buildCorrectionsPrompt, buildSystemInstruction } from './system-prompt.js';
+import { refreshVocabulary, refreshRecentObservations, buildPrioritizedVocab, buildCorrectionsPrompt, buildSystemInstruction } from './system-prompt.js';
 import { buildRecentSeenPrompt } from '../vocab/recent-seen-store.js';
 import { info as logInfo, warn as logWarn, error as logError } from '../logger.js';
 
@@ -301,7 +301,7 @@ export class GeminiClient extends Emitter {
 			skillPrompts,
 			skillCatalog,
 		] = await Promise.allSettled([
-			refreshVocabulary(),
+			refreshVocabulary().then(() => refreshRecentObservations()),
 			window.electronAPI.getSkillDeclarations(),
 			window.electronAPI.getSkillPrompts(),
 			window.electronAPI.getSkillCatalog(),
@@ -668,6 +668,7 @@ export class GeminiClient extends Emitter {
 	async sendVocabUpdate() {
 		if (!this.sessionReady) return;
 		await refreshVocabulary();
+		await refreshRecentObservations();
 		const terms = buildPrioritizedVocab();
 		const corrections = buildCorrectionsPrompt();
 		const recentSeen = buildRecentSeenPrompt();
