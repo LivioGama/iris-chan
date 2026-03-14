@@ -161,4 +161,27 @@ export default defineSchema({
     .index("by_status", ["status", "createdAt"])
     .index("by_project", ["projectPath", "status", "createdAt"])
     .index("by_idempotency", ["idempotencyKey"]),
+
+  visual_observations: defineTable({
+    description: v.string(),
+    appName: v.string(),
+    tags: v.array(v.string()),
+    captureId: v.string(),
+    sessionId: v.string(),
+    timestamp: v.number(),
+    embedding: v.array(v.number()),
+    embeddingStatus: v.string(),
+    trigger: v.string(),
+    note: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string()),
+  })
+    .index("by_session", ["sessionId", "timestamp"])
+    .index("by_timestamp", ["timestamp"])
+    .index("by_app", ["appName", "timestamp"])
+    .index("by_idempotency", ["idempotencyKey"])
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 1024,
+      filterFields: ["appName", "embeddingStatus", "trigger"],
+    }),
 });
