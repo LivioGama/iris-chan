@@ -282,6 +282,15 @@ export const toolDeclarations = [
 		parameters: { type: 'OBJECT', properties: {} },
 	},
 	{
+		name: 'cleanup_install_artifact',
+		description: 'Safely clean up an installer artifact after app installation. For mounted volumes: ejects the volume AND trashes the source .dmg file in one operation. For .dmg/.pkg files: moves them to the Trash. Requires explicit user intent. Use list_mounted_installers first to see available targets.',
+		parameters: { type: 'OBJECT', properties: {
+			path: { type: 'STRING', description: 'Full path to a mounted volume (e.g. /Volumes/AppName), .dmg file, or .pkg file.' },
+			name: { type: 'STRING', description: 'Name of a Finder item to resolve as the cleanup target.' },
+			combined: { type: 'BOOLEAN', description: 'For mounted volumes: eject AND trash source DMG (default true). Set false for eject-only.' },
+		} },
+	},
+	{
 		name: 'recall_link',
 		description: 'Search your saved link history using natural language. Use when the user asks "what was that article about X?", "find that link about Y", "do you remember that page about Z?", or wants to browse previously seen links. Returns matching links ranked by relevance.',
 		parameters: { type: 'OBJECT', properties: {
