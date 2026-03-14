@@ -12,6 +12,7 @@ import { createScreenCaptureController } from './voice/screen-capture-controller
 import { createClaudeCodeBatcher } from './voice/claude-code-batcher.js';
 import { onRuntimeEvent } from './app-init.js';
 import { eventBusWeb } from '../shared/event-bus-web.js';
+import { addRecentSeenTerms } from './vocab/recent-seen-store.js';
 import { initLogger, getLogSettings } from './logger.js';
 import { createPerformanceMonitor } from './performance-monitor.js';
 
@@ -120,6 +121,16 @@ window.electronAPI.onSettingsChanged?.((nextSettings) => {
 	const nextVoice = nextSettings?.voice;
 	if (nextVoice) {
 		voice.applyVoiceConfig?.(normalizeVoiceConfigForDefaultSound(nextVoice));
+	}
+});
+
+// Receive AX-extracted vocabulary terms from main process
+window.electronAPI.onAxVocabTerms?.((data) => {
+	if (data?.terms?.length) {
+		addRecentSeenTerms(
+			data.terms.map(t => ({ term: t, confidence: 0.85, source: 'ax', ttlMs: 120000 })),
+			{ appHint: data.appName || '' }
+		);
 	}
 });
 
