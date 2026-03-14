@@ -2,7 +2,7 @@ import { findBestNgram } from './learner.js';
 
 const DEFAULT_CONFIG = Object.freeze({
 	ttlMs: 30000,
-	maxTerms: 24,
+	maxTerms: 40,
 	extractIntervalMs: 10000,
 	minConfidence: 0.6,
 	rewriteDistance: 3,
@@ -62,12 +62,13 @@ export function addRecentSeenTerms(terms = [], context = {}) {
 		if (confidence < storeConfig.minConfidence) continue;
 
 		const seenAt = Number(item?.seenAt || now);
+		const ttl = Number(item?.ttlMs || context.ttlMs || storeConfig.ttlMs);
 		const nextEntry = {
 			term,
 			normalizedTerm,
 			source: String(item?.source || context.source || 'screen'),
 			seenAt,
-			expiresAt: seenAt + storeConfig.ttlMs,
+			expiresAt: seenAt + ttl,
 			confidence,
 			captureId: item?.captureId || context.captureId || '',
 			appHint: item?.appHint || context.appHint || '',
