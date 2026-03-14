@@ -25,6 +25,10 @@ const { EpisodeRecorder } = require('./automation/episode-recorder');
 const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager, setEpisodeRecorder, setConvexClient } = require('./automation/service-ref');
 const { setConvexClient: setUnifiedConvexClient } = require('./runtime/convex-adapter');
 const taskQueueWatcher = require('./task-queue/watcher');
+const { RuntimeEventPersistence } = require('./runtime/event-persistence');
+const settings = require('./settings');
+const taskQueueService = require('./task-queue/service');
+const twoFA = require('./two-fa');
 
 function startRuntime({ apiKey }) {
 	const eventBus = new RuntimeEventBus();
@@ -57,6 +61,7 @@ function startRuntime({ apiKey }) {
 	const initialSettings = settings.init();
 	behaviorEngine.setState(initialSettings.behavior);
 	eventPersistence.start();
+	twoFA.init({ eventBus, behaviorEngine, settings: initialSettings.twoFA });
 
 	skills.scan();
 	legacyConvexStore.init();
@@ -69,10 +74,7 @@ function startRuntime({ apiKey }) {
 	setConvexClient(convexClient);
 	legacyIpc.register(apiKey);
 	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow });
-	setTqControllerClient(convexClient);
-	setTqBehaviorEngine(behaviorEngine);
-	setTqToolClient(convexClient);
-	setTqServiceBehaviorEngine(behaviorEngine);
+	taskQueueService.setBehaviorEngine(behaviorEngine);
 
 	app.whenReady().then(async () => {
 		if (process.platform === 'darwin') {
@@ -97,6 +99,7 @@ function startRuntime({ apiKey }) {
 		unregisterShortcuts();
 		healthService.stop();
 		dailyLoop.stop();
+		twoFA.shutdown();
 		taskQueueWatcher.stop();
 		statusTray.destroy();
 		legacyConvexStore.shutdown();
