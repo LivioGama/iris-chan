@@ -54,6 +54,8 @@ class FakePlayback extends MockEmitter {
 		this.referenceCallback = callback;
 	}
 
+	enqueue() {}
+
 	stop() {}
 
 	getVolume() {
@@ -434,8 +436,8 @@ console.log('Running autonomous loop timer tests...');
 			assert.strictEqual(voice._directTurn.awaitingResponse, false, 'grace expiry should abort the unresolved direct turn');
 			assert.strictEqual(voice._directTurn.id, directTurnId, 'the aborted turn should reset in place instead of spawning a second turn');
 			assert.ok(
-				voice.gemini.sentTexts.some((text) => /I did not catch that\. Please say it again\./.test(text)),
-				'grace expiry without transcript should trigger a generic reprompt'
+				!voice.gemini.sentTexts.some((text) => /I did not catch that\. Please say it again\./.test(text)),
+				'grace expiry without transcript should stay silent instead of triggering a generic reprompt'
 			);
 		}
 
@@ -458,8 +460,144 @@ console.log('Running autonomous loop timer tests...');
 			}
 			assert.strictEqual(voice._directTurn.awaitingResponse, true, 'speech confirmation should create a pending direct turn');
 			gemini.emit('interrupted');
-			assert.strictEqual(voice.state, 'LISTENING', 'server interruption before playback should return the engine to listening');
-			assert.strictEqual(voice._directTurn.awaitingResponse, false, 'server interruption before playback should abort the pending direct turn');
+			assert.strictEqual(voice.state, 'LISTENING', 'without transcript evidence interruption should return the engine to listening');
+			assert.strictEqual(voice._directTurn.awaitingResponse, false, 'without transcript evidence interruption should end the pending direct turn');
+		}
+
+		{
+			const { voice, capture, gemini } = createVoiceHarness(VoiceEngine);
+			voice._active = true;
+			voice.state = 'IDLE';
+			voice.gemini.sessionReady = true;
+			capture.emit('started');
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `spoken-retry-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			gemini.emit('inputTranscription', 'What voice presets do you have?');
+			const directTurnId = voice._directTurn.id;
+			gemini.emit('interrupted');
+			assert.strictEqual(voice.state, 'PROCESSING', 'recognized pre-playback interruptions should enter recovery processing');
+			assert.strictEqual(voice._directTurn.awaitingResponse, true, 'transcript salvage should keep the turn active');
+			assert.strictEqual(voice._directTurn.salvageStarted, true, 'recognized pre-playback interruptions should start transcript salvage');
+			assert.strictEqual(voice._directTurn.retryCount, 0, 'transcript salvage should not consume the live retry budget');
+			assert.strictEqual(voice._directTurn.id, directTurnId, 'salvage should stay within the same direct turn');
+			assert.ok(
+				gemini.sentTexts.some((text) => /DIRECT TURN SALVAGE/.test(text)),
+				'recovery should send a transcript salvage prompt back to Gemini'
+			);
+			gemini.emit('audio', 'retry-audio');
+			assert.strictEqual(voice.state, 'RESPONDING', 'successful salvage should resume normal playback');
+			assert.ok(
+				!gemini.sentTexts.some((text) => /I did not catch that\. Please say it again\./.test(text)),
+				'successful salvage should not speak the fallback reprompt'
+			);
+		}
+
+		{
+			const { voice, capture, gemini } = createVoiceHarness(VoiceEngine);
+			voice._active = true;
+			voice.state = 'IDLE';
+			voice.gemini.sessionReady = true;
+			capture.emit('started');
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `spoken-retry-fail-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			gemini.emit('inputTranscription', 'List the voice presets');
+			gemini.emit('interrupted');
+			assert.strictEqual(voice._directTurn.salvageStarted, true, 'first pre-playback interruption should begin transcript salvage');
+			gemini.emit('turnComplete');
+			assert.strictEqual(voice.state, 'LISTENING', 'empty salvage completion should return to listening');
+			assert.strictEqual(voice._directTurn.awaitingResponse, false, 'empty salvage completion should end the salvaged turn');
+			assert.ok(
+				gemini.sentTexts.some((text) => /DIRECT TURN SALVAGE/.test(text)),
+				'failed salvage should still attempt transcript salvage'
+			);
+			assert.ok(
+				!gemini.sentTexts.some((text) => /I heard "/.test(text)),
+				'failed salvage should not fall back to quoted clarification'
+			);
+		}
+
+		{
+			const { voice, capture, gemini } = createVoiceHarness(VoiceEngine);
+			voice._active = true;
+			voice.state = 'IDLE';
+			voice.gemini.sessionReady = true;
+			capture.emit('started');
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `spoken-retry-turn-complete-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			gemini.emit('inputTranscription', 'What voice are you using?');
+			gemini.emit('interrupted');
+			gemini.emit('turnComplete');
+			assert.strictEqual(voice.state, 'LISTENING', 'salvage completion without playback should return to listening');
+			assert.strictEqual(voice._directTurn.awaitingResponse, false, 'salvage completion without playback should end the turn');
+			assert.ok(
+				gemini.sentTexts.some((text) => /DIRECT TURN SALVAGE/.test(text)),
+				'salvage completion without playback should still use transcript salvage'
+			);
+			assert.ok(
+				!gemini.sentTexts.some((text) => /I heard "/.test(text)),
+				'salvage completion without playback should not use quoted clarification'
+			);
+		}
+
+		{
+			const { voice, capture, gemini } = createVoiceHarness(VoiceEngine);
+			voice._active = true;
+			voice.state = 'IDLE';
+			voice.gemini.sessionReady = true;
+			capture.emit('started');
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `spoken-stale-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			gemini.emit('interrupted');
+			for (let i = 0; i < 6; i++) {
+				capture.emit('data', `new-turn-${i}`);
+				clock.advance(32);
+				capture.emit('volume', {
+					effective: 0.03,
+					raw: 0.03,
+					residual: 0.03,
+					clippedRatio: 0,
+					unstableEcho: false,
+				});
+			}
+			assert.strictEqual(voice.state, 'USER_SPEAKING', 'new speech should move the engine into a real user-speaking turn');
+			gemini.emit('outputTranscription', 'I did not catch that.');
+			assert.strictEqual(voice._accum.model, '', 'stale fallback output should be dropped once a newer user turn starts');
 		}
 
 		{

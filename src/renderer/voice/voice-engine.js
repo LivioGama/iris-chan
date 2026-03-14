@@ -223,6 +223,12 @@ function createDirectTurnState(id = 0) {
 		lastSpeechAt: 0,
 		peakVolume: 0,
 		lastSuppressionReason: '',
+		retryCount: 0,
+		recoveryReason: '',
+		localSpeechEvidence: false,
+		transcriptEvidence: false,
+		partialTranscript: false,
+		salvageStarted: false,
 	};
 }
 
@@ -289,6 +295,7 @@ export class VoiceEngine extends Emitter {
 		this._vocabRefreshInterval = null;
 		this._recentSeenExtractInFlight = null;
 		this._lastRecentSeenExtractAt = 0;
+		this._modelOutputFenceActive = false;
 
 		this._screen = screen || createScreenCaptureController({
 			gemini,
@@ -373,6 +380,7 @@ export class VoiceEngine extends Emitter {
 	_bind() {
 		this.gemini.on('connected', () => {
 			updateIndicator('ws', true);
+			clearPresence('recovery');
 			this._newConvexSession();
 		});
 
@@ -397,7 +405,11 @@ export class VoiceEngine extends Emitter {
 		this.gemini.on('disconnected', () => {
 			updateIndicator('ws', false);
 			updateIndicator('send', false);
-			clearPresence('voice');
+			clearPresence('recovery');
+			setPresence('voice', 'disconnected', {
+				title: 'Disconnected',
+				detail: 'Reconnect to resume voice',
+			});
 			// Finalize any in-flight streaming bubbles so they don't hang forever
 			finalizeStreamingBubble('stream-model');
 			finalizeStreamingBubble('stream-user');
@@ -413,6 +425,10 @@ export class VoiceEngine extends Emitter {
 
 		this.gemini.on('audio', (data) => {
 			if (this._muted) return;
+			if (this.state === STATES.USER_SPEAKING || this._modelOutputFenceActive) {
+				this._noteDirectTurnSuppressed(this.state === STATES.USER_SPEAKING ? 'user-speaking' : 'model-output-fenced');
+				return;
+			}
 			if (this._dropModelOutputUntilTurnComplete) {
 				this._noteDirectTurnSuppressed('drop-until-turn-complete');
 				return;
@@ -445,6 +461,10 @@ export class VoiceEngine extends Emitter {
 
 		this.gemini.on('outputTranscription', (text) => {
 			if (this._muted) return;
+			if (this.state === STATES.USER_SPEAKING || this._modelOutputFenceActive) {
+				this._noteDirectTurnSuppressed(this.state === STATES.USER_SPEAKING ? 'user-speaking' : 'model-output-fenced');
+				return;
+			}
 			if (this._dropModelOutputUntilTurnComplete) {
 				this._noteDirectTurnSuppressed('drop-until-turn-complete');
 				return;
@@ -485,8 +505,12 @@ export class VoiceEngine extends Emitter {
 						hadTranscript: this._directTurn.hasTranscript,
 						hadModel: true,
 					});
+				} else if (this._directTurn.salvageStarted) {
+					this._failPendingDirectTurn('salvage_completed_without_response');
+				} else if (this._directTurn.retryCount > 0) {
+					this._failPendingDirectTurn('retry_completed_without_playback');
 				} else if (!this._directTurn.serverRecognized) {
-					this._finishDirectTurn('aborted_no_server_turn');
+					this._failPendingDirectTurn('aborted_no_server_turn');
 				} else {
 					this._finishDirectTurn('completed_without_playback');
 				}
@@ -542,7 +566,17 @@ export class VoiceEngine extends Emitter {
 			// Finalize the model bubble on interruption so it doesn't hang
 			finalizeStreamingBubble('stream-model');
 			if (this._directTurn.awaitingResponse && !this._directTurn.firstModelAudioAt) {
-				this._finishDirectTurn(this._directTurn.serverRecognized ? 'server_superseded_before_playback' : 'aborted_no_server_turn');
+				const failure = this._getDirectTurnFailureMode();
+				if (failure.mode === 'heard_but_backend_failed' || failure.mode === 'heard_partial_transcript') {
+					this._failPendingDirectTurn(failure.mode);
+					logInfo('Voice', 'Server interrupted pending direct turn before playback');
+					return;
+				}
+				if (this._directTurn.serverRecognized && this._retryPendingDirectTurn('server_superseded_before_playback')) {
+					logInfo('Voice', 'Server interrupted pending direct turn before playback — retrying once');
+					return;
+				}
+				this._failPendingDirectTurn(this._directTurn.serverRecognized ? 'server_superseded_before_playback' : 'aborted_no_server_turn');
 				logInfo('Voice', 'Server interrupted pending direct turn before playback');
 				return;
 			}
@@ -707,11 +741,7 @@ export class VoiceEngine extends Emitter {
 				'DirectAsk',
 				`[${this._directTurn.id}] grace expired without server evidence (${Date.now() - this._directTurn.committedAt}ms)`
 			);
-			this._finishDirectTurn('aborted_no_server_turn');
-			if (this.state !== STATES.RESPONDING) {
-				this._setState(STATES.LISTENING);
-			}
-			this._speakSystemSentence(this._directTurnConfig.repromptText, 'direct-ask-reprompt');
+			this._failPendingDirectTurn('aborted_no_server_turn');
 		}, this._directTurnConfig.serverEvidenceGraceMs);
 	}
 
@@ -723,6 +753,7 @@ export class VoiceEngine extends Emitter {
 	}
 
 	_beginDirectTurn(kind = 'direct') {
+		clearPresence('recovery');
 		if (
 			this._directTurn.awaitingResponse
 			&& this._directTurn.phase !== 'responding'
@@ -748,6 +779,7 @@ export class VoiceEngine extends Emitter {
 	_commitDirectTurn(details = {}) {
 		if (!this._directTurn.awaitingResponse || this._directTurn.committed) return;
 		this._directTurn.committed = true;
+		this._directTurn.localSpeechEvidence = true;
 		this._directTurn.committedAt = Date.now();
 		this._directTurn.lastSpeechAt = this._directTurn.committedAt;
 		this._directTurn.peakVolume = Math.max(this._directTurn.peakVolume || 0, details.micVolume || 0);
@@ -760,6 +792,9 @@ export class VoiceEngine extends Emitter {
 	_noteDirectTurnTranscript(text = '') {
 		if (!this._directTurn.awaitingResponse) return;
 		if (!String(text || '').trim()) return;
+		const transcript = this._getDirectTurnTranscript();
+		this._directTurn.transcriptEvidence = this._hasMeaningfulTranscriptEvidence(transcript);
+		this._directTurn.partialTranscript = this._isTranscriptProbablyPartial(transcript);
 		const now = Date.now();
 		if (!this._directTurn.hasTranscript) {
 			this._directTurn.hasTranscript = true;
@@ -777,6 +812,8 @@ export class VoiceEngine extends Emitter {
 
 	_noteDirectTurnModelAudio() {
 		if (!this._directTurn.awaitingResponse || this._directTurn.firstModelAudioAt) return;
+		clearPresence('recovery');
+		this._modelOutputFenceActive = false;
 		this._directTurn.firstModelAudioAt = Date.now();
 		this._directTurn.serverRecognized = true;
 		this._directTurn.phase = 'responding';
@@ -787,8 +824,138 @@ export class VoiceEngine extends Emitter {
 	_finishDirectTurn(outcome, details = {}) {
 		if (!this._directTurn.awaitingResponse) return;
 		this._clearDirectTurnGraceTimer();
+		this._modelOutputFenceActive = false;
 		logInfo('DirectAsk', `[${this._directTurn.id}] ${outcome}${details.reason ? ` (${details.reason})` : ''}`);
 		this._directTurn = createDirectTurnState(this._directTurn.id);
+	}
+
+	_getDirectTurnTranscript() {
+		return this._correctTranscript(this._accum.user || this._lastUserTurn || '').trim();
+	}
+
+	_hasMeaningfulTranscriptEvidence(text = '') {
+		const normalized = String(text || '').trim();
+		if (!normalized) return false;
+		const words = normalized.split(/\s+/).filter(Boolean);
+		return normalized.length >= 16 || words.length >= 4;
+	}
+
+	_isTranscriptProbablyPartial(text = '') {
+		const normalized = String(text || '').trim();
+		if (!normalized) return false;
+		const lower = normalized.toLowerCase();
+		if (/[.!?]["']?$/.test(normalized)) return false;
+		if (/\b(of|to|for|with|about|all of|all|and|or|but|that|this|these|those|just|want to|need to)\s*$/i.test(lower)) {
+			return true;
+		}
+		const words = lower.split(/\s+/).filter(Boolean);
+		const lastWord = words[words.length - 1] || '';
+		if (words.length < 4) return true;
+		return lastWord.length <= 2;
+	}
+
+	_clearSupersededModelOutput(reason = 'superseded_turn') {
+		this._modelOutputFenceActive = true;
+		if (this._accum.model) {
+			logInfo('DirectAsk', `[${this._directTurn.id}] discarded_stale_model_output (${reason})`);
+		}
+		this._accum.model = '';
+		finalizeStreamingBubble('stream-model');
+	}
+
+	_getDirectTurnFailureMode() {
+		const transcript = this._getDirectTurnTranscript();
+		const hasMeaningfulTranscript = this._hasMeaningfulTranscriptEvidence(transcript);
+		if (!this._directTurn.localSpeechEvidence && !hasMeaningfulTranscript && !transcript) {
+			return { mode: 'no_local_speech_evidence', transcript: '' };
+		}
+		if (transcript) {
+			return {
+				mode: this._isTranscriptProbablyPartial(transcript) ? 'heard_partial_transcript' : 'heard_but_backend_failed',
+				transcript,
+			};
+		}
+		return { mode: 'no_local_speech_evidence', transcript: '' };
+	}
+
+	_startTranscriptSalvage(reason = 'heard_but_backend_failed') {
+		const transcript = this._getDirectTurnTranscript();
+		if (!transcript || !this.gemini?.sessionReady || this._directTurn.salvageStarted) return false;
+		this._clearDirectTurnGraceTimer();
+		this._clearSupersededModelOutput(reason);
+		this._directTurn.serverRecognized = true;
+		this._directTurn.hasTranscript = true;
+		this._directTurn.transcriptEvidence = this._hasMeaningfulTranscriptEvidence(transcript);
+		this._directTurn.partialTranscript = this._isTranscriptProbablyPartial(transcript);
+		this._directTurn.salvageStarted = true;
+		this._directTurn.recoveryReason = reason;
+		this._directTurn.phase = 'salvaging';
+		setPresence('recovery', 'recovering', {
+			title: 'Recovering',
+			detail: this._directTurn.partialTranscript ? 'Finishing what I heard' : 'Recovering from what I heard',
+		});
+		this._setState(STATES.PROCESSING);
+		this._modelOutputFenceActive = false;
+		this.gemini.sendText(
+			`[SYSTEM: DIRECT TURN SALVAGE — do not mention backend failure]\n` +
+			`Use the captured user transcript below to continue the conversation.\n` +
+			`Transcript: ${transcript}\n` +
+			`Rules:\n` +
+			`- Continue naturally as if the conversation had proceeded normally.\n` +
+			`- If the request is clear enough, answer/help directly.\n` +
+			`- If the transcript is partial, infer the most likely conversational intent and answer naturally when possible.\n` +
+			`- If the transcript is too weak to support a sensible reply, stay silent instead of asking a clarification.\n` +
+			`- Never quote the transcript back to the user.\n` +
+			`- Never say "I did not catch that" and never ask the user to repeat the whole thing.\n`
+		);
+		logInfo('DirectAsk', `[${this._directTurn.id}] transcript_salvage_started (${reason})`);
+		return true;
+	}
+
+	_retryPendingDirectTurn(reason = 'server_superseded_before_playback') {
+		if (!this._directTurn.awaitingResponse || this._directTurn.firstModelAudioAt) return false;
+		if (this._directTurn.retryCount >= 1) return false;
+		if (!this.gemini?.sessionReady) return false;
+		const retryText = this._correctTranscript(this._accum.user || this._lastUserTurn || '');
+		if (!retryText) return false;
+		this._clearDirectTurnGraceTimer();
+		this._directTurn.retryCount += 1;
+		this._directTurn.recoveryReason = reason;
+		this._directTurn.phase = 'retrying';
+		setPresence('recovery', 'recovering', {
+			title: 'Recovering',
+			detail: 'Retrying your last request',
+		});
+		this._setState(STATES.PROCESSING);
+		this.gemini.sendText(
+			`[SYSTEM: RETRY DIRECT TURN — do not mention this unless recovery fails]\n` +
+			`The prior live voice turn was interrupted before playback. Retry once using the recognized user request below.\n` +
+			`User request: ${retryText}`
+		);
+		logInfo('DirectAsk', `[${this._directTurn.id}] retrying_pre_playback_turn (${reason})`);
+		return true;
+	}
+
+	_failPendingDirectTurn(reason = 'aborted_no_server_turn') {
+		const failure = this._getDirectTurnFailureMode();
+		if ((failure.mode === 'heard_but_backend_failed' || failure.mode === 'heard_partial_transcript') && this._startTranscriptSalvage(failure.mode)) {
+			return;
+		}
+		if (this._directTurn.salvageStarted) {
+			this._finishDirectTurn(reason);
+			if (this.state !== STATES.RESPONDING) {
+				this._setState(STATES.LISTENING);
+			}
+			return;
+		}
+		setPresence('recovery', 'recovering', {
+			title: 'Recovering',
+			detail: reason === 'aborted_no_server_turn' ? 'Resetting the voice turn' : 'Resetting after a missed response',
+		});
+		this._finishDirectTurn(reason);
+		if (this.state !== STATES.RESPONDING) {
+			this._setState(STATES.LISTENING);
+		}
 	}
 
 	_shouldUseDirectTurnFastRelease(meter = {}) {
@@ -830,6 +997,8 @@ export class VoiceEngine extends Emitter {
 		this._toolHandler?.setUserSpeechActive?.(state === STATES.USER_SPEAKING);
 
 		if (state === STATES.USER_SPEAKING) {
+			this._dropModelOutputUntilTurnComplete = true;
+			this._clearSupersededModelOutput('user_started_speaking');
 			if (prev !== STATES.USER_SPEAKING) {
 				this._beginDirectTurn(prev === STATES.RESPONDING ? 'barge-in' : 'direct');
 			}
@@ -861,7 +1030,14 @@ export class VoiceEngine extends Emitter {
 		updateIndicator('think', state === STATES.PROCESSING);
 		updateIndicator('speak', state === STATES.RESPONDING);
 
-		if (state === STATES.PROCESSING) {
+		if (state === STATES.LISTENING) {
+			setPresence('voice', 'listening', {
+				title: 'Listening',
+				detail: 'Ready for the next request',
+			});
+		} else if (state === STATES.PROCESSING) {
+			this._dropModelOutputUntilTurnComplete = false;
+			this._modelOutputFenceActive = false;
 			setPresence('voice', 'thinking', {
 				title: 'Thinking',
 				detail: 'Working out the next response',
@@ -872,9 +1048,15 @@ export class VoiceEngine extends Emitter {
 				detail: 'Using tools to make progress',
 			});
 		} else if (state === STATES.RESPONDING) {
+			clearPresence('recovery');
 			setPresence('voice', 'responding', {
 				title: 'Replying',
 				detail: 'Turning the answer into speech',
+			});
+		} else if (state === STATES.IDLE && !this.gemini?.connected) {
+			setPresence('voice', 'disconnected', {
+				title: 'Disconnected',
+				detail: 'Reconnect to resume voice',
 			});
 		} else {
 			clearPresence('voice');
