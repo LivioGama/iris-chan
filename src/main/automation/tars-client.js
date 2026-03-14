@@ -530,22 +530,8 @@ async function requestTarsActionVLM({ screenshotBase64, instruction, imageWidth,
 	}
 }
 
-async function requestTarsAction({ screenshotBase64, instruction, imageWidth, imageHeight }) {
+async function requestTarsActionCustom({ screenshotBase64, instruction }) {
 	const tars = getTarsConfig();
-	if (!tars.enabled || !tars.endpoint || !tars.apiKey) {
-		return {
-			ok: false,
-			code: 'tars_disabled',
-			error: 'TARS rescue is not configured',
-		};
-	}
-	if (!screenshotBase64 || !instruction) {
-		return {
-			ok: false,
-			code: 'tars_invalid_request',
-			error: 'Missing screenshot_base64 or instruction for TARS request',
-		};
-	}
 
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), tars.timeoutMs);
@@ -605,6 +591,20 @@ async function requestTarsAction({ screenshotBase64, instruction, imageWidth, im
 	} finally {
 		clearTimeout(timer);
 	}
+}
+
+async function requestTarsAction({ screenshotBase64, instruction, imageWidth, imageHeight }) {
+	const tars = getTarsConfig();
+	if (!tars.enabled || !tars.endpoint || !tars.apiKey) {
+		return { ok: false, code: 'tars_disabled', error: 'TARS is not configured' };
+	}
+	if (!screenshotBase64 || !instruction) {
+		return { ok: false, code: 'tars_invalid_request', error: 'Missing screenshot or instruction for TARS request' };
+	}
+	if (tars.provider === 'openai-compatible') {
+		return requestTarsActionVLM({ screenshotBase64, instruction, imageWidth, imageHeight });
+	}
+	return requestTarsActionCustom({ screenshotBase64, instruction });
 }
 
 module.exports = {
