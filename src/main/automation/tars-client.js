@@ -263,6 +263,118 @@ function normalizeTarsResponse(payload) {
 	};
 }
 
+// --- UI-TARS VLM output parser ---
+// UI-TARS returns free-text actions like "click(512, 384)" with an optional
+// "Thought: ..." prefix.  Coordinates are in a 1000x1000 normalized space
+// and must be denormalized to pixel coordinates before downstream validation.
+
+const VLM_ACTION_RE = /^(click|left_double|right_single|drag|hotkey|type|scroll|wait|finished|call_user)\s*\((.+)\)\s*$/im;
+
+function denormCoord(value, dimension) {
+	const n = Number(value);
+	if (!Number.isFinite(n)) return null;
+	return (n / 1000) * dimension;
+}
+
+function parseUITarsModelOutput(text, imageWidth, imageHeight) {
+	if (typeof text !== 'string' || !text.trim()) return null;
+
+	let thought = '';
+	let actionLine = text.trim();
+
+	// Extract "Thought: ..." prefix (may span multiple lines before the action)
+	const thoughtMatch = actionLine.match(/^Thought:\s*([\s\S]*?)(?=\n\s*(?:click|left_double|right_single|drag|hotkey|type|scroll|wait|finished|call_user)\s*\()/im);
+	if (thoughtMatch) {
+		thought = thoughtMatch[1].trim();
+		actionLine = actionLine.slice(thoughtMatch[0].length).trim();
+	} else if (/^Thought:/im.test(actionLine)) {
+		// Thought with no recognized action following — treat whole thing as thought
+		const parts = actionLine.split('\n');
+		const thoughtParts = [];
+		let foundAction = false;
+		for (const line of parts) {
+			if (VLM_ACTION_RE.test(line.trim())) {
+				actionLine = line.trim();
+				foundAction = true;
+				break;
+			}
+			thoughtParts.push(line);
+		}
+		if (!foundAction) return null;
+		thought = thoughtParts.join('\n').replace(/^Thought:\s*/i, '').trim();
+	}
+
+	const match = actionLine.match(VLM_ACTION_RE);
+	if (!match) return null;
+
+	const action = match[1].toLowerCase();
+	const argsRaw = match[2].trim();
+
+	const w = Number(imageWidth) || 0;
+	const h = Number(imageHeight) || 0;
+
+	switch (action) {
+		case 'click': {
+			const coords = argsRaw.split(',').map(s => s.trim());
+			if (coords.length < 2) return null;
+			const x = denormCoord(coords[0], w);
+			const y = denormCoord(coords[1], h);
+			if (x == null || y == null) return null;
+			return { action_type: 'click', x, y, thought };
+		}
+		case 'left_double': {
+			const coords = argsRaw.split(',').map(s => s.trim());
+			if (coords.length < 2) return null;
+			const x = denormCoord(coords[0], w);
+			const y = denormCoord(coords[1], h);
+			if (x == null || y == null) return null;
+			return { action_type: 'double_click', x, y, thought };
+		}
+		case 'right_single': {
+			const coords = argsRaw.split(',').map(s => s.trim());
+			if (coords.length < 2) return null;
+			const x = denormCoord(coords[0], w);
+			const y = denormCoord(coords[1], h);
+			if (x == null || y == null) return null;
+			return { action_type: 'right_click', x, y, thought };
+		}
+		case 'drag': {
+			const coords = argsRaw.split(',').map(s => s.trim());
+			if (coords.length < 4) return null;
+			const x = denormCoord(coords[0], w);
+			const y = denormCoord(coords[1], h);
+			const x2 = denormCoord(coords[2], w);
+			const y2 = denormCoord(coords[3], h);
+			if (x == null || y == null || x2 == null || y2 == null) return null;
+			return { action_type: 'drag', x, y, x2, y2, thought };
+		}
+		case 'type': {
+			return { action_type: 'type', text: argsRaw, thought };
+		}
+		case 'hotkey': {
+			return { action_type: 'hotkey', key: argsRaw.trim().toLowerCase(), thought };
+		}
+		case 'scroll': {
+			const parts = argsRaw.split(',').map(s => s.trim());
+			const direction = (parts[0] || 'down').toLowerCase();
+			const amount = Math.max(1, Math.round(Number(parts[1]) || 3));
+			return { action_type: 'scroll', direction, amount, thought };
+		}
+		case 'wait': {
+			const seconds = Number(argsRaw) || 0.5;
+			return { action_type: 'wait', duration_ms: Math.round(seconds * 1000), thought };
+		}
+		case 'finished': {
+			return { action_type: 'finished', result: argsRaw || 'Task finished', thought };
+		}
+		case 'call_user': {
+			return { action_type: 'finished', result: `call_user: ${argsRaw}`, thought };
+		}
+		default:
+			return null;
+	}
+}
+
 function validatePointInBounds(point, width, height, label, raw) {
 	if (!point || point.x < 0 || point.y < 0 || point.x >= width || point.y >= height) {
 		return {
@@ -394,6 +506,7 @@ async function requestTarsAction({ screenshotBase64, instruction }) {
 module.exports = {
 	getTarsConfig,
 	normalizeTarsResponse,
+	parseUITarsModelOutput,
 	validateTarsAction,
 	validateTarsImagePoint,
 	requestTarsAction,
