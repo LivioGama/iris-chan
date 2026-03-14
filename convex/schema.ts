@@ -88,6 +88,30 @@ export default defineSchema({
     .index("by_date", ["date", "timestamp"])
     .index("by_idempotency", ["idempotencyKey"]),
 
+  links: defineTable({
+    url: v.string(),
+    title: v.string(),
+    snippet: v.string(),
+    domain: v.string(),
+    embedding: v.array(v.number()),
+    embeddingStatus: v.string(),
+    embeddingUpdatedAt: v.optional(v.number()),
+    source: v.string(),
+    sessionId: v.optional(v.string()),
+    firstSeenAt: v.number(),
+    lastSeenAt: v.number(),
+    seenCount: v.number(),
+    idempotencyKey: v.optional(v.string()),
+  })
+    .index("by_url", ["url"])
+    .index("by_domain", ["domain", "lastSeenAt"])
+    .index("by_lastSeen", ["lastSeenAt"])
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 1024,
+      filterFields: ["embeddingStatus", "source", "domain"],
+    }),
+
   task_queue: defineTable({
     projectPath: v.string(),
     rawPrompt: v.string(),
