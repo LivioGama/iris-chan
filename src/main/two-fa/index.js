@@ -31,4 +31,16 @@ function updateSettings(settings) {
 	if (instance) instance.updateSettings(settings);
 }
 
-module.exports = { init, shutdown, getStatus, updateSettings };
+function getRecentCodes(limit = 5) {
+	return instance ? instance.getRecentCodes(limit) : [];
+}
+
+function getCodeByKeyword(keyword) {
+	return instance ? instance.getCodeByKeyword(keyword) : null;
+}
+
+function getFullCode(keywordOrMasked) {
+	return instance ? instance.getFullCode(keywordOrMasked) : null;
+}
+
+module.exports = { init, shutdown, getStatus, updateSettings, getRecentCodes, getCodeByKeyword, getFullCode };

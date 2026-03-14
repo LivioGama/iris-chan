@@ -5,6 +5,7 @@ const { computeConfidence } = require('./confidence');
 const { fillCode, verifyFill } = require('./fill');
 const { extractOTP } = require('../tools/auth');
 const { NotificationMonitor } = require('./notification-monitor');
+const { CodeCache } = require('./code-cache');
 const log = require('../logger');
 
 class TwoFAOrchestrator {
@@ -21,6 +22,7 @@ class TwoFAOrchestrator {
 		this._recentFills = new Map(); // fingerprint → timestamp
 		this._enabled = settings.enabled !== false;
 		this._lastFieldInfo = null; // cached from last detection for instant notification fill
+		this._codeCache = new CodeCache({ maxAgeMs: (settings.maxCodeAgeSeconds || 300) * 1000 });
 		this._notifMonitor = new NotificationMonitor({
 			onNotification: (evt) => this._onNotificationReceived(evt),
 		});
@@ -64,6 +66,18 @@ class TwoFAOrchestrator {
 			this.stop();
 			this.start();
 		}
+	}
+
+	getRecentCodes(limit = 5) {
+		return this._codeCache.getLatest(limit);
+	}
+
+	getCodeByKeyword(keyword) {
+		return this._codeCache.getByKeyword(keyword);
+	}
+
+	getFullCode(keywordOrMasked) {
+		return this._codeCache.getFullCode(keywordOrMasked);
 	}
 
 	getStatus() {
@@ -127,6 +141,10 @@ class TwoFAOrchestrator {
 				maxCodeAgeSeconds: this._maxCodeAgeSeconds,
 			};
 			const codes = await gatherCodes(context, this._enabledSources);
+			// Cache all found codes regardless of confidence threshold
+			for (const c of codes) {
+				this._codeCache.add({ code: c.code, source: c.source, sender: c.meta?.sender, text: c.meta?.text, timestamp: c.timestamp });
+			}
 			if (!codes.length) {
 				this._emit('TWO_FA_NO_CODE', { appName: fieldInfo.appName });
 				return;
@@ -195,6 +213,8 @@ class TwoFAOrchestrator {
 			log.debug('2FA', `Notification text has no OTP: ${allText.slice(0, 80)}`);
 			return;
 		}
+		// Cache the code regardless of fill outcome
+		this._codeCache.add({ code, source: 'notifications', sender: 'notification', text: allText, timestamp: Date.now() });
 
 		// Check dedup
 		if (this._recentFills.has(fieldInfo.fingerprint)) return;
