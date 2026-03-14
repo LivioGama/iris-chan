@@ -65,6 +65,26 @@ const GENERIC_AX_LABELS = new Set([
 	'scroll area', 'content', 'main', 'navigation', 'banner',
 ]);
 
+function extractAppExpressions(info) {
+	const terms = [];
+	const appMatch = info.match(/^App:\s*([^,]+)/);
+	if (appMatch) {
+		const appName = appMatch[1].trim();
+		if (appName.length >= 2) terms.push(appName);
+	}
+	const winMatch = info.match(/Windows:\s*(.+)$/s);
+	if (winMatch) {
+		const parts = winMatch[1].split(/[—–\-|:,]/);
+		for (const part of parts) {
+			const trimmed = part.trim();
+			if (trimmed.length >= 3 && trimmed.length <= 40 && /[A-Z]/.test(trimmed)) {
+				terms.push(trimmed);
+			}
+		}
+	}
+	return terms;
+}
+
 async function extractFromAccessibility(getWin) {
 	try {
 		const result = await runHelper({ action: 'ax_snapshot', limit: config.vocab.axMaxElements || 80 });
@@ -129,6 +149,10 @@ function start(apiKey, getWin) {
 			if (info && info !== lastWindowTitle) {
 				lastWindowTitle = info;
 				vocabBuffer.push(info);
+				// Extract app name and meaningful title segments as hot terms
+				for (const expr of extractAppExpressions(info)) {
+					vocabStore.addHotTerm(expr);
+				}
 			}
 			// Detect messaging app focus transitions
 			const lower = info.toLowerCase();
