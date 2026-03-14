@@ -274,6 +274,7 @@ FOREGROUND UI: run_ui_task
 ACTIONS: type_text, press_key, click_at (left/right), double_click, mouse_move, drag, scroll
 APPS: open_app, get_default_app, window_manage (left/right/maximize/center), get_frontmost_app
 SYSTEM: set_volume, run_terminal_command, notify, check_permissions, clipboard_read, clipboard_write
+AUTH: get_codes (check for recent 2FA codes from messages/email/notifications — use when user asks "what's my code?" or you see a 2FA field), paste_code (paste a specific code into the focused field — use "facebook", "google", or "latest" as keyword)
 SEARCH: web_search (search the web via Perplexity with explicit sources)
 LINKS: recall_link (search saved link history by natural language \u2014 use when user asks "what was that link about X?"), open_link (find and open a previously seen link in the browser)
 FILES: read_file, write_file, list_directory, move_file, get_finder_selection

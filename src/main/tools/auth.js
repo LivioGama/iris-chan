@@ -235,55 +235,115 @@ end tell`;
 	return [{ text: result.output, sender: 'notification' }];
 }
 
-async function auto_2fa(args) {
-	const source = (args.source || 'auto').toLowerCase();
-	const autoType = args.auto_type !== false; // default true
-	const maxAge = parseInt(args.max_age_seconds) || 300; // default 5 minutes
+// ---- Fresh scan (used by get_codes when cache is empty) ----
 
-	let allMessages = [];
+async function freshScan(maxAge = 300) {
+	const allMessages = [];
+	const [msgs, mails, notifs] = await Promise.allSettled([
+		readMessages(maxAge),
+		readMail(maxAge),
+		readNotifications(),
+	]);
+	if (msgs.status === 'fulfilled') allMessages.push(...msgs.value.map(m => ({ ...m, source: 'messages' })));
+	if (mails.status === 'fulfilled') allMessages.push(...mails.value.map(m => ({ ...m, source: 'mail' })));
+	if (notifs.status === 'fulfilled') allMessages.push(...notifs.value.map(m => ({ ...m, source: 'notifications' })));
 
+	const codes = [];
+	for (const msg of allMessages) {
+		const code = extractOTP(msg.text);
+		if (code) {
+			codes.push({ code, source: msg.source, sender: msg.sender, text: msg.text, timestamp: Date.now() });
+		}
+	}
+	return codes;
+}
+
+// ---- Tool: get_codes — list available 2FA codes (masked) ----
+
+async function get_codes(args) {
 	try {
-		// Gather messages from requested sources
-		if (source === 'messages' || source === 'auto') {
-			const msgs = await readMessages(maxAge);
-			allMessages.push(...msgs);
-		}
-		if (source === 'mail' || source === 'auto') {
-			const mails = await readMail(maxAge);
-			allMessages.push(...mails);
-		}
-		if (source === 'notifications' || source === 'auto') {
-			const notifs = await readNotifications();
-			allMessages.push(...notifs);
-		}
+		const twoFA = require('../two-fa');
 
-		if (allMessages.length === 0) {
-			return { ok: false, result: `No recent messages found (checked ${source}, last ${maxAge}s)` };
-		}
+		// Check cache first
+		let codes = twoFA.getRecentCodes(args.limit || 5);
 
-		// Scan all messages for OTP codes
-		for (const msg of allMessages) {
-			const code = extractOTP(msg.text);
-			if (code) {
-				log.info('Auth', `Found 2FA code: ${'*'.repeat(code.length)} from ${msg.sender}`);
-
-				if (autoType) {
-					// Type the code into the focused field
-					const typeResult = await runHelper({ action: 'type_text', text: code });
-					if (!typeResult.ok) {
-						return { ok: true, result: `Found code ${code} from ${msg.sender}, but failed to type it: ${typeResult.result}` };
-					}
-					return { ok: true, result: `Found and typed ${code.length}-digit code from ${msg.sender}` };
-				}
-				return { ok: true, result: `Found ${code.length}-digit code: ${code} (from ${msg.sender})` };
+		// If cache empty or refresh requested, do fresh scan and populate cache
+		if (!codes.length || args.refresh) {
+			const maxAge = parseInt(args.max_age_seconds) || 300;
+			const fresh = await freshScan(maxAge);
+			for (const c of fresh) {
+				// Add to cache via orchestrator (if available)
+				// For direct tool use, just return fresh results
+				codes.push({
+					maskedCode: c.code.slice(0, 2) + '*'.repeat(Math.max(0, c.code.length - 2)),
+					source: c.source,
+					sender: c.sender,
+					snippet: (c.text || '').replace(c.code, '').replace(/\s+/g, ' ').trim().slice(0, 80),
+					age: 'just now',
+				});
 			}
 		}
 
-		return { ok: false, result: `Checked ${allMessages.length} recent messages but found no verification code` };
+		if (!codes.length) {
+			return { ok: true, result: 'No verification codes found in recent messages, email, or notifications.' };
+		}
+
+		const lines = codes.map((c, i) => `${i + 1}. [${c.maskedCode}] from ${c.source} (${c.sender || 'unknown'}) — ${c.age}${c.snippet ? ': ' + c.snippet : ''}`);
+		return { ok: true, result: `Found ${codes.length} code(s):\n${lines.join('\n')}` };
 	} catch (err) {
-		log.error('Auth', 'auto_2fa error:', err.message);
+		log.error('Auth', 'get_codes error:', err.message);
 		return { ok: false, result: `Error: ${err.message}` };
 	}
 }
 
-module.exports = { auto_2fa, readMessages, readMail, readNotifications, extractOTP, stripHtmlTags, extractTextFromBinaryData, extractVerificationLink };
+// ---- Tool: paste_code — paste a specific code into the focused field ----
+
+async function paste_code(args) {
+	try {
+		const twoFA = require('../two-fa');
+		const keyword = (args.source || args.keyword || 'latest').toLowerCase();
+
+		// Look up full code from cache
+		let fullCode = twoFA.getFullCode(keyword);
+
+		// If not in cache, do a fresh scan
+		if (!fullCode) {
+			const fresh = await freshScan(parseInt(args.max_age_seconds) || 300);
+			if (fresh.length) {
+				// Try keyword match on fresh results
+				const match = fresh.find(c =>
+					(c.sender || '').toLowerCase().includes(keyword) ||
+					(c.source || '').toLowerCase().includes(keyword) ||
+					(c.text || '').toLowerCase().includes(keyword)
+				) || fresh[0]; // fallback to most recent
+				fullCode = match?.code;
+			}
+		}
+
+		if (!fullCode) {
+			return { ok: false, result: `No code found matching "${keyword}". Try get_codes first to see available codes.` };
+		}
+
+		const masked = fullCode.slice(0, 2) + '*'.repeat(Math.max(0, fullCode.length - 2));
+		log.info('Auth', `Pasting code ${masked} for "${keyword}"`);
+
+		const typeResult = await runHelper({ action: 'type_text', text: fullCode });
+		if (!typeResult.ok) {
+			return { ok: false, result: `Found code ${masked} but failed to type it: ${typeResult.result}` };
+		}
+		return { ok: true, result: `Pasted ${fullCode.length}-digit code (${masked}) into the focused field.` };
+	} catch (err) {
+		log.error('Auth', 'paste_code error:', err.message);
+		return { ok: false, result: `Error: ${err.message}` };
+	}
+}
+
+// Legacy tool — kept for backward compatibility, delegates to new tools
+async function auto_2fa(args) {
+	if (args.auto_type === false) {
+		return get_codes(args);
+	}
+	return paste_code({ source: args.source || 'latest', max_age_seconds: args.max_age_seconds });
+}
+
+module.exports = { auto_2fa, get_codes, paste_code, readMessages, readMail, readNotifications, extractOTP, freshScan, stripHtmlTags, extractTextFromBinaryData, extractVerificationLink };

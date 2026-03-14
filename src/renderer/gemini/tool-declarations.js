@@ -224,12 +224,20 @@ export const toolDeclarations = [
 		}, required: ['description'] },
 	},
 	{
-		name: 'auto_2fa',
-		description: 'Automatically retrieve a 2FA/verification code from recent Messages (iMessage/SMS), Mail, or notifications and type it into the currently focused input field. Use when you see a 2FA input field on screen or the user asks you to handle a verification code. Checks the last 5 minutes of messages by default.',
+		name: 'get_codes',
+		description: 'Check for recent 2FA/verification codes from iMessage, email (Mail.app), and notifications. Returns available codes (masked for safety) without typing them. Use when user asks "what\'s my code?", "do I have a verification code?", "any codes?", or when you see a 2FA field and want to check before pasting.',
 		parameters: { type: 'OBJECT', properties: {
-			source: { type: 'STRING', description: '"auto" (default, checks all), "messages" (iMessage/SMS only), "mail" (Mail.app only), "notifications" (Notification Center only)' },
-			auto_type: { type: 'BOOLEAN', description: 'Whether to automatically type the code into the focused field (default: true)' },
+			limit: { type: 'NUMBER', description: 'Max codes to return (default: 5)' },
+			refresh: { type: 'BOOLEAN', description: 'Force a fresh scan instead of using cache (default: false)' },
 			max_age_seconds: { type: 'NUMBER', description: 'How far back to search in seconds (default: 300 = 5 minutes)' },
+		} },
+	},
+	{
+		name: 'paste_code',
+		description: 'Paste a specific 2FA code into the currently focused input field. Use after get_codes or when user says "paste the code", "fill in the code", "paste the Facebook code", etc. Specify a keyword to match the right code (e.g. "facebook", "google") or "latest" for the most recent.',
+		parameters: { type: 'OBJECT', properties: {
+			source: { type: 'STRING', description: 'Keyword to match: service name (e.g. "facebook", "google"), source type ("messages", "mail"), or "latest" for most recent code' },
+			max_age_seconds: { type: 'NUMBER', description: 'How far back to search if code not in cache (default: 300)' },
 		} },
 	},
 	{
