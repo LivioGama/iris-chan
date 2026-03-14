@@ -45,7 +45,7 @@ const SETTINGS_CAPABILITY_PATTERNS = [
 ];
 
 function isSearchTool(name, args) {
-	if (name === 'web_search' || name === 'ask_chatgpt' || name === 'research') return true;
+	if (name === 'web_search' || name === 'research') return true;
 	if (name === 'run_terminal_command') {
 		const cmd = (args?.command || '').toLowerCase();
 		if (cmd.includes('search.py') || cmd.includes('perplexity')) return true;
@@ -56,7 +56,6 @@ function isSearchTool(name, args) {
 
 function searchLabel(name, args) {
 	if (name === 'web_search') return args?.query || 'Searching...';
-	if (name === 'ask_chatgpt') return args?.prompt || 'Asking ChatGPT...';
 	if (name === 'research') return args?.query || 'Deep researching...';
 	if (name === 'run_terminal_command') {
 		const m = (args?.command || '').match(/search\.py\s+["']([^"']+)["']/);

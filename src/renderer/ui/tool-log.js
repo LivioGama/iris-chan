@@ -24,7 +24,7 @@ const TOOL_LABELS = {
 	clipboard_read: 'Reading clipboard',
 	clipboard_write: 'Writing to clipboard',
 	web_search: 'Searching the web',
-	ask_chatgpt: 'Asking ChatGPT',
+
 	set_volume: 'Setting volume',
 	notify: 'Sending notification',
 	check_permissions: 'Checking permissions',
@@ -56,7 +56,6 @@ function formatArgs(name, args) {
 	if (name === 'write_file' && args.path) return args.path.split('/').pop();
 	if (name === 'list_directory' && args.path) return args.path.split('/').pop() || args.path;
 	if (name === 'web_search' && args.query) return `"${args.query}"`;
-	if (name === 'ask_chatgpt' && args.prompt) return args.prompt.length > 40 ? args.prompt.slice(0, 40) + '…' : args.prompt;
 	if (name === 'run_terminal_command' && args.command) return args.command.length > 120 ? args.command.slice(0, 120) + '…' : args.command;
 	if (name === 'type_text' && args.text) return args.text.length > 30 ? args.text.slice(0, 30) + '…' : args.text;
 	if (name === 'press_key' && args.key) return args.key;
