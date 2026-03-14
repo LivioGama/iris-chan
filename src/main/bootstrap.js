@@ -29,6 +29,7 @@ const { RuntimeEventPersistence } = require('./runtime/event-persistence');
 const settings = require('./settings');
 const taskQueueService = require('./task-queue/service');
 const twoFA = require('./two-fa');
+const vocabMonitor = require('./vocab/monitor');
 
 function startRuntime({ apiKey }) {
 	const eventBus = new RuntimeEventBus();
@@ -93,6 +94,7 @@ function startRuntime({ apiKey }) {
 		taskQueueWatcher.start(undefined, behaviorEngine);
 
 		registerShortcuts({ behaviorEngine });
+		vocabMonitor.start(apiKey, () => avatarWindow.getWindow());
 	});
 
 	app.on('will-quit', () => {
