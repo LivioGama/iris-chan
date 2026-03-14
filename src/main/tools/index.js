@@ -7,6 +7,7 @@ const { LOG_PATH } = require('../logger');
 const { applyScientificWorkflowDefaults, buildScientificTaskMetadata } = require('../coding/scientific-workflow');
 
 const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './create-skill', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue', './ui-task', './reply-assistant', './links', './observations'];
+const FEEDBACK_GATED_TOOLS = new Set(['self_fix', 'create_skill', 'add_task', 'fix_project']);
 const SCIENTIFIC_TASK_TOOLS = new Set(['fix_project', 'self_fix', 'add_task']);
 const MANAGEMENT_CORRECTION_TOOLS = new Set(['fix_project', 'self_fix', 'add_task']);
 const UI_SEMANTIC_TOOLS = new Set(['open_app', 'type_text', 'press_key', 'scroll', 'click_at', 'double_click', 'mouse_move', 'drag']);
@@ -477,6 +478,24 @@ async function executeCore(name, args, markOk) {
 		const result = skills.getSkillContent(args?.skill_name || '');
 		markOk(result?.ok !== false);
 		return result;
+	}
+
+	if (FEEDBACK_GATED_TOOLS.has(name)) {
+		const currentBehavior = require('../settings').getNamespace('behavior');
+		if (currentBehavior?.feedbackEnabled) {
+			const { getFeedbackStore } = require('../automation/service-ref');
+			const store = getFeedbackStore();
+			if (store) {
+				const item = store.addItem({
+					text: args?.description || args?.goal || args?.prompt || JSON.stringify(args),
+					source: 'tool_gate',
+					metadata: { toolBlocked: name },
+				});
+				log.info('Tools', `Feedback mode gate: blocked ${name}, saved as ${item.id}`);
+				markOk(true);
+				return { ok: true, result: `Feedback mode active — saved as ${item.id} for later review.`, feedbackItemId: item.id };
+			}
+		}
 	}
 
 	const builtin = builtinHandlers[name];
