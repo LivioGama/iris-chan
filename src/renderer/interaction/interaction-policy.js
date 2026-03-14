@@ -69,7 +69,7 @@ export function buildInteractionPromptPolicy(input = {}) {
 		? 'When a reply opportunity appears, ask briefly before reading options aloud.'
 		: 'When a reply opportunity is obvious, you may read short draft options aloud.';
 	const feedbackPolicy = state.feedbackEnabled
-		? 'Feedback mode is active: present drafts and suggestions as revisable, welcome corrections, and keep edit paths explicit.'
+		? 'Feedback mode is active: collect improvement suggestions as feedback items. Do NOT trigger self_fix, create_skill, add_task, or fix_project for improvement requests. Acknowledge, confirm saved, and move on. Read-only tools and direct action requests still work.'
 		: 'Feedback mode is inactive: keep answers decisive and avoid extra revision prompts unless the user asks to adjust.';
 	const introversionPolicy = state.introversionEnabled
 		? 'Introversion mode is active: prefer the shortest complete response, suppress optional follow-up chatter, and downgrade noisy suggestions into brief prompts.'
