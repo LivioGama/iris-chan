@@ -152,6 +152,123 @@ async function testHandlesTimeout() {
 	}
 }
 
+// --- parseUITarsModelOutput tests ---
+
+function testParsesClickAction() {
+	const result = tarsClient.parseUITarsModelOutput('click(512, 384)', 1000, 800);
+	assert.deepStrictEqual(
+		{ action_type: result.action_type, x: result.x, y: result.y },
+		{ action_type: 'click', x: 512, y: 307.2 },
+		'click should denormalize from 1000-space to pixel coords'
+	);
+}
+
+function testParsesDoubleClickAction() {
+	const result = tarsClient.parseUITarsModelOutput('left_double(500, 500)', 1920, 1080);
+	assert.strictEqual(result.action_type, 'double_click');
+	assert.strictEqual(result.x, 960);
+	assert.strictEqual(result.y, 540);
+}
+
+function testParsesRightClickAction() {
+	const result = tarsClient.parseUITarsModelOutput('right_single(250, 750)', 2000, 1000);
+	assert.strictEqual(result.action_type, 'right_click');
+	assert.strictEqual(result.x, 500);
+	assert.strictEqual(result.y, 750);
+}
+
+function testParsesDragAction() {
+	const result = tarsClient.parseUITarsModelOutput('drag(100, 200, 300, 400)', 1000, 1000);
+	assert.strictEqual(result.action_type, 'drag');
+	assert.strictEqual(result.x, 100);
+	assert.strictEqual(result.y, 200);
+	assert.strictEqual(result.x2, 300);
+	assert.strictEqual(result.y2, 400);
+}
+
+function testParsesTypeAction() {
+	const result = tarsClient.parseUITarsModelOutput('type(hello world)', 1000, 1000);
+	assert.strictEqual(result.action_type, 'type');
+	assert.strictEqual(result.text, 'hello world');
+}
+
+function testParsesHotkeyAction() {
+	const result = tarsClient.parseUITarsModelOutput('hotkey(cmd+l)', 1000, 1000);
+	assert.strictEqual(result.action_type, 'hotkey');
+	assert.strictEqual(result.key, 'cmd+l');
+}
+
+function testParsesScrollAction() {
+	const result = tarsClient.parseUITarsModelOutput('scroll(down, 5)', 1000, 1000);
+	assert.strictEqual(result.action_type, 'scroll');
+	assert.strictEqual(result.direction, 'down');
+	assert.strictEqual(result.amount, 5);
+}
+
+function testParsesWaitAction() {
+	const result = tarsClient.parseUITarsModelOutput('wait(2)', 1000, 1000);
+	assert.strictEqual(result.action_type, 'wait');
+	assert.strictEqual(result.duration_ms, 2000);
+}
+
+function testParsesFinishedAction() {
+	const result = tarsClient.parseUITarsModelOutput('finished(task complete)', 1000, 1000);
+	assert.strictEqual(result.action_type, 'finished');
+	assert.strictEqual(result.result, 'task complete');
+}
+
+function testParsesCallUserAction() {
+	const result = tarsClient.parseUITarsModelOutput('call_user(need help with password)', 1000, 1000);
+	assert.strictEqual(result.action_type, 'finished');
+	assert.strictEqual(result.result, 'call_user: need help with password');
+}
+
+function testExtractsThoughtPrefix() {
+	const result = tarsClient.parseUITarsModelOutput(
+		'Thought: The search button is in the top right corner\nclick(900, 50)',
+		1000, 1000
+	);
+	assert.strictEqual(result.action_type, 'click');
+	assert.strictEqual(result.thought, 'The search button is in the top right corner');
+	assert.strictEqual(result.x, 900);
+	assert.strictEqual(result.y, 50);
+}
+
+function testReturnsNullForUnparseableOutput() {
+	assert.strictEqual(tarsClient.parseUITarsModelOutput('', 1000, 1000), null, 'empty string');
+	assert.strictEqual(tarsClient.parseUITarsModelOutput('random text', 1000, 1000), null, 'no action');
+	assert.strictEqual(tarsClient.parseUITarsModelOutput(null, 1000, 1000), null, 'null input');
+	assert.strictEqual(tarsClient.parseUITarsModelOutput(42, 1000, 1000), null, 'non-string');
+}
+
+function testParsedOutputNormalizesThroughPipeline() {
+	const parsed = tarsClient.parseUITarsModelOutput('click(500, 500)', 1000, 800);
+	const normalized = tarsClient.normalizeTarsResponse(parsed);
+	assert.strictEqual(normalized.ok, true, 'parsed VLM output should normalize successfully');
+	assert.strictEqual(normalized.actionType, 'click');
+	assert.strictEqual(normalized.x, 500);
+	assert.strictEqual(normalized.y, 400);
+	const validated = tarsClient.validateTarsAction(normalized, { imageWidth: 1000, imageHeight: 800 });
+	assert.strictEqual(validated.ok, true, 'normalized VLM output should pass validation');
+}
+
+function testReadsProviderAndModelEnvVars() {
+	process.env.UI_TARS_PROVIDER = 'openai-compatible';
+	process.env.UI_TARS_MODEL = 'ui-tars-72b';
+	process.env.UI_TARS_URL = 'https://example.com/v1/chat/completions';
+	process.env.UI_TARS_API_KEY = 'test-key';
+	try {
+		const config = tarsClient.getTarsConfig();
+		assert.strictEqual(config.provider, 'openai-compatible');
+		assert.strictEqual(config.model, 'ui-tars-72b');
+	} finally {
+		process.env.UI_TARS_PROVIDER = '';
+		process.env.UI_TARS_MODEL = '';
+		process.env.UI_TARS_URL = '';
+		process.env.UI_TARS_API_KEY = '';
+	}
+}
+
 Promise.resolve()
 	.then(testNormalizeFixtureResponse)
 	.then(testNormalizesDragAction)
@@ -163,6 +280,21 @@ Promise.resolve()
 	.then(testReadsUiTarsEnvironmentAliases)
 	.then(testHandlesMalformedJsonResponse)
 	.then(testHandlesTimeout)
+	// VLM parser tests
+	.then(testParsesClickAction)
+	.then(testParsesDoubleClickAction)
+	.then(testParsesRightClickAction)
+	.then(testParsesDragAction)
+	.then(testParsesTypeAction)
+	.then(testParsesHotkeyAction)
+	.then(testParsesScrollAction)
+	.then(testParsesWaitAction)
+	.then(testParsesFinishedAction)
+	.then(testParsesCallUserAction)
+	.then(testExtractsThoughtPrefix)
+	.then(testReturnsNullForUnparseableOutput)
+	.then(testParsedOutputNormalizesThroughPipeline)
+	.then(testReadsProviderAndModelEnvVars)
 	.then(() => {
 		console.log('TARS client tests passed.');
 	})
