@@ -129,6 +129,22 @@ class ConvexClient {
 	async getQueueTasksByProject(projectPath) {
 		return this._run('taskQueue:getByProject', { projectPath });
 	}
+
+	async saveObservation(observation, idempotencyKey) {
+		return this._run('observations:saveObservation', { observation, idempotencyKey });
+	}
+
+	async patchObservationEmbedding(id, embedding, embeddingStatus) {
+		return this._run('observations:patchObservationEmbedding', { id, embedding, embeddingStatus });
+	}
+
+	async searchObservations(embedding, limit, appFilter, minScore) {
+		return this._run('observations:searchObservations', { embedding, limit, appFilter, minScore });
+	}
+
+	async getRecentObservations(limit, sessionId) {
+		return this._run('observations:getRecentObservations', { limit, sessionId });
+	}
 }
 
 module.exports = { ConvexClient };
