@@ -62,6 +62,7 @@ function phaseFromType(type) {
 	if (type === 'INTERRUPT') return 'interrupt';
 	if (type === 'TASK_DONE') return 'done';
 	if (type === 'INTENT_PREDICTION') return 'thinking';
+	if (type?.startsWith('TWO_FA_')) return '2fa';
 	return 'task';
 }
 
@@ -78,6 +79,12 @@ function titleFromType(type) {
 		case 'DB_HEALTH': return 'Database Health';
 		case 'PROACTIVE_SUGGESTION': return 'Proactive Suggestion';
 		case 'INTENT_PREDICTION': return 'Intent Predicted';
+		case 'TWO_FA_FIELD_DETECTED': return '2FA Detected';
+		case 'TWO_FA_FILL_START': return '2FA Filling';
+		case 'TWO_FA_FILL_SUCCESS': return '2FA Filled';
+		case 'TWO_FA_FILL_FAILED': return '2FA Failed';
+		case 'TWO_FA_NO_CODE': return '2FA No Code';
+		case 'TWO_FA_LOW_CONFIDENCE': return '2FA Low Confidence';
 		default: return String(type || 'Event');
 	}
 }
@@ -98,6 +105,26 @@ function formatMessage(evt) {
 		const intents = evt.payload?.intents || [];
 		if (!intents.length) return 'No confident predictions.';
 		return intents.map((i) => `${i.type}@${(i.confidence || 0).toFixed(2)}: ${i.suggestedAction || i.description || ''}`).join(' | ');
+	}
+	if (evt.type === 'TWO_FA_FIELD_DETECTED') {
+		return `Detected verification field in ${evt.payload?.appName || 'app'}`;
+	}
+	if (evt.type === 'TWO_FA_FILL_START') {
+		return `Filling ${evt.payload?.codeLength || 6}-digit code from ${evt.payload?.source || 'source'}`;
+	}
+	if (evt.type === 'TWO_FA_FILL_SUCCESS') {
+		const method = evt.payload?.method ? ` via ${evt.payload.method}` : '';
+		return `Code filled successfully${method}`;
+	}
+	if (evt.type === 'TWO_FA_FILL_FAILED') {
+		return `Fill failed: ${evt.payload?.error || 'unknown error'}`;
+	}
+	if (evt.type === 'TWO_FA_NO_CODE') {
+		return `No code found for ${evt.payload?.appName || 'app'}`;
+	}
+	if (evt.type === 'TWO_FA_LOW_CONFIDENCE') {
+		const conf = evt.payload?.confidence?.toFixed(2) || '?';
+		return `Confidence ${conf} below threshold ${evt.payload?.threshold || 0.85}`;
 	}
 	if (evt.type === 'ACTION_VERIFY_FAIL') return 'Visual check needs another pass.';
 	if (evt.type === 'ACTION_VERIFY_OK') return 'Visual check passed.';

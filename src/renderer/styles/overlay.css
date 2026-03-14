@@ -464,6 +464,7 @@ canvas {
 .tl-card.phase-db { border-color: rgba(186, 169, 255, 0.2); }
 .tl-card.phase-interrupt { border-color: rgba(255, 188, 150, 0.22); }
 .tl-card.phase-done { border-color: rgba(145, 227, 177, 0.22); }
+.tl-card.phase-2fa { border-color: rgba(255, 178, 102, 0.22); }
 
 .tl-head {
 	display: flex;
