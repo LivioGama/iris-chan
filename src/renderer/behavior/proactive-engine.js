@@ -1,4 +1,5 @@
 import { EVENT_TYPES } from '../../shared/event-types.web.js';
+import { INTENT_PREDICTION_TIERS, tierForConfidence } from '../../shared/core-principles.web.js';
 import { info as logInfo, error as logError } from '../logger.js';
 
 const FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
@@ -135,6 +136,7 @@ export class ProactiveEngine {
 				kind: coerceKind(suggestion.kind),
 				suggestion: String(suggestion.suggestion || '').trim(),
 				confidence: Number(suggestion.confidence || 0),
+				tier: tierForConfidence(suggestion.confidence),
 				context: {
 					app: frontmostApp,
 					contextFingerprint,
@@ -217,6 +219,7 @@ export class ProactiveEngine {
 			`Frontmost app/window: ${frontmostApp}`,
 			`Capture fingerprint: ${contextFingerprint}`,
 			`Capture geometry: ${ctx.imageWidth || '?'}x${ctx.imageHeight || '?'} image, ${ctx.displayWidth || '?'}x${ctx.displayHeight || '?'} display`,
+			`Intent prediction tiers: ${INTENT_PREDICTION_TIERS.map(t => `${t.name}(>=${t.minConfidence})`).join(', ')}`,
 			'JSON schema:',
 			'{"suggest":boolean,"kind":"next-step","suggestion":"string","confidence":0.0,"rationale":"string"}',
 		].join('\n');
