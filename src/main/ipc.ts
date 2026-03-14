@@ -7,6 +7,7 @@ import * as skillController from './controllers/skillController';
 import * as convexController from './controllers/convexController';
 import * as kanbanController from './controllers/kanbanController';
 import * as taskQueueController from './controllers/taskQueueController';
+import * as feedbackController from './controllers/feedbackController';
 
 export function register(apiKey: string) {
 	systemController.register(apiKey);
@@ -17,4 +18,5 @@ export function register(apiKey: string) {
 	convexController.register();
 	kanbanController.register();
 	taskQueueController.register();
+	feedbackController.register();
 }

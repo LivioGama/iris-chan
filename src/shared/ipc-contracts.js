@@ -69,6 +69,14 @@ const CHANNELS = {
 	SAVE_OBSERVATION: 'save-observation',
 	SEARCH_OBSERVATIONS: 'search-observations',
 	GET_RECENT_OBSERVATIONS: 'get-recent-observations',
+	FEEDBACK_ADD: 'feedback:add',
+	FEEDBACK_GET_ALL: 'feedback:get-all',
+	FEEDBACK_GET_PENDING: 'feedback:get-pending',
+	FEEDBACK_APPROVE: 'feedback:approve',
+	FEEDBACK_DISMISS: 'feedback:dismiss',
+	FEEDBACK_REMOVE: 'feedback:remove',
+	FEEDBACK_CLEAR: 'feedback:clear',
+	FEEDBACK_PENDING_COUNT: 'feedback:pending-count',
 };
 
 const RUNTIME_CHANNELS = {
