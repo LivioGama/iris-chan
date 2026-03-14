@@ -17,6 +17,8 @@ export interface Config {
 		endpoint: string;
 		apiKey: string;
 		timeoutMs: number;
+		provider: string;
+		model: string;
 	};
 	audio: {
 		captureRate: number;
@@ -184,6 +186,8 @@ const config: Config = {
 		endpoint: process.env.UI_TARS_URL || process.env.TARS_ENDPOINT || '',
 		apiKey: process.env.UI_TARS_API_KEY || process.env.TARS_API_KEY || '',
 		timeoutMs: Math.max(1000, Number(process.env.UI_TARS_TIMEOUT_MS || process.env.TARS_TIMEOUT_MS || 8000)),
+		provider: (process.env.UI_TARS_PROVIDER || process.env.TARS_PROVIDER || 'custom').trim().toLowerCase(),
+		model: (process.env.UI_TARS_MODEL || process.env.TARS_MODEL || 'ui-tars-7b-dpo').trim(),
 	},
 	audio: {
 		captureRate: 16000,

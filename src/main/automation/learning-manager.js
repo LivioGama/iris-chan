@@ -545,7 +545,42 @@ class LearningManager {
 				successfulTools: this.recentToolExecutions.filter((item) => item.success !== false).slice(-4),
 				createdAt: nowIso(),
 			});
+		} else {
+			// Regex found nothing — try LLM-based classification for ambiguous cases
+			this._tryLlmClassification(text).catch((err) => {
+				log.error('Learning', `LLM classification failed: ${err?.message || err}`);
+			});
 		}
+	}
+
+	async _tryLlmClassification(text) {
+		const { getIntentPredictionEngine } = require('./service-ref');
+		const intentEngine = getIntentPredictionEngine();
+		if (!intentEngine?.available) return;
+
+		const recentTools = this.recentToolExecutions.slice(-10).map((t) => ({
+			name: t.name, success: t.success !== false, durationMs: Number(t.durationMs || 0),
+		}));
+		const recentTurns = this.recentTurns.slice(-5).map((t) => ({
+			role: t.role, text: String(t.text || '').slice(0, 200),
+		}));
+
+		const classification = await intentEngine.classifyText(text, { recentTools, recentTurns });
+		if (!classification) return;
+
+		log.info('Learning', `LLM classified conversation: type=${classification.type} reason=${classification.reason || 'n/a'} text=${String(text || '').slice(0, 140)}`);
+		this.enqueue({
+			type: classification.type,
+			backgroundOnly: false,
+			domain: inferDomain(text),
+			issueSignature: classification.key,
+			userText: text,
+			guidanceText: text,
+			classification,
+			failedTools: this.recentToolExecutions.filter((item) => item.success === false).slice(-4),
+			successfulTools: this.recentToolExecutions.filter((item) => item.success !== false).slice(-4),
+			createdAt: nowIso(),
+		});
 	}
 
 	recordToolExecution(name, args, result, success, durationMs) {
