@@ -122,6 +122,11 @@ export class ProactiveEngine {
 			const handledReply = await this._evaluateReplyOpportunity({ frontmostApp, capture, contextFingerprint });
 			if (handledReply) return;
 
+			// Try Groq-based intent prediction first (faster, cheaper, context-aware)
+			const intentHandled = await this._evaluateWithIntentEngine({ frontmostApp, capture, contextFingerprint });
+			if (intentHandled) return;
+
+			// Fall back to Gemini Flash vision-based evaluation
 			const suggestion = await this._evaluateWithFlash({ frontmostApp, capture, contextFingerprint });
 			if (!suggestion?.suggest) return;
 			if (!this.behavior.canSuggest({
@@ -150,6 +155,47 @@ export class ProactiveEngine {
 			this.voice?.speakProactiveSuggestion?.(payload.suggestion, payload);
 		} finally {
 			this.inFlight = false;
+		}
+	}
+
+	async _evaluateWithIntentEngine({ frontmostApp, capture, contextFingerprint }) {
+		try {
+			const prediction = await window.electronAPI?.predictIntent?.({
+				frontmostApp,
+				screenMeta: capture?.context || null,
+				behaviorMode: this.behavior?.getMode?.() || 'silent',
+			});
+			if (!prediction?.intents?.length) return false;
+
+			const topIntent = prediction.intents[0];
+			if (!this.behavior.canSuggest({
+				confidence: topIntent.confidence,
+				contextFingerprint,
+				now: Date.now(),
+			})) {
+				return false;
+			}
+
+			const payload = {
+				kind: coerceKind(topIntent.type),
+				suggestion: String(topIntent.suggestedAction || topIntent.description || '').trim(),
+				confidence: Number(topIntent.confidence || 0),
+				tier: tierForConfidence(topIntent.confidence),
+				context: {
+					app: frontmostApp,
+					contextFingerprint,
+					rationale: String(topIntent.description || '').trim(),
+					source: 'intent-prediction',
+				},
+			};
+			if (!payload.suggestion) return false;
+
+			this.eventBus.emitEvent(EVENT_TYPES.PROACTIVE_SUGGESTION, payload, 'intent-prediction');
+			this.voice?.speakProactiveSuggestion?.(payload.suggestion, payload);
+			return true;
+		} catch (err) {
+			logError('IntentPrediction', `Evaluation failed: ${err?.message || err}`);
+			return false;
 		}
 	}
 
