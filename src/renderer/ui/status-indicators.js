@@ -1,4 +1,4 @@
-const INDICATOR_NAMES = ['ws', 'mic', 'voice', 'send', 'think', 'speak', 'tool', 'srch', 'auto'];
+const INDICATOR_NAMES = ['ws', 'mic', 'voice', 'send', 'think', 'speak', 'tool', 'srch', 'auto', '2fa'];
 const indicators = new Map();
 
 export function initIndicators(containerEl) {

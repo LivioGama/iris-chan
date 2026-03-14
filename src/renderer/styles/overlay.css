@@ -199,11 +199,13 @@ canvas {
 #dbg-tool { color: rgba(123, 226, 216, 0.92); }
 #dbg-srch { color: rgba(195, 172, 255, 0.92); }
 #dbg-auto { color: rgba(144, 228, 169, 0.92); }
+#dbg-2fa { color: rgba(255, 178, 102, 0.92); }
 
 #dbg-think.active::before,
 #dbg-tool.active::before,
 #dbg-srch.active::before,
-#dbg-auto.active::before {
+#dbg-auto.active::before,
+#dbg-2fa.active::before {
 	animation: overlayPulse 0.8s ease-in-out infinite;
 }
 
