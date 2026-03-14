@@ -1,5 +1,6 @@
 import { pushTimelineEvent } from './ui/activity-timeline.js';
 import { showBubble } from './ui/bubbles.js';
+import { updateIndicator } from './ui/status-indicators.js';
 import { summarizeMilestoneLine, shouldNarrateMilestone } from './tasks/milestone-summarizer.js';
 
 let lastDbBubbleState = null;
@@ -71,6 +72,40 @@ export function onRuntimeEvent(evt, { askedProgress = false } = {}) {
 
 	if (evt.type === 'INTENT_PREDICTION') {
 		pushTimelineEvent(evt);
+		return;
+	}
+
+	if (evt.type === 'TWO_FA_FIELD_DETECTED') {
+		pushTimelineEvent(evt);
+		updateIndicator('2fa', true);
+		showBubble('context', `2FA field detected in ${evt.payload?.appName || 'app'}`);
+		return;
+	}
+
+	if (evt.type === 'TWO_FA_FILL_START') {
+		pushTimelineEvent(evt);
+		updateIndicator('2fa', true);
+		showBubble('context', `Filling code from ${evt.payload?.source || 'source'}...`);
+		return;
+	}
+
+	if (evt.type === 'TWO_FA_FILL_SUCCESS') {
+		pushTimelineEvent(evt);
+		showBubble('context', '2FA code filled successfully');
+		setTimeout(() => updateIndicator('2fa', false), 3000);
+		return;
+	}
+
+	if (evt.type === 'TWO_FA_FILL_FAILED') {
+		pushTimelineEvent(evt);
+		updateIndicator('2fa', false);
+		showBubble('context', `2FA fill failed: ${evt.payload?.error || 'unknown'}`);
+		return;
+	}
+
+	if (evt.type === 'TWO_FA_NO_CODE' || evt.type === 'TWO_FA_LOW_CONFIDENCE') {
+		pushTimelineEvent(evt);
+		updateIndicator('2fa', false);
 		return;
 	}
 
