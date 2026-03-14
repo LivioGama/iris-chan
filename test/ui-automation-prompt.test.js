@@ -23,8 +23,8 @@ assert.ok(
 );
 
 assert.ok(
-	systemPrompt.includes('prefer semantic/native execution first'),
-	'system prompt should bias semantic/native UI execution for speed and reliability'
+	systemPrompt.includes('prefer run_ui_task first'),
+	'system prompt should bias primary UI execution through run_ui_task'
 );
 
 assert.ok(
@@ -48,7 +48,7 @@ assert.ok(
 );
 
 assert.ok(
-	systemPrompt.includes('If the user greets you, says "Iris" to get your attention, or asks where you are, answer briefly that you are here and listening.'),
+	systemPrompt.includes('If the user greets you, says "Iris" to get your attention, asks where you are, or opens with a quick status ping like "Hello Iris, what\'s going on?", answer briefly that you are here and listening.'),
 	'system prompt should reassure casual presence checks instead of re-asking for task context'
 );
 
