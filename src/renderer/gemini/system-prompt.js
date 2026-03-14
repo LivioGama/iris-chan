@@ -1,7 +1,38 @@
-// System instruction builder (vocab, corrections)
+// System instruction builder (vocab, corrections, observations)
 import { buildRecentSeenPrompt } from '../vocab/recent-seen-store.js';
 import { buildInteractionPromptPolicy } from '../interaction/interaction-policy.js';
 import { buildCorePrinciplePreamble } from '../../shared/core-principles.web.js';
+
+const OBSERVATION_REFRESH_INTERVAL_MS = 60_000;
+const OBSERVATION_MAX_AGE_MS = 30 * 60_000;
+let _recentObservations = [];
+let _lastObservationFetchAt = 0;
+
+export async function refreshRecentObservations() {
+	const now = Date.now();
+	if (now - _lastObservationFetchAt < OBSERVATION_REFRESH_INTERVAL_MS) return;
+	_lastObservationFetchAt = now;
+	try {
+		const results = await window.electronAPI.getRecentObservations(5);
+		_recentObservations = Array.isArray(results) ? results : [];
+	} catch {
+		// Silent — observation prompt is best-effort
+	}
+}
+
+export function buildRecentObservationsPrompt(now = Date.now()) {
+	const active = _recentObservations.filter(
+		(obs) => obs && obs.timestamp && now - obs.timestamp < OBSERVATION_MAX_AGE_MS
+	).slice(0, 3);
+	if (!active.length) return '';
+	const lines = active.map((obs) => {
+		const agoMin = Math.round((now - obs.timestamp) / 60_000);
+		const agoStr = agoMin < 1 ? 'just now' : agoMin < 60 ? `${agoMin}m ago` : `${Math.round(agoMin / 60)}h ago`;
+		const desc = (obs.description || '').slice(0, 150);
+		return `- ${agoStr} [${obs.appName || 'Unknown'}]: ${desc}`;
+	});
+	return `\n\nRECENT VISUAL OBSERVATIONS:\n${lines.join('\n')}`;
+}
 
 const MAX_SYSTEM_TERMS = 40;
 
@@ -209,7 +240,7 @@ FOREGROUND UI: run_ui_task
 ACTIONS: type_text, press_key, click_at (left/right), double_click, mouse_move, drag, scroll
 APPS: open_app, get_default_app, window_manage (left/right/maximize/center), get_frontmost_app
 SYSTEM: set_volume, run_terminal_command, notify, check_permissions, clipboard_read, clipboard_write
-SEARCH: web_search (search the web via Perplexity with explicit sources \u2014 PREFERRED for all searches), ask_chatgpt (fallback: send prompt to ChatGPT desktop app)
+SEARCH: web_search (search the web via Perplexity with explicit sources)
 LINKS: recall_link (search saved link history by natural language \u2014 use when user asks "what was that link about X?"), open_link (find and open a previously seen link in the browser)
 FILES: read_file, write_file, list_directory, move_file, get_finder_selection
 WORKSPACE: set_workspace (set current project directory), get_workspace (show current directory)

@@ -107,11 +107,19 @@ function getTarsConfig() {
 	const enabled = envEnabled != null
 		? String(envEnabled) !== '0'
 		: (tars.enabled === true || (Boolean(endpoint) && Boolean(apiKey)));
+	const provider = String(
+		firstDefined(process.env.UI_TARS_PROVIDER, process.env.TARS_PROVIDER, tars.provider, 'custom')
+	).trim().toLowerCase();
+	const model = String(
+		firstDefined(process.env.UI_TARS_MODEL, process.env.TARS_MODEL, tars.model, 'ui-tars-7b-dpo')
+	).trim();
 	return {
 		enabled,
 		endpoint,
 		apiKey,
 		timeoutMs,
+		provider,
+		model,
 	};
 }
 
