@@ -21,6 +21,8 @@ function throwIfAborted(signal) {
 
 function stepLabel(step) {
 	switch (step.type) {
+		case 'genericTarsGoal':
+			return step.target || step.rawGoal || 'Perform the requested UI task';
 		case 'openApp':
 			return `Open ${step.appName || step.appHint}`;
 		case 'openUrl':
