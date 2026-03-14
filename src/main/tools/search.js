@@ -8,8 +8,7 @@ const convexStore = require('../convex-store');
 const SEARCH_PROVIDER_KEY = 'search.provider.preferred';
 const PROVIDER_PERPLEXITY = 'perplexity';
 const PROVIDER_OLLAMA = 'ollama';
-const PROVIDER_CHATGPT_APP = 'chatgpt-app';
-const KNOWN_PROVIDERS = new Set([PROVIDER_PERPLEXITY, PROVIDER_OLLAMA, PROVIDER_CHATGPT_APP]);
+const KNOWN_PROVIDERS = new Set([PROVIDER_PERPLEXITY, PROVIDER_OLLAMA]);
 
 function normalizeProvider(value = '') {
 	return String(value || '').trim().toLowerCase();
@@ -107,7 +106,6 @@ function resolveProviderOrder(args = {}, env = process.env, memoryStore = getMem
 		...configProviders.map(normalizeProvider),
 		PROVIDER_PERPLEXITY,
 		PROVIDER_OLLAMA,
-		PROVIDER_CHATGPT_APP,
 	]).filter((provider) => KNOWN_PROVIDERS.has(provider));
 }
 
@@ -255,39 +253,9 @@ async function runPerplexitySearch(query, env = process.env) {
 	};
 }
 
-async function runChatgptAppSearch(query) {
-	const startedAt = Date.now();
-	await new Promise((resolve) => {
-		exec(`osascript -e 'tell application "ChatGPT" to activate'`, { timeout: 3000 }, resolve);
-	});
-	await new Promise((resolve) => setTimeout(resolve, 800));
-	await runHelper({ action: 'press_key', key: 'cmd+n' });
-	await new Promise((resolve) => setTimeout(resolve, 500));
-	await runHelper({ action: 'type_text', text: `Use web search and answer succinctly with sources.\n\n${query}` });
-	await new Promise((resolve) => setTimeout(resolve, 300));
-	await runHelper({ action: 'press_key', key: 'return' });
-	await new Promise((resolve) => setTimeout(resolve, 8000));
-	await runHelper({ action: 'press_key', key: 'cmd+shift+c' });
-	await new Promise((resolve) => setTimeout(resolve, 300));
-	const clipResult = await runHelper({ action: 'clipboard_read' });
-	const response = String(clipResult?.result || '').trim();
-	if (!response) {
-		throw new Error('ChatGPT app returned no response');
-	}
-	return {
-		ok: true,
-		provider: PROVIDER_CHATGPT_APP,
-		result: response.slice(0, 4000),
-		rawResults: [],
-		sources: [],
-		latencyMs: Date.now() - startedAt,
-	};
-}
-
 async function runSearchWithProvider(provider, query, env = process.env) {
 	if (provider === PROVIDER_PERPLEXITY) return runPerplexitySearch(query, env);
 	if (provider === PROVIDER_OLLAMA) return runOllamaSearch(query, env);
-	if (provider === PROVIDER_CHATGPT_APP) return runChatgptAppSearch(query);
 	throw new Error(`Unsupported search provider: ${provider}`);
 }
 
@@ -365,25 +333,8 @@ async function web_search(args = {}) {
 	};
 }
 
-async function ask_chatgpt(args = {}) {
-	const prompt = String(args.prompt || '').trim();
-	if (!prompt) return { ok: false, result: 'No prompt provided' };
-	try {
-		const response = await runChatgptAppSearch(prompt);
-		return {
-			ok: true,
-			result: response.result,
-			provider: PROVIDER_CHATGPT_APP,
-			latencyMs: response.latencyMs,
-		};
-	} catch (err) {
-		return { ok: false, result: `Search error: ${err.message}` };
-	}
-}
-
 module.exports = {
 	web_search,
-	ask_chatgpt,
 	_private: {
 		resolveProviderOrder,
 		getRememberedProvider,
@@ -391,7 +342,6 @@ module.exports = {
 		emitSearchRuntimeEvent,
 		runPerplexitySearch,
 		runOllamaSearch,
-		runChatgptAppSearch,
 		hashQuery,
 		appendSources,
 		uniqueSources,
