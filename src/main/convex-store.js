@@ -521,5 +521,6 @@ module.exports = {
     cleanText,
     normalizeSearchResult,
     dedupeSearchResults,
+    get currentSessionId() { return currentSessionId; },
   },
 };

@@ -6,7 +6,7 @@ const { getLearningManager } = require('../automation/service-ref');
 const { LOG_PATH } = require('../logger');
 const { applyScientificWorkflowDefaults, buildScientificTaskMetadata } = require('../coding/scientific-workflow');
 
-const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './create-skill', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue', './ui-task', './reply-assistant', './links'];
+const TOOL_MODULES = ['./input', './apps', './files', './clipboard', './search', './system', './vocab', './self-fix', './create-skill', './input-meta', './design', './3d-gen', './auth', './fix-project', './task-queue', './ui-task', './reply-assistant', './links', './observations'];
 const SCIENTIFIC_TASK_TOOLS = new Set(['fix_project', 'self_fix', 'add_task']);
 const MANAGEMENT_CORRECTION_TOOLS = new Set(['fix_project', 'self_fix', 'add_task']);
 const UI_SEMANTIC_TOOLS = new Set(['open_app', 'type_text', 'press_key', 'scroll', 'click_at', 'double_click', 'mouse_move', 'drag']);
