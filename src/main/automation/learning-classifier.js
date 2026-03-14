@@ -431,6 +431,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.progress_accountability',
+				pillar: PILLARS.VERIFICATION.name,
 				reason: 'progress accountability guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -451,6 +452,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.terminal_log_observability',
+				pillar: PILLARS.VERIFICATION.name,
 				reason: 'terminal log observability guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -471,6 +473,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.task_creation_accountability',
+				pillar: PILLARS.AUTONOMY.name,
 				reason: 'task creation accountability guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -491,6 +494,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.direct_task_creation',
+				pillar: PILLARS.AUTONOMY.name,
 				reason: 'direct task creation guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -511,6 +515,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.positive_feedback_closure',
+				pillar: PILLARS.LEARNING.name,
 				reason: 'positive feedback closure guidance',
 				payload: buildPositiveFeedbackClosurePolicyPayload(text, 0.97),
 			};
@@ -519,6 +524,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.cancellation_closure',
+				pillar: PILLARS.AUTONOMY.name,
 				reason: 'cancellation closure guidance',
 				payload: buildCancellationClosurePolicyPayload(text, 0.97),
 			};
@@ -527,6 +533,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.editor_self_improvement_generalization',
+				pillar: PILLARS.LEARNING.name,
 				reason: 'editor self-improvement generalization guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -547,6 +554,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.thorough_execution',
+				pillar: PILLARS.AUTONOMY.name,
 				reason: 'thorough execution guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -567,6 +575,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.conflict_resolution_continuation',
+				pillar: PILLARS.AUTONOMY.name,
 				reason: 'conflict resolution continuation guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -587,6 +596,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.presence_reassurance',
+				pillar: PILLARS.ANTICIPATION.name,
 				reason: 'presence reassurance guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -607,6 +617,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.presence_reassurance',
+				pillar: PILLARS.ANTICIPATION.name,
 				reason: 'assistant attention ping guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -627,6 +638,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.status_bar_icon_visibility',
+				pillar: PILLARS.ANTICIPATION.name,
 				reason: 'status-bar icon visibility guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -646,6 +658,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.pre_click_preparation',
+				pillar: PILLARS.VERIFICATION.name,
 				reason: 'pre-click preparation guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -666,6 +679,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.default_app_resolution',
+				pillar: PILLARS.LEARNING.name,
 				reason: 'default-app guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -685,6 +699,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.native_resolution_before_guess',
+				pillar: PILLARS.LEARNING.name,
 				reason: 'fallback preference guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -701,6 +716,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.screen_visibility_reassurance',
+				pillar: PILLARS.ANTICIPATION.name,
 				reason: 'screen visibility reassurance guidance',
 				payload: {
 					kind: 'fallback_policy',
@@ -720,6 +736,7 @@ class LearningClassifier {
 			return {
 				type: 'core-gap',
 				key: 'issue:action-verification',
+				pillar: PILLARS.VERIFICATION.name,
 				reason: 'action verification guidance',
 				payload: {
 					issueSignature: 'issue:action-verification',
@@ -733,6 +750,7 @@ class LearningClassifier {
 			return {
 				type: 'core-gap',
 				key: 'issue:screen-reference-direct-action',
+				pillar: PILLARS.ANTICIPATION.name,
 				reason: 'screen-reference action guidance',
 				payload: {
 					issueSignature: 'issue:screen-reference-direct-action',
@@ -746,6 +764,7 @@ class LearningClassifier {
 			return {
 				type: 'core-gap',
 				key: 'issue:visible-control-direct-action',
+				pillar: PILLARS.ANTICIPATION.name,
 				reason: 'visible control action guidance',
 				payload: {
 					issueSignature: 'issue:visible-control-direct-action',
@@ -758,6 +777,7 @@ class LearningClassifier {
 			return {
 				type: 'core-gap',
 				key: 'issue:screen-reference-direct-action',
+				pillar: PILLARS.ANTICIPATION.name,
 				reason: 'contextual pointer action guidance',
 				payload: {
 					issueSignature: 'issue:screen-reference-direct-action',
@@ -771,6 +791,7 @@ class LearningClassifier {
 		return {
 			type: 'core-gap',
 			key: `issue:${normalized}`,
+			pillar: PILLARS.LEARNING.name,
 			reason: 'generic user correction',
 			payload: {
 				issueSignature: `issue:${normalized}`,

@@ -20,4 +20,16 @@ export function register() {
     ipcMain.handle(ch.SEMANTIC_SEARCH, (_, query: string, limit: number, roleFilter: string) => {
         return convexStore.semanticSearch(query, limit, roleFilter as any);
     });
+
+    ipcMain.handle(ch.SAVE_OBSERVATION, (_, observation: Record<string, unknown>) => {
+        return convexStore.saveObservation(observation);
+    });
+
+    ipcMain.handle(ch.SEARCH_OBSERVATIONS, (_, query: string, limit: number, appFilter: string) => {
+        return (convexStore as any).searchObservations(query, limit, appFilter || undefined);
+    });
+
+    ipcMain.handle(ch.GET_RECENT_OBSERVATIONS, (_, limit: number, sessionId: string) => {
+        return (convexStore as any).getRecentObservations(limit, sessionId || undefined);
+    });
 }

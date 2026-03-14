@@ -66,6 +66,9 @@ const CHANNELS = {
 	TQ_GET_BY_PROJECT: 'tq:get-by-project',
 	TQ_TASK_UPDATE: 'tq:task-update',
 	TQ_COUNTDOWN_STATE: 'tq:countdown-state',
+	SAVE_OBSERVATION: 'save-observation',
+	SEARCH_OBSERVATIONS: 'search-observations',
+	GET_RECENT_OBSERVATIONS: 'get-recent-observations',
 };
 
 const RUNTIME_CHANNELS = {
