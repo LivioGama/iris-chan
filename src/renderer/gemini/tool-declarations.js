@@ -80,13 +80,8 @@ export const toolDeclarations = [
 	},
 	{
 		name: 'web_search',
-		description: 'Search the web using Perplexity with explicit source provenance. Use this for any web search, research, looking up current information, facts, news, documentation, or answering questions that need up-to-date data. Returns a concise, structured summary plus sources. Prefer this over ask_chatgpt for research.',
+		description: 'Search the web using Perplexity with explicit source provenance. Use this for any web search, research, looking up current information, facts, news, documentation, or answering questions that need up-to-date data. Returns a concise, structured summary plus sources.',
 		parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'The search query \u2014 be specific and descriptive' } }, required: ['query'] },
-	},
-	{
-		name: 'ask_chatgpt',
-		description: 'Send a prompt to the ChatGPT macOS desktop app and get a response. Fallback for complex multi-step research. For simple web searches, prefer the web_search tool instead.',
-		parameters: { type: 'OBJECT', properties: { prompt: { type: 'STRING' } }, required: ['prompt'] },
 	},
 	{
 		name: 'notify',
