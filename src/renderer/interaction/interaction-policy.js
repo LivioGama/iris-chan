@@ -1,5 +1,6 @@
 const DEFAULT_INTERACTION_STATE = Object.freeze({
-	mode: 'silent',
+	mode: 'proactive',
+	proactiveSuggestionsEnabled: true,
 	directMode: false,
 	feedbackEnabled: false,
 	introversionEnabled: false,
@@ -23,8 +24,10 @@ function sanitizeText(value = '') {
 }
 
 export function normalizeInteractionState(input = {}) {
+	const mode = normalizeMode(input?.mode);
 	return {
-		mode: normalizeMode(input?.mode),
+		mode,
+		proactiveSuggestionsEnabled: mode === 'silent' ? false : input?.proactiveSuggestionsEnabled !== false,
 		directMode: !!input?.directMode,
 		feedbackEnabled: !!input?.feedbackEnabled,
 		introversionEnabled: !!input?.introversionEnabled,
@@ -60,11 +63,14 @@ export function getInteractionBadgeState(input = {}) {
 
 export function buildInteractionPromptPolicy(input = {}) {
 	const state = normalizeInteractionState(input);
-	const proactivePosture = state.mode === 'proactive'
+	const proactiveAllowed = state.mode === 'proactive' && state.proactiveSuggestionsEnabled;
+	const proactivePosture = proactiveAllowed
 		? 'suggestion-friendly assistance'
 		: state.mode === 'passive'
 			? 'low-noise assistance'
-			: 'no unsolicited help';
+			: state.mode === 'proactive'
+				? 'proactive mode with unsolicited suggestions disabled'
+				: 'no unsolicited help';
 	const replyPolicy = state.introversionEnabled || state.mode === 'passive'
 		? 'When a reply opportunity appears, ask briefly before reading options aloud.'
 		: 'When a reply opportunity is obvious, you may read short draft options aloud.';
@@ -77,6 +83,7 @@ export function buildInteractionPromptPolicy(input = {}) {
 	return [
 		'- Plain asks always deserve a direct answer or direct action. Silent mode only suppresses unsolicited help; it does not suppress direct replies.',
 		`- Primary mode posture: ${proactivePosture}.`,
+		`- Proactive suggestions are ${proactiveAllowed ? 'enabled' : 'disabled'}${state.mode === 'proactive' ? ' for proactive mode' : ''}.`,
 		`- ${replyPolicy}`,
 		`- ${feedbackPolicy}`,
 		`- ${introversionPolicy}`,
@@ -130,4 +137,3 @@ export function shouldAutoEscalateFromToolFailure({ toolName = '', result = null
 	if (DESTRUCTIVE_UI_INTENT_PATTERN.test(intent)) return false;
 	return NAVIGATIONAL_UI_INTENT_PATTERN.test(intent);
 }
-

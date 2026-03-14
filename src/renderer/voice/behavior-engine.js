@@ -3,7 +3,8 @@ import { IDLE_NOISE_PATTERN } from './transcription-policy.js';
 export class BehaviorEngine {
 	constructor() {
 		this.state = {
-			mode: 'silent',
+			mode: 'proactive',
+			proactiveSuggestionsEnabled: true,
 			directMode: false,
 			feedbackEnabled: false,
 			introversionEnabled: false,
@@ -57,6 +58,7 @@ export class BehaviorEngine {
 	setState(nextState = {}) {
 		if (!nextState || typeof nextState !== 'object') return false;
 		if (!this.setMode(nextState.mode)) return false;
+		this.state.proactiveSuggestionsEnabled = this.state.mode === 'silent' ? false : nextState.proactiveSuggestionsEnabled !== false;
 		this.state.directMode = !!nextState.directMode;
 		this.state.feedbackEnabled = !!nextState.feedbackEnabled;
 		this.state.introversionEnabled = !!nextState.introversionEnabled;
@@ -130,6 +132,7 @@ export class BehaviorEngine {
 
 	shouldEvaluateProactively({ frontmostApp = '', contextFingerprint = '', captureAgeMs = 0, now = Date.now() } = {}) {
 		if (this.state.mode === 'silent') return false;
+		if (!this.state.proactiveSuggestionsEnabled) return false;
 		if (!String(frontmostApp || '').trim()) return false;
 		if (!String(contextFingerprint || '').trim()) return false;
 		if (this.state.mode === 'passive' && now - this.lastUserActivityAt > this.proactiveUserActiveWindowMs) return false;
@@ -148,6 +151,7 @@ export class BehaviorEngine {
 
 	canSuggest({ confidence = 0, contextFingerprint = '', now = Date.now() } = {}) {
 		if (this.state.mode === 'silent') return false;
+		if (!this.state.proactiveSuggestionsEnabled) return false;
 		const threshold = this.proactiveMinConfidence[this.state.mode] ?? 0.92;
 		if (confidence < threshold) return false;
 		const cooldownMs = this.proactiveModeCooldownMs[this.state.mode] ?? this.proactiveCooldownMs;

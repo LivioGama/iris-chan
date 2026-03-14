@@ -37,7 +37,8 @@ const DEFAULT_SETTINGS = Object.freeze({
 		current: config.avatar.current,
 	},
 	behavior: {
-		mode: 'silent',
+		mode: 'proactive',
+		proactiveSuggestionsEnabled: true,
 		directMode: false,
 		feedbackEnabled: false,
 		introversionEnabled: false,
@@ -111,10 +112,10 @@ const REGISTRY = Object.freeze({
 		liveApply: true,
 		normalize: normalizeBehaviorSettings,
 		capabilities: {
-			queryIntents: ['what mode are you in', 'is direct mode on', 'is feedback mode on', 'is introversion mode on'],
-			mutationIntents: ['change behavior mode', 'toggle direct mode', 'set passive mode', 'set proactive mode', 'turn feedback mode on', 'turn introversion mode on'],
-			examples: ['turn direct mode on', 'set mode to proactive', 'turn feedback mode on'],
-			keyPaths: ['behavior.mode', 'behavior.directMode', 'behavior.feedbackEnabled', 'behavior.introversionEnabled'],
+			queryIntents: ['what mode are you in', 'are proactive suggestions on', 'is direct mode on', 'is feedback mode on', 'is introversion mode on'],
+			mutationIntents: ['change behavior mode', 'toggle proactive suggestions', 'toggle direct mode', 'set passive mode', 'set proactive mode', 'turn feedback mode on', 'turn introversion mode on'],
+			examples: ['turn proactive suggestions on', 'turn direct mode on', 'set mode to proactive', 'turn feedback mode on'],
+			keyPaths: ['behavior.mode', 'behavior.proactiveSuggestionsEnabled', 'behavior.directMode', 'behavior.feedbackEnabled', 'behavior.introversionEnabled'],
 		},
 	},
 	logging: {
@@ -303,6 +304,12 @@ function normalizeBehaviorSettings(input = {}) {
 	const merged = mergeDeep(DEFAULT_SETTINGS.behavior, sanitizeKeys('behavior', input));
 	const normalizedMode = LEGACY_MODE_ALIASES[String(merged.mode || '').trim().toLowerCase()];
 	merged.mode = MODE_VALUES.has(normalizedMode) ? normalizedMode : DEFAULT_SETTINGS.behavior.mode;
+	merged.proactiveSuggestionsEnabled = merged.mode === 'silent'
+		? false
+		: normalizeBoolean(
+			merged.proactiveSuggestionsEnabled,
+			DEFAULT_SETTINGS.behavior.proactiveSuggestionsEnabled,
+		);
 	merged.directMode = normalizeBoolean(merged.directMode, DEFAULT_SETTINGS.behavior.directMode);
 	merged.feedbackEnabled = normalizeBoolean(merged.feedbackEnabled, DEFAULT_SETTINGS.behavior.feedbackEnabled);
 	merged.introversionEnabled = normalizeBoolean(merged.introversionEnabled, DEFAULT_SETTINGS.behavior.introversionEnabled);
@@ -362,13 +369,24 @@ function migrateLegacyLogging(rawSettings) {
 	}
 }
 
-function loadSettingsFromDisk() {
+function readRawSettingsFromDisk() {
 	let raw = {};
 	try {
 		raw = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
 	} catch {}
-	raw = migrateLegacyLogging(raw);
-	return normalizeSettings(raw);
+	return migrateLegacyLogging(raw);
+}
+
+function loadSettingsFromDisk() {
+	return normalizeSettings(readRawSettingsFromDisk());
+}
+
+function shouldSyncNormalizedSettings(normalized, raw) {
+	try {
+		return JSON.stringify(normalized) !== JSON.stringify(raw || {});
+	} catch {
+		return true;
+	}
 }
 
 function writeCurrentSettings() {
@@ -472,8 +490,9 @@ function getSettings() {
 
 function init() {
 	if (currentSettings) return getSettings();
-	currentSettings = loadSettingsFromDisk();
-	if (!fs.existsSync(SETTINGS_PATH)) {
+	const rawSettings = readRawSettingsFromDisk();
+	currentSettings = normalizeSettings(rawSettings);
+	if (!fs.existsSync(SETTINGS_PATH) || shouldSyncNormalizedSettings(currentSettings, rawSettings)) {
 		writeCurrentSettings();
 	}
 	startWatcher();
@@ -510,7 +529,11 @@ function shutdown() {
 
 function reloadFromDisk(meta = {}) {
 	const previous = getSettings();
-	currentSettings = loadSettingsFromDisk();
+	const rawSettings = readRawSettingsFromDisk();
+	currentSettings = normalizeSettings(rawSettings);
+	if (shouldSyncNormalizedSettings(currentSettings, rawSettings)) {
+		writeCurrentSettings();
+	}
 	const changedKeys = diffChangedKeys(previous, currentSettings);
 	if (!changedKeys.length) return {
 		ok: true,

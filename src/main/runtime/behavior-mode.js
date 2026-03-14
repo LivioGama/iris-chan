@@ -1,7 +1,8 @@
 class BehaviorModeState {
 	constructor() {
 		this.state = {
-			mode: 'silent',
+			mode: 'proactive',
+			proactiveSuggestionsEnabled: true,
 			directMode: false,
 			feedbackEnabled: false,
 			introversionEnabled: false,
@@ -42,6 +43,7 @@ class BehaviorModeState {
 		}
 		this.state = {
 			mode: nextState.mode,
+			proactiveSuggestionsEnabled: nextState.mode === 'silent' ? false : nextState.proactiveSuggestionsEnabled !== false,
 			directMode: !!nextState.directMode,
 			feedbackEnabled: !!nextState.feedbackEnabled,
 			introversionEnabled: !!nextState.introversionEnabled,

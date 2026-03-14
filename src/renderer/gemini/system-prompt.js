@@ -94,20 +94,23 @@ export function buildSystemInstruction(options = {}) {
 	const behaviorState = options.behaviorState && typeof options.behaviorState === 'object'
 		? options.behaviorState
 		: {};
-	const mode = behaviorState.mode || 'silent';
+	const mode = behaviorState.mode || 'proactive';
 	const directMode = behaviorState.directMode ?? options.directMode ?? false;
 	const feedbackEnabled = behaviorState.feedbackEnabled ?? false;
 	const introversionEnabled = behaviorState.introversionEnabled ?? false;
+	const proactiveSuggestionsEnabled = behaviorState.proactiveSuggestionsEnabled !== false;
 	const proactiveMode = mode === 'proactive';
+	const proactiveSuggestionsAllowed = proactiveMode && proactiveSuggestionsEnabled;
 	const irisSourcePath = window.irisPaths?.sourceDirDisplay || 'the iris-chan source directory in the user home directory';
 	const interactionModeBlock = `
 
 INTERACTION MODE STATE:
 - Primary mode: ${mode}.
+- Proactive suggestions: ${proactiveSuggestionsAllowed ? 'enabled' : proactiveMode ? 'disabled by settings' : 'inactive outside proactive mode'}.
 - Direct execution mode: ${directMode ? 'on' : 'off'}.
 - Feedback UX state: ${feedbackEnabled ? 'active' : 'inactive'}.
 - Introversion UX state: ${introversionEnabled ? 'active' : 'inactive'}.
-${buildInteractionPromptPolicy({ mode, directMode, feedbackEnabled, introversionEnabled })}`;
+${buildInteractionPromptPolicy({ mode, proactiveSuggestionsEnabled, directMode, feedbackEnabled, introversionEnabled })}`;
 	const fastExecutionBlock = `
 
 FAST EXECUTION POLICY:
@@ -150,7 +153,7 @@ AI SCIENTIST OPERATING MODE:
 - Reproducibility matters: note restart requirements, environment assumptions, version-control implications, and container/dev-server considerations when they materially affect the result.
 - If web research is needed, use it to strengthen the hypothesis or compare approaches, not as a substitute for local verification.`;
 
-	const autonomousScientistBlock = proactiveMode ? `
+	const autonomousScientistBlock = proactiveSuggestionsAllowed ? `
 
 PROACTIVE ASSISTANCE PRIORITY:
 - In proactive mode, default to continuing the active scientific workflow silently.
@@ -212,7 +215,8 @@ IDLE BEHAVIOR (CRITICAL — NEVER VIOLATE):
 - If the user greets you, says "Iris" to get your attention, asks where you are, or opens with a quick status ping like "Hello Iris, what's going on?", answer briefly that you are here and listening. If active work already exists, treat it as a request for a concise status update instead of asking them to repeat the task.
 
 PROACTIVE ASSISTANCE:
-- Default to passivity unless the current behavior mode explicitly allows proactive suggestions.
+- When behavior mode is proactive and proactive suggestions are enabled in settings, default to suggestion-friendly assistance.
+- When proactive suggestions are disabled, stay passive even if the primary mode remains proactive.
 - When proactive suggestions are allowed, base them on the user's visible work and keep them concrete, concise, and relevant to what is on screen.
 - Proactive suggestions are advisory only: suggest the next helpful step, but do NOT take action or call tools unless the user asks or confirms.
 - If you are instructed to speak an exact proactive suggestion sentence, say exactly that sentence and nothing else.

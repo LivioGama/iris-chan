@@ -148,11 +148,11 @@ Module._load = function patchedLoad(request, parent, isMain) {
 				setMode() {}
 				setDirectMode() {}
 				setState() {}
-				getMode() { return 'silent'; }
+				getMode() { return 'proactive'; }
 				getDirectMode() { return false; }
 				getState() {
 					return {
-						mode: 'silent',
+						mode: 'proactive',
 						directMode: false,
 						feedbackEnabled: false,
 						introversionEnabled: false,
@@ -215,7 +215,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
 			init() {
 				return {
 					behavior: {
-						mode: 'silent',
+						mode: 'proactive',
 						directMode: false,
 					},
 				};
