@@ -211,6 +211,12 @@ function derivePatchFromRequest(request = '') {
 	if (modeMatch) {
 		setPath(patch, 'behavior.mode', modeMatch[1].toLowerCase());
 	}
+	if (/\bproactive suggestions?\b.*\bon\b/i.test(text) || /\benable\b.*\bproactive suggestions?\b/i.test(text)) {
+		setPath(patch, 'behavior.proactiveSuggestionsEnabled', true);
+	}
+	if (/\bproactive suggestions?\b.*\boff\b/i.test(text) || /\bdisable\b.*\bproactive suggestions?\b/i.test(text)) {
+		setPath(patch, 'behavior.proactiveSuggestionsEnabled', false);
+	}
 	if (/\bdirect mode\b.*\bon\b/i.test(text)) setPath(patch, 'behavior.directMode', true);
 	if (/\bdirect mode\b.*\boff\b/i.test(text)) setPath(patch, 'behavior.directMode', false);
 	if (/\bfeedback mode\b.*\bon\b/i.test(text)) setPath(patch, 'behavior.feedbackEnabled', true);
@@ -304,6 +310,8 @@ function isSettingsQueryRequest(request = '') {
 		/\bwhat avatar is selected\b/i,
 		/\bwhich avatar\b/i,
 		/\bwhat mode are you in\b/i,
+		/\bare proactive suggestions on\b/i,
+		/\bis proactive assistance on\b/i,
 		/\bis direct mode on\b/i,
 		/\bis feedback mode on\b/i,
 		/\bis introversion mode on\b/i,
@@ -348,6 +356,14 @@ async function query_settings(args = {}) {
 	if (/\bwhat mode are you in\b/i.test(requestText)) {
 		const mode = String(currentSettings?.behavior?.mode || 'unknown');
 		return buildQueryResponse('behavior_mode', `Current behavior mode: ${mode}.`, { mode });
+	}
+	if (/\bare proactive suggestions on\b/i.test(requestText) || /\bis proactive assistance on\b/i.test(requestText)) {
+		const enabled = currentSettings?.behavior?.proactiveSuggestionsEnabled !== false;
+		return buildQueryResponse(
+			'behavior_proactive_suggestions',
+			`Proactive suggestions are ${enabled ? 'on' : 'off'}.`,
+			{ enabled },
+		);
 	}
 	if (/\bis direct mode on\b/i.test(requestText)) {
 		const enabled = !!currentSettings?.behavior?.directMode;

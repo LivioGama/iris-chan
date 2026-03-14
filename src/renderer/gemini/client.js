@@ -65,6 +65,7 @@ const MANAGEMENT_CORRECTION_MARKER = '[SYSTEM: MANAGEMENT CORRECTION';
 const MANAGEMENT_TASK_ID_PATTERN = /#?([a-f0-9]{8,})/ig;
 const DEFAULT_BEHAVIOR_STATE = Object.freeze({
 	mode: 'silent',
+	proactiveSuggestionsEnabled: true,
 	directMode: false,
 	feedbackEnabled: false,
 	introversionEnabled: false,
@@ -269,6 +270,7 @@ export class GeminiClient extends Emitter {
 			: this._behaviorState.mode;
 		this._behaviorState = {
 			mode: nextMode,
+			proactiveSuggestionsEnabled: nextState.proactiveSuggestionsEnabled !== false,
 			directMode: !!nextState.directMode,
 			feedbackEnabled: !!nextState.feedbackEnabled,
 			introversionEnabled: !!nextState.introversionEnabled,
