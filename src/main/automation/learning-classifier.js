@@ -1,4 +1,5 @@
 const { normalizeText } = require('./memory-store');
+const { PILLARS } = require('../../shared/core-principles');
 
 function containsAny(text, patterns) {
 	const normalized = normalizeText(text);
@@ -409,6 +410,7 @@ class LearningClassifier {
 			return {
 				type: 'memory',
 				key: 'policy.autonomous_self_drive',
+				pillar: PILLARS.AUTONOMY.name,
 				reason: 'autonomous continuation guidance',
 				payload: {
 					kind: 'fallback_policy',
