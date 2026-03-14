@@ -204,7 +204,7 @@ class MemoryStore {
 			key: 'policy.presence_reassurance',
 			value: {
 				enabled: true,
-				message: 'When the user greets you, says your name to get your attention, or asks where you are, answer briefly that you are here and listening. If active work is already in progress, treat a bare-name ping as a request for a concise status update instead of asking them to restate the task.',
+				message: 'When the user greets you, says your name to get your attention, asks where you are, or opens with a quick status ping like "Hello Iris, what\'s going on?", answer briefly that you are here and listening. If active work is already in progress, treat it as a request for a concise status update instead of asking them to restate the task.',
 			},
 			source: 'inferred',
 			confidence: 0.95,
@@ -216,6 +216,17 @@ class MemoryStore {
 			value: {
 				enabled: true,
 				message: 'When the user makes a short casual creative request such as asking for a poem, joke, caption, or short story, fulfill it directly instead of asking for task clarification or workspace context. Treat brief transliterated variants like "tell me a poem" as the same request when the intent is clear.',
+			},
+			source: 'inferred',
+			confidence: 0.95,
+		});
+		this.upsert({
+			kind: 'fallback_policy',
+			scope: 'machine',
+			key: 'policy.capability_overview_fulfillment',
+			value: {
+				enabled: true,
+				message: 'When the user asks a broad capability question such as "what can you do" or "what can you do for me", answer directly with a concise overview of how you can help, tailored to the current context when relevant, instead of bouncing to task clarification, workspace context, or project selection.',
 			},
 			source: 'inferred',
 			confidence: 0.95,
@@ -238,6 +249,17 @@ class MemoryStore {
 			value: {
 				enabled: true,
 				message: 'When the user gives a short approval or satisfaction update such as saying the latest result looks good now, treat it as confirmation that the current direction worked. Acknowledge briefly, preserve the current task context, and do not reopen task discovery or ask for the same guidance again.',
+			},
+			source: 'inferred',
+			confidence: 0.95,
+		});
+		this.upsert({
+			kind: 'fallback_policy',
+			scope: 'machine',
+			key: 'policy.cancellation_closure',
+			value: {
+				enabled: true,
+				message: 'When the user gives a short cancellation or dismissal acknowledgment such as "never mind" or "cancelling works", acknowledge briefly, preserve the current task context, and stop asking them to restate or re-approve the cancellation.',
 			},
 			source: 'inferred',
 			confidence: 0.95,

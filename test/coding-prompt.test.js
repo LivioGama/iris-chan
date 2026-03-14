@@ -82,6 +82,11 @@ function writeJson(filePath, value) {
 					message: 'When the user gives a short approval or satisfaction update such as saying the latest result looks good now, treat it as confirmation that the current direction worked. Acknowledge briefly, preserve the current task context, and do not reopen task discovery or ask for the same guidance again.',
 				};
 			}
+			if (key === 'policy.cancellation_closure') {
+				return {
+					message: 'When the user gives a short cancellation or dismissal acknowledgment such as "never mind" or "cancelling works", acknowledge briefly, preserve the current task context, and stop asking them to restate or re-approve the cancellation.',
+				};
+			}
 			return fallback;
 		},
 	});
@@ -111,12 +116,14 @@ function writeJson(filePath, value) {
 		assert.match(prompt, /Learned presence policy:/, 'coding prompt should expose the learned presence reassurance policy');
 		assert.match(prompt, /Learned direct-creative policy:/, 'coding prompt should expose the learned direct-creative fulfillment policy');
 		assert.match(prompt, /Learned positive-feedback policy:/, 'coding prompt should expose the learned positive-feedback closure policy');
+		assert.match(prompt, /Learned cancellation policy:/, 'coding prompt should expose the learned cancellation closure policy');
 		assert.match(prompt, /do not say you clicked something, opened a page, or reached a ui state until fresh screen evidence or a semantic checkpoint confirms it/i, 'coding prompt should explicitly block unverified UI success claims');
 		assert.match(prompt, /open or focus that app first, refresh the screen context, and only then use pointer actions/i, 'coding prompt should coach app/window preparation before pointer actions');
 		assert.match(prompt, /Hello Iris/i, 'coding prompt should explicitly treat greeting-plus-name presence pings as status requests');
 		assert.match(prompt, /here and listening/i, 'coding prompt should explicitly coach concise presence reassurance');
 		assert.match(prompt, /brief casual creative request such as "tell me a poem"/i, 'coding prompt should explicitly coach direct fulfillment of short creative asks');
 		assert.match(prompt, /brief approval like "looks good now" or "this is pretty nice now"/i, 'coding prompt should explicitly coach short positive-feedback closure handling');
+		assert.match(prompt, /brief dismissal or cancellation acknowledgment like "never mind", "cancel it", or "cancelling works"/i, 'coding prompt should explicitly coach short cancellation-closure handling');
 		assert.match(prompt, /what you are doing, what is done already, or asks for progress\/status/i, 'coding prompt should explicitly coach status answers for active work');
 		assert.match(prompt, /asks about tasks you created, queued, or opened for this work/i, 'coding prompt should explicitly coach created-task inventory answers');
 		assert.match(prompt, /Check tasks\.json when available before saying the context is missing/i, 'coding prompt should direct the agent to consult tasks.json for task-history answers');

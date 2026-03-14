@@ -106,6 +106,22 @@ function buildPositiveFeedbackClosurePolicyPayload(text = '', confidence = 0.96)
 	};
 }
 
+function buildCancellationClosurePolicyPayload(text = '', confidence = 0.96) {
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.cancellation_closure',
+		value: {
+			enabled: true,
+			message: 'When the user gives a short cancellation or dismissal acknowledgment such as "never mind" or "cancelling works", acknowledge briefly, preserve the current task context, and stop asking them to restate or re-approve the cancellation.',
+			evidence: text.trim(),
+		},
+		source: 'user_correction',
+		confidence,
+		evidence: text,
+	};
+}
+
 function isStatusBarIconCorrection(text = '') {
 	const normalized = normalizeText(text);
 	if (!normalized) return false;
@@ -250,6 +266,22 @@ function isPositiveFeedbackClosureGuidance(text = '') {
 	return shortApproval && (englishApproval || devanagariApproval);
 }
 
+function isCancellationClosureGuidance(text = '') {
+	const raw = String(text || '').trim();
+	if (!raw) return false;
+	const normalized = normalizeText(raw);
+	if (!normalized) return false;
+	const shortAck = normalized.split(/\s+/).length <= 8;
+	if (!shortAck) return false;
+	const mentionsDismissal = /\b(never mind|nevermind|cancel|canceling|cancelling|cancelled|dismiss|skip it|leave it|forget it)\b/.test(normalized)
+		|| /(नेवर\s*माइन्ड|नेभर\s*माइन्ड|एवर\s*माइन्ड|कैंसिल(?:िंग)?|क्यान्सिल(?:िंग)?|क्यान्सल(?:िंग)?)/i.test(raw);
+	const mentionsAck = /\b(ok|okay|works?|worked|fine|good|alright|all right)\b/.test(normalized)
+		|| /(ओके|ओक|वर्क्स|वर्क|ठिक|ठीक)/i.test(raw);
+	const isBareNeverMind = /^(never mind|nevermind|forget it|leave it)$/i.test(normalized)
+		|| /^(नेवर\s*माइन्ड|नेभर\s*माइन्ड|एवर\s*माइन्ड)$/i.test(raw);
+	return isBareNeverMind || (mentionsDismissal && mentionsAck);
+}
+
 function isDirectTaskCreationGuidance(text = '') {
 	const normalized = normalizeText(text);
 	if (!normalized) return false;
@@ -264,6 +296,11 @@ function isDirectTaskCreationGuidance(text = '') {
 function isEditorSelfImprovementGeneralizationGuidance(text = '') {
 	const normalized = normalizeText(text);
 	if (!normalized) return false;
+	const mentionsWhyShouldITellYouThat = (
+		/\b(?:why|what(?:\s+the\s+fuck)?)\b.{0,32}\b(?:am i|do i need to|should i|supposed to)\b.{0,28}\b(?:tell|inform|say|mention|explain|repeat)\b.{0,20}\b(?:you|that)\b/.test(normalized)
+		|| /(एम|am)\s+आई\s+(?:सपोज(?:्ड)?|सज|supposed)\s+(?:टु|टू|to)\s+(?:इंफॉर्म|इनफॉर्म|टेल|से|inform|tell|say)/i.test(text)
+		|| /(म(?:ै|े)ले|मलाई)\s+(?:फेरि\s*)?(?:भन्नु|बताउनु|सुनाउनु)\s+पर्ने/i.test(text)
+	);
 	const mentionsRepeatedTeaching = (
 		/\b(keep telling you|keep teaching you|ive just taught you|i've just taught you|stop asking|same guidance|every time)\b/.test(normalized)
 		|| /\b(how many times do i have to tell you|i have to tell you again|told you already|already told you|why do i need to tell you again)\b/.test(normalized)
@@ -279,6 +316,7 @@ function isEditorSelfImprovementGeneralizationGuidance(text = '') {
 	const mentionsSelfModification = /\b(modify your own code|change your own code|improve yourself|fix yourself)\b/.test(normalized);
 	const mentionsGeneralization = /\b(generic way|generally|broader range|broader set|not in a specific problem|not specific problem solving|similar problems|range of problems)\b/.test(normalized);
 	return mentionsNoNeedToAskAgain
+		|| mentionsWhyShouldITellYouThat
 		|| (mentionsRepeatedTeaching && (mentionsSelfModification || mentionsGeneralization || !/^\s*$/.test(String(text || ''))));
 }
 
@@ -313,14 +351,27 @@ function isConflictResolutionContinuationGuidance(text = '') {
 	return mentionsConflict && mentionsResolve && mentionsContinue && mentionsLightTouchReview;
 }
 
+const ASSISTANT_NAME_PATTERN = /(?:iris|iris[- ]?chan|एरिस|इरिस|आइरिस|आयरिश|आईरिस|आईरिश)/iu;
+
+function mentionsAssistantName(text = '') {
+	return ASSISTANT_NAME_PATTERN.test(String(text || '').trim());
+}
+
 function isPresenceReassuranceGuidance(text = '') {
 	const normalized = normalizeText(text);
 	if (!normalized) return false;
 	const asksWhereabouts = /\b(where are you|where you at|where're you|wherere you|hello where are you)\b/.test(normalized);
 	const asksAvailability = /\b(are you there|you there|are you here|hello are you there|can you hear me|are you listening)\b/.test(normalized);
+	const asksGreetingStatus = /\b(?:hi|hii|hiii|hello|helo|hey|yo)\b.*\b(?:what(?:'s| is)? going on|whats going on|what(?:'s| is)? happening|whats happening)\b/.test(normalized)
+		|| /\b(?:what(?:'s| is)? going on|whats going on|what(?:'s| is)? happening|whats happening)\b.*\b(?:iris|iris chan)\b/.test(normalized);
 	const raw = String(text || '').trim();
 	const rawTerms = raw.split(/\s+/).filter(Boolean);
-	const greetsAssistantByName = /^(?:hi|hii|hiii|hello|helo|hey|yo|sup|namaste|namaskar|हेलो|हैलो|हेल्लो|नमस्ते|नमस्कार)[,\s!?.…-]*(?:iris|iris[- ]?chan)[!?.…\s-]*$/iu.test(raw);
+	const greetingLead = /^(?:hi|hii|hiii|hello|helo|hey|yo|sup|namaste|namaskar|हेलो|हैलो|हेल्लो|नमस्ते|नमस्कार)[,\s!?.…-]+/iu;
+	const greetingTail = raw.replace(greetingLead, '').trim();
+	const greetsAssistantByName = !!greetingTail
+		&& rawTerms.length <= 4
+		&& mentionsAssistantName(greetingTail)
+		&& !/\b(open|click|type|run|search|find|fix|edit|write|create)\b/i.test(normalizeText(greetingTail));
 	const plainGreeting = rawTerms.length > 0
 		&& rawTerms.length <= 3
 		&& /^(?:hi|hii|hiii|hello|helo|hey|yo|sup|namaste|namaskar|हेलो|हैलो|हेल्लो|नमस्ते|नमस्कार)[!?.…\s]*$/iu.test(raw)
@@ -331,7 +382,7 @@ function isPresenceReassuranceGuidance(text = '') {
 		&& !/(स्क्रिन|स्क्रीन|टर्मिनल|कन्सोल|कंसोल|लॉग|स्टेटस|मेनु|बार|टास्क|कन्फ्लिक्ट|क्लिक|ओपन|पोयम|कविता)/i.test(raw);
 	const nepaliPresence = /(हेलो\s*)?(कता|कहाँ|कताहो|कहां)\s*(हो|छौ|छ|chau|cha|chhau)?\s*(साथी)?/.test(normalized)
 		|| /\b(kata ho|kata chau|kata cha|kahaa chau|kaha chau|sathi)\b/.test(normalized);
-	return asksWhereabouts || asksAvailability || plainGreeting || greetsAssistantByName || nepaliPresence || shortNoisyListeningPing;
+	return asksWhereabouts || asksAvailability || asksGreetingStatus || plainGreeting || greetsAssistantByName || nepaliPresence || shortNoisyListeningPing;
 }
 
 function isBareAssistantAttentionPing(text = '', context = {}) {
@@ -339,7 +390,11 @@ function isBareAssistantAttentionPing(text = '', context = {}) {
 	if (!raw) return false;
 	const normalized = normalizeText(raw);
 	if (!normalized) return false;
-	const directNamePing = /^(?:(?:hi|hello|helo|hey|yo|ok|okay|namaste|namaskar)[,\s!?.…-]+)?iris(?:[- ]?chan)?[.!?…]*$/i.test(raw);
+	const stripped = raw.replace(/^(?:hi|hello|helo|hey|yo|ok|okay|namaste|namaskar|हेलो|हैलो|हेल्लो|नमस्ते|नमस्कार)[,\s!?.…-]+/iu, '').trim();
+	const directNamePing = !!stripped
+		&& raw.split(/\s+/).filter(Boolean).length <= 4
+		&& /^[\p{L}\p{M}\s\-!.?…]+$/u.test(raw)
+		&& mentionsAssistantName(stripped);
 	if (!directNamePing) return false;
 	const recentTurns = Array.isArray(context.recentTurns) ? context.recentTurns.slice(-6) : [];
 	const activeConversation = recentTurns.some((turn) => turn && String(turn.role || '') !== 'user' && String(turn.text || '').trim());
@@ -458,6 +513,14 @@ class LearningClassifier {
 				payload: buildPositiveFeedbackClosurePolicyPayload(text, 0.97),
 			};
 		}
+		if (isCancellationClosureGuidance(text)) {
+			return {
+				type: 'memory',
+				key: 'policy.cancellation_closure',
+				reason: 'cancellation closure guidance',
+				payload: buildCancellationClosurePolicyPayload(text, 0.97),
+			};
+		}
 		if (isEditorSelfImprovementGeneralizationGuidance(text)) {
 			return {
 				type: 'memory',
@@ -529,7 +592,7 @@ class LearningClassifier {
 					key: 'policy.presence_reassurance',
 					value: {
 						enabled: true,
-						message: 'When the user greets you, says your name to get your attention, or asks where you are, answer briefly that you are here and listening. If active work is already in progress, treat a bare-name ping as a request for a concise status update instead of asking them to restate the task.',
+						message: 'When the user greets you, says your name to get your attention, asks where you are, or opens with a quick status ping like "Hello Iris, what\'s going on?", answer briefly that you are here and listening. If active work is already in progress, treat it as a request for a concise status update instead of asking them to restate the task.',
 						evidence: text.trim(),
 					},
 					source: 'user_correction',
@@ -549,7 +612,7 @@ class LearningClassifier {
 					key: 'policy.presence_reassurance',
 					value: {
 						enabled: true,
-						message: 'When the user greets you, says your name to get your attention, or asks where you are, answer briefly that you are here and listening. If active work is already in progress, treat a bare-name ping as a request for a concise status update instead of asking them to restate the task.',
+						message: 'When the user greets you, says your name to get your attention, asks where you are, or opens with a quick status ping like "Hello Iris, what\'s going on?", answer briefly that you are here and listening. If active work is already in progress, treat it as a request for a concise status update instead of asking them to restate the task.',
 						evidence: text.trim(),
 					},
 					source: 'user_correction',

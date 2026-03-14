@@ -261,6 +261,54 @@ function inferDirectCreativeFulfillmentPolicy(text = '') {
 	};
 }
 
+function inferCapabilityOverviewFulfillmentPolicy(text = '') {
+	const raw = String(text || '').trim();
+	if (!raw) return null;
+	const normalized = normalizeText(raw);
+	if (!normalized) return null;
+	const asksBroadCapability = /\bwhat can you do\b/.test(normalized);
+	const asksCapabilityForMe = /\bwhat can you do for me\b/.test(normalized);
+	const asksHelpForMe = /\bwhat can you help me with\b/.test(normalized);
+	const mentionsCapabilityMeta = /\b(capabilit(?:y|ies)|help with|help me with|instead of|rather than|do not ask|don't ask|dont ask)\b/.test(normalized);
+	if (!(asksBroadCapability && asksCapabilityForMe) && !(asksBroadCapability && mentionsCapabilityMeta) && !asksHelpForMe) return null;
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.capability_overview_fulfillment',
+		value: {
+			enabled: true,
+			message: 'When the user asks a broad capability question such as "what can you do" or "what can you do for me", answer directly with a concise overview of how you can help, tailored to the current context when relevant, instead of bouncing to task clarification, workspace context, or project selection.',
+			evidence: raw,
+		},
+		source: 'user_correction',
+		confidence: 0.96,
+		evidence: raw,
+	};
+}
+
+function inferPartialTurnBackgroundPolicy(text = '') {
+	const raw = String(text || '').trim();
+	if (!raw) return null;
+	const normalized = normalizeText(raw);
+	if (!normalized) return null;
+	if (!/\b(do nothing with that|it was incomplete|that was incomplete|ignore that|dont do anything with that|don't do anything with that)\b/.test(normalized)) {
+		return null;
+	}
+	return {
+		kind: 'fallback_policy',
+		scope: 'machine',
+		key: 'policy.partial_turn_background_handling',
+		value: {
+			enabled: true,
+			message: 'When a user indicates their previous utterance was incomplete or should be ignored, do not interrogate them about it and do not trigger foreground recovery chatter. Treat it as background conversational noise and wait for the next complete turn.',
+			evidence: raw,
+		},
+		source: 'user_correction',
+		confidence: 0.97,
+		evidence: raw,
+	};
+}
+
 function tokenizeIssueText(value = '') {
 	return canonicalizeIssueText(value)
 		.split(/[^a-z0-9_]+/)
@@ -487,6 +535,7 @@ class LearningManager {
 			log.info('Learning', `Detected conversation learning event: type=${classification.type} reason=${classification.reason || 'n/a'} text=${String(text || '').slice(0, 140)}`);
 			this.enqueue({
 				type: classification.type,
+				backgroundOnly: classification.type === 'core-gap' && classification.reason === 'generic user correction',
 				domain: inferDomain(text),
 				issueSignature: classification.payload?.issueSignature || classification.key,
 				userText: text,
@@ -820,9 +869,25 @@ class LearningManager {
 			}
 			return;
 		}
+		const capabilityOverviewPolicy = inferCapabilityOverviewFulfillmentPolicy(event.guidanceText || event.userText || '');
+		if (capabilityOverviewPolicy) {
+			const stored = this.memoryStore.upsert(capabilityOverviewPolicy);
+			if (stored) {
+				log.info('Learning', `Memory updated: key=${stored.key} kind=${stored.kind} scope=${stored.scope}`);
+			}
+			return;
+		}
 		const flattenedPreparationPolicy = inferFlattenedPreparationRecoveryPolicy(event);
 		if (flattenedPreparationPolicy) {
 			const stored = this.memoryStore.upsert(flattenedPreparationPolicy);
+			if (stored) {
+				log.info('Learning', `Memory updated: key=${stored.key} kind=${stored.kind} scope=${stored.scope}`);
+			}
+			return;
+		}
+		const partialTurnPolicy = inferPartialTurnBackgroundPolicy(event.guidanceText || event.userText || '');
+		if (partialTurnPolicy) {
+			const stored = this.memoryStore.upsert(partialTurnPolicy);
 			if (stored) {
 				log.info('Learning', `Memory updated: key=${stored.key} kind=${stored.kind} scope=${stored.scope}`);
 			}
@@ -858,6 +923,11 @@ class LearningManager {
 		}
 		issue.count += 1;
 		issue.status = 'pending';
+		if (event.backgroundOnly) {
+			issue.status = 'background_only';
+			this._writeJson(this.issuePath, issues);
+			return;
+		}
 		const queueImmediately = event.forceImmediate === true;
 		if (queueImmediately || issue.count >= 2) {
 			const lastResolvedAt = issue.lastResolvedAt ? Date.parse(issue.lastResolvedAt) : 0;

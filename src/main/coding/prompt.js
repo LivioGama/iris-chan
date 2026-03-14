@@ -94,11 +94,25 @@ function buildDirectCreativeFulfillmentPolicyNote() {
 	return `Learned direct-creative policy: ${message}`;
 }
 
+function buildCapabilityOverviewPolicyNote() {
+	const policy = getMemoryStore()?.getValue?.('policy.capability_overview_fulfillment', null);
+	const message = String(policy?.message || '').trim();
+	if (!message) return '';
+	return `Learned capability-overview policy: ${message}`;
+}
+
 function buildPositiveFeedbackClosurePolicyNote() {
 	const policy = getMemoryStore()?.getValue?.('policy.positive_feedback_closure', null);
 	const message = String(policy?.message || '').trim();
 	if (!message) return '';
 	return `Learned positive-feedback policy: ${message}`;
+}
+
+function buildCancellationClosurePolicyNote() {
+	const policy = getMemoryStore()?.getValue?.('policy.cancellation_closure', null);
+	const message = String(policy?.message || '').trim();
+	if (!message) return '';
+	return `Learned cancellation policy: ${message}`;
 }
 
 function buildCodingPrompt({ description, cwd, target = null } = {}) {
@@ -135,7 +149,9 @@ function buildCodingPrompt({ description, cwd, target = null } = {}) {
 		buildPreClickPreparationPolicyNote(),
 		buildPresencePolicyNote(),
 		buildDirectCreativeFulfillmentPolicyNote(),
+		buildCapabilityOverviewPolicyNote(),
 		buildPositiveFeedbackClosurePolicyNote(),
+		buildCancellationClosurePolicyNote(),
 		buildScientificMethodGuide(),
 		'Task:',
 		String(description || '').trim(),
@@ -155,7 +171,9 @@ function buildCodingPrompt({ description, cwd, target = null } = {}) {
 		'Editor self-improvement handling: If repeated user friction points out a reusable editor or self-modification pattern, make the broader code change instead of fixing only the single instance. Generalize the behavior across similar editor tasks and stop requiring the same follow-up guidance.',
 		'UI action verification: Do not say you clicked something, opened a page, or reached a UI state until fresh screen evidence or a semantic checkpoint confirms it. If the action was sent but not verified, say that clearly and keep investigating.',
 		'Direct creative handling: If the user makes a brief casual creative request such as "tell me a poem", fulfill it directly instead of asking for task clarification, workspace context, or project selection.',
+		'Capability-overview handling: If the user asks broad capability questions such as "what can you do" or "what can you do for me", answer directly with a concise, relevant overview of how you can help instead of bouncing to task clarification, workspace context, or project selection.',
 		'Positive-feedback handling: If the user gives brief approval like "looks good now" or "this is pretty nice now", treat it as confirmation that the current approach worked. Acknowledge briefly, preserve the active task context, and do not restart task discovery or ask for the same guidance again.',
+		'Cancellation handling: If the user gives a brief dismissal or cancellation acknowledgment like "never mind", "cancel it", or "cancelling works", acknowledge briefly, preserve the active task context, and do not ask them to restate or re-approve the cancellation.',
 		'Verification loop: After each meaningful change, run the strongest available verification, inspect the real output, and use that evidence to decide the next step.',
 		'Self-input: When one check passes or fails, treat the result as fresh input for the next investigation, edit, or verification step. Drive the loop yourself instead of waiting for more guidance.',
 		'Execution framing: Structure the work as hypothesis -> experiment -> implementation -> verification -> self-review. If configuration or prompt tuning matters, explore a small, justified parameter set instead of a single guess.',
