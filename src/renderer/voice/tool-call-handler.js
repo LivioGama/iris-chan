@@ -7,8 +7,8 @@ import { shouldAutoEscalateFromToolFailure } from '../interaction/interaction-po
 
 // Tools that return immediately (fire-and-forget in main process).
 // These must NOT block voice capture or enter TOOL_EXECUTING state.
-const BACKGROUND_TOOLS = new Set(['fix_project', 'self_fix', 'add_task', 'query_settings']);
-const SILENT_QUERY_TOOLS = new Set(['query_settings']);
+const BACKGROUND_TOOLS = new Set(['fix_project', 'self_fix', 'add_task', 'query_settings', 'extract_tasks']);
+const SILENT_QUERY_TOOLS = new Set(['query_settings', 'extract_tasks']);
 const SCREEN_REFRESH_TOOLS = new Set([
 	'type_text',
 	'press_key',
