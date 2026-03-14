@@ -58,6 +58,9 @@ function createElement(tagName, elementsById) {
 		removeChild(child) {
 			this.children = this.children.filter((item) => item !== child);
 			child.parentNode = null;
+			if (child.id) {
+				elementsById.delete(child.id);
+			}
 			return child;
 		},
 		setAttribute(name, value) {
@@ -150,14 +153,22 @@ console.log('Running V2 UI behavior tests...');
 		assert.strictEqual(indicator, null, 'presence indicator should remain removed from the overlay');
 		assert.strictEqual(getActivePresenceSnapshot().phase, 'thinking', 'voice processing state should still be tracked internally');
 
+		setPresence('recovery', 'recovering', { detail: 'Retrying your last request' });
+		assert.strictEqual(getActivePresenceSnapshot().phase, 'recovering', 'recovery state should outrank standard thinking');
+
 		setPresence('tool', 'tool', { detail: 'Step 1 of 1 · Searching the web' });
-		assert.strictEqual(getActivePresenceSnapshot().phase, 'tool', 'highest-priority presence state should be exposed');
+		assert.strictEqual(getActivePresenceSnapshot().phase, 'recovering', 'recovery should outrank tool activity');
+
+		clearPresence('recovery');
+		assert.strictEqual(getActivePresenceSnapshot().phase, 'tool', 'clearing recovery should reveal the next-highest state');
+
+		setPresence('voice', 'disconnected', { detail: 'Reconnect to resume voice' });
+		assert.strictEqual(getActivePresenceSnapshot().phase, 'disconnected', 'disconnected should outrank all other phases');
 
 		clearPresence('tool');
-		assert.strictEqual(getActivePresenceSnapshot().phase, 'thinking', 'clearing tool state should reveal underlying thinking state');
-
 		clearPresence('voice');
 		assert.strictEqual(getActivePresenceSnapshot(), null, 'clearing all presence should leave no active snapshot');
+		assert.strictEqual(document.getElementById('presence-indicator'), null, 'presence indicator should stay absent');
 	} finally {
 		resetPresenceIndicatorForTests();
 		global.document = prevDocument;

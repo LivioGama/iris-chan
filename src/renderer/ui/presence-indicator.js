@@ -1,11 +1,24 @@
 const PRESENCE_PRIORITY = {
-	responding: 10,
-	thinking: 20,
+	disconnected: 100,
+	recovering: 90,
+	replying: 40,
 	tool: 30,
+	thinking: 20,
+	listening: 10,
 };
 
 const PRESENCE_COPY = {
+	listening: {
+		eyebrow: 'Iris',
+		title: 'Listening',
+		detail: 'Ready for the next request',
+	},
 	responding: {
+		eyebrow: 'Iris',
+		title: 'Replying',
+		detail: 'Turning the answer into speech',
+	},
+	replying: {
 		eyebrow: 'Iris',
 		title: 'Replying',
 		detail: 'Turning the answer into speech',
@@ -20,14 +33,19 @@ const PRESENCE_COPY = {
 		title: 'Working',
 		detail: 'Using tools to make progress',
 	},
+	recovering: {
+		eyebrow: 'Iris',
+		title: 'Recovering',
+		detail: 'Retrying the last request',
+	},
+	disconnected: {
+		eyebrow: 'Iris',
+		title: 'Disconnected',
+		detail: 'Reconnect to resume voice',
+	},
 };
 
 const activePresence = new Map();
-
-function removeIndicatorNode() {
-	const node = document.getElementById('presence-indicator');
-	if (node?.parentNode) node.parentNode.removeChild(node);
-}
 
 function getTopPresence() {
 	let winner = null;
@@ -43,6 +61,19 @@ function getTopPresence() {
 	return winner;
 }
 
+function removeIndicatorNode() {
+	const node = document.getElementById('presence-indicator');
+	if (node?.parentNode && typeof node.parentNode.removeChild === 'function') {
+		node.parentNode.removeChild(node);
+		return;
+	}
+	if (typeof node?.remove === 'function') node.remove();
+}
+
+function renderIndicator() {
+	removeIndicatorNode();
+}
+
 export function setPresence(source, phase, overrides = {}) {
 	if (!source || !phase) return;
 	const base = PRESENCE_COPY[phase] || PRESENCE_COPY.thinking;
@@ -54,18 +85,18 @@ export function setPresence(source, phase, overrides = {}) {
 		...base,
 		...overrides,
 	});
-	removeIndicatorNode();
+	renderIndicator();
 }
 
 export function clearPresence(source) {
 	if (!source) return;
 	activePresence.delete(source);
-	removeIndicatorNode();
+	renderIndicator();
 }
 
 export function clearAllPresence() {
 	activePresence.clear();
-	removeIndicatorNode();
+	renderIndicator();
 }
 
 export function getActivePresenceSnapshot() {
