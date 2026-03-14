@@ -272,4 +272,24 @@ export const toolDeclarations = [
 			url: { type: 'STRING', description: 'Direct URL to open (skips search if provided)' },
 		} },
 	},
+	{
+		name: 'save_observation',
+		description: 'Save a visual observation of what is currently on screen to persistent memory. Call this when: (1) you detect the user switched to a different app, (2) you see an error/crash/exception on screen, (3) the user says "remember this" or "note what you see", or (4) you receive an [OBSERVATION TRIGGER] message. Do not speak when calling this automatically.',
+		parameters: { type: 'OBJECT', properties: {
+			description: { type: 'STRING', description: 'Brief 1-3 sentence description of what is visible on screen right now. Focus on the app, content/task, and notable state.' },
+			app_name: { type: 'STRING', description: 'Name of the frontmost application (e.g. "Safari", "VS Code", "Terminal")' },
+			tags: { type: 'STRING', description: 'Comma-separated tags for the observation (e.g. "code,github,pull-request" or "error,terminal,crash")' },
+			trigger: { type: 'STRING', description: '"app_switch", "periodic", "user_requested", or "error_detected"' },
+			note: { type: 'STRING', description: 'Optional user-provided context about what to remember' },
+		}, required: ['description', 'app_name', 'tags', 'trigger'] },
+	},
+	{
+		name: 'recall_observations',
+		description: 'Search your persistent visual memory for past screen observations. Use when the user asks about what they were looking at, what you have seen, what was on screen earlier, or references past visual content.',
+		parameters: { type: 'OBJECT', properties: {
+			query: { type: 'STRING', description: 'What to search for in visual memory, e.g. "that error in Terminal" or "the pull request in Safari"' },
+			app_filter: { type: 'STRING', description: 'Optional app name to narrow search' },
+			limit: { type: 'NUMBER', description: 'Max results (default: 5)' },
+		}, required: ['query'] },
+	},
 ];
