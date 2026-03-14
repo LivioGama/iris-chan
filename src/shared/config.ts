@@ -171,12 +171,12 @@ const config: Config = {
 		retryDelay: 2000,
 	},
 	tars: {
-		enabled: (process.env.TARS_ENABLED || '1') !== '0'
-			&& Boolean(process.env.TARS_ENDPOINT || '')
-			&& Boolean(process.env.TARS_API_KEY || ''),
-		endpoint: process.env.TARS_ENDPOINT || '',
-		apiKey: process.env.TARS_API_KEY || '',
-		timeoutMs: Math.max(1000, Number(process.env.TARS_TIMEOUT_MS || 8000)),
+		enabled: (process.env.UI_TARS_ENABLED || process.env.TARS_ENABLED || '1') !== '0'
+			&& Boolean(process.env.UI_TARS_URL || process.env.TARS_ENDPOINT || '')
+			&& Boolean(process.env.UI_TARS_API_KEY || process.env.TARS_API_KEY || ''),
+		endpoint: process.env.UI_TARS_URL || process.env.TARS_ENDPOINT || '',
+		apiKey: process.env.UI_TARS_API_KEY || process.env.TARS_API_KEY || '',
+		timeoutMs: Math.max(1000, Number(process.env.UI_TARS_TIMEOUT_MS || process.env.TARS_TIMEOUT_MS || 8000)),
 	},
 	audio: {
 		captureRate: 16000,
