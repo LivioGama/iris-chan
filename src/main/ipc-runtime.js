@@ -6,7 +6,7 @@ const avatarWindow = require('./windows/avatar-window');
 const taskQueueWatcher = require('./task-queue/watcher');
 const settings = require('./settings');
 
-function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow }) {
+function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow, intentEngine }) {
 	const subscriptions = new Map();
 
 	ipcMain.handle(RUNTIME_CHANNELS.RUNTIME_GET_HEALTH, async () => healthService.getHealth());
@@ -115,6 +115,12 @@ function registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTa
 	ipcMain.handle(RUNTIME_CHANNELS.BLOG_CREATE_DAILY_DRAFT, async () => {
 		await dailyLoop.tick();
 		return { ok: true };
+	});
+
+	// Intent prediction
+	ipcMain.handle(RUNTIME_CHANNELS.INTENT_PREDICT, async (_, params = {}) => {
+		if (!intentEngine) return { intents: [], toolHints: [], contextFingerprint: '' };
+		return intentEngine.predict(params);
 	});
 
 	// Direct mode: get/set

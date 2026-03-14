@@ -94,6 +94,7 @@ const RUNTIME_CHANNELS = {
 	BLOG_CREATE_DAILY_DRAFT: 'rt:blog:create-daily-draft',
 	DIRECT_MODE_GET: 'rt:direct-mode:get',
 	DIRECT_MODE_SET: 'rt:direct-mode:set',
+	INTENT_PREDICT: 'rt:intent:predict',
 };
 
 module.exports = { CHANNELS, RUNTIME_CHANNELS };

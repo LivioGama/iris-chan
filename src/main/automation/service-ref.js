@@ -5,6 +5,7 @@ let learningManagerRef = null;
 let nativeFallbackManagerRef = null;
 let episodeRecorderRef = null;
 let convexClientRef = null;
+let intentPredictionEngineRef = null;
 
 function setUiTaskService(service) {
 	uiTaskServiceRef = service || null;
@@ -62,6 +63,14 @@ function getConvexClient() {
 	return convexClientRef;
 }
 
+function setIntentPredictionEngine(engine) {
+	intentPredictionEngineRef = engine || null;
+}
+
+function getIntentPredictionEngine() {
+	return intentPredictionEngineRef;
+}
+
 module.exports = {
 	setUiTaskService,
 	getUiTaskService,
@@ -77,4 +86,6 @@ module.exports = {
 	getEpisodeRecorder,
 	setConvexClient,
 	getConvexClient,
+	setIntentPredictionEngine,
+	getIntentPredictionEngine,
 };

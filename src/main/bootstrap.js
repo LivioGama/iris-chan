@@ -22,7 +22,9 @@ const { MemoryStore } = require('./automation/memory-store');
 const { LearningManager } = require('./automation/learning-manager');
 const { NativeFallbackManager } = require('./automation/native-fallback-manager');
 const { EpisodeRecorder } = require('./automation/episode-recorder');
-const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager, setEpisodeRecorder, setConvexClient } = require('./automation/service-ref');
+const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearningManager, setNativeFallbackManager, setEpisodeRecorder, setConvexClient, setIntentPredictionEngine } = require('./automation/service-ref');
+const { GroqClient } = require('./automation/groq-client');
+const { IntentPredictionEngine } = require('./automation/intent-prediction-engine');
 const { setConvexClient: setUnifiedConvexClient } = require('./runtime/convex-adapter');
 const taskQueueWatcher = require('./task-queue/watcher');
 const { RuntimeEventPersistence } = require('./runtime/event-persistence');
@@ -44,6 +46,8 @@ function startRuntime({ apiKey }) {
 	const episodeRecorder = new EpisodeRecorder();
 	const selfImprovementManager = new SelfImprovementManager({ skillsEngine: skills });
 	const learningManager = new LearningManager({ memoryStore, selfImprovementManager });
+	const groqClient = new GroqClient({ apiKey: process.env.GROQ_API_KEY || '' });
+	const intentEngine = new IntentPredictionEngine({ groqClient, learningManager, memoryStore, eventBus });
 	const uiTaskService = new UITaskService({ eventBus, selfImprovementManager, nativeFallbackManager, episodeRecorder });
 	const healthService = new HealthService({
 		convexClient,
@@ -75,8 +79,9 @@ function startRuntime({ apiKey }) {
 	setNativeFallbackManager(nativeFallbackManager);
 	setEpisodeRecorder(episodeRecorder);
 	setConvexClient(convexClient);
+	setIntentPredictionEngine(intentEngine);
 	legacyIpc.register(apiKey);
-	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow });
+	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow, intentEngine });
 	taskQueueService.setBehaviorEngine(behaviorEngine);
 
 	const linkCapturePoller = appConfig.linkCapture.enabled
