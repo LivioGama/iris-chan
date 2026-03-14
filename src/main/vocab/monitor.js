@@ -7,6 +7,7 @@ const log = require('../logger');
 let vocabBuffer = [];
 let lastClipboard = '';
 let lastWindowTitle = '';
+let intervalIds = [];
 
 async function extractTermsWithGemini(textChunks, apiKey) {
 	if (!textChunks.length || !apiKey) return [];
@@ -55,7 +56,7 @@ async function extractTermsWithGemini(textChunks, apiKey) {
 
 function start(apiKey, getWin) {
 	// Clipboard collector — every 5 seconds
-	setInterval(async () => {
+	intervalIds.push(setInterval(async () => {
 		try {
 			const result = await toolExecutor.execute('clipboard_read', {});
 			const text = result?.result || '';
@@ -64,11 +65,11 @@ function start(apiKey, getWin) {
 				vocabBuffer.push(text);
 			}
 		} catch { }
-	}, config.vocab.clipboardPollMs);
+	}, config.vocab.clipboardPollMs));
 
 	// Window title collector — every 3 seconds
 	let lastFocusedMessagingApp = null;
-	setInterval(async () => {
+	intervalIds.push(setInterval(async () => {
 		try {
 			const result = await toolExecutor.execute('get_frontmost_app', {});
 			const info = result?.result || '';
@@ -92,19 +93,24 @@ function start(apiKey, getWin) {
 				}
 			}
 		} catch { }
-	}, config.vocab.windowPollMs);
+	}, config.vocab.windowPollMs));
 
 	// Gemini Flash batch extraction — every 60 seconds
-	setInterval(async () => {
+	intervalIds.push(setInterval(async () => {
 		if (vocabBuffer.length === 0) return;
 		const chunks = vocabBuffer.splice(0);
 		const terms = await extractTermsWithGemini(chunks, apiKey);
 		for (const t of terms) vocabStore.addHotTerm(t);
 		log.info('VocabAI', `Batch: ${chunks.length} chunks → ${terms.length} terms: ${terms.join(', ')}`);
-	}, config.vocab.batchExtractMs);
+	}, config.vocab.batchExtractMs));
 
 	// Promote/expire hot terms — every 60 seconds
-	setInterval(() => vocabStore.promoteAndCleanHot(), config.vocab.promoteCleanMs);
+	intervalIds.push(setInterval(() => vocabStore.promoteAndCleanHot(), config.vocab.promoteCleanMs));
 }
 
-module.exports = { start };
+function stop() {
+	for (const id of intervalIds) clearInterval(id);
+	intervalIds = [];
+}
+
+module.exports = { start, stop };

@@ -102,6 +102,7 @@ function startRuntime({ apiKey }) {
 		healthService.stop();
 		dailyLoop.stop();
 		twoFA.shutdown();
+		vocabMonitor.stop();
 		taskQueueWatcher.stop();
 		statusTray.destroy();
 		legacyConvexStore.shutdown();
