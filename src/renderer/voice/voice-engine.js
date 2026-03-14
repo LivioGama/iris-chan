@@ -25,6 +25,7 @@ import {
 	getInteractionBadgeState,
 	normalizeInteractionState,
 } from '../interaction/interaction-policy.js';
+import { createObservationTrigger } from '../observations/observation-trigger.js';
 
 const STATES = {
 	IDLE: 'IDLE',
@@ -295,6 +296,8 @@ export class VoiceEngine extends Emitter {
 		this._vocabRefreshInterval = null;
 		this._recentSeenExtractInFlight = null;
 		this._lastRecentSeenExtractAt = 0;
+		this._observationTrigger = createObservationTrigger();
+		this._observationCheckInFlight = null;
 		this._modelOutputFenceActive = false;
 
 		this._screen = screen || createScreenCaptureController({
@@ -1266,18 +1269,50 @@ export class VoiceEngine extends Emitter {
 
 	_handleScreenCapture(captureFrame) {
 		if (!captureFrame?.data || !this._apiKey) return;
-		if (this._recentSeenExtractInFlight) return;
 
-		const now = Date.now();
-		if (now - this._lastRecentSeenExtractAt < this.voiceConfig.recentSeen.extractIntervalMs) return;
-		this._lastRecentSeenExtractAt = now;
-		this._recentSeenExtractInFlight = this._extractRecentSeenTerms(captureFrame)
-			.catch((err) => {
-				logError('RecentSeen', `Extraction failed: ${err?.message || err}`);
-			})
-			.finally(() => {
-				this._recentSeenExtractInFlight = null;
-			});
+		// Recent-seen term extraction (existing)
+		if (!this._recentSeenExtractInFlight) {
+			const now = Date.now();
+			if (now - this._lastRecentSeenExtractAt >= this.voiceConfig.recentSeen.extractIntervalMs) {
+				this._lastRecentSeenExtractAt = now;
+				this._recentSeenExtractInFlight = this._extractRecentSeenTerms(captureFrame)
+					.catch((err) => {
+						logError('RecentSeen', `Extraction failed: ${err?.message || err}`);
+					})
+					.finally(() => {
+						this._recentSeenExtractInFlight = null;
+					});
+			}
+		}
+
+		// Observation trigger check (runs independently)
+		if (!this._observationCheckInFlight) {
+			this._observationCheckInFlight = this._checkObservationTrigger(captureFrame)
+				.catch((err) => {
+					logError('Observation', `Trigger check failed: ${err?.message || err}`);
+				})
+				.finally(() => {
+					this._observationCheckInFlight = null;
+				});
+		}
+	}
+
+	async _checkObservationTrigger(captureFrame) {
+		if (!this._observationTrigger || !this.gemini) return;
+		try {
+			const appResult = await window.electronAPI.executeTool('get_frontmost_app', {});
+			const appName = typeof appResult === 'string'
+				? appResult
+				: appResult?.name || appResult?.result || '';
+			const trigger = this._observationTrigger.check(appName);
+			if (!trigger) return;
+			this.gemini.sendRealtimeText(
+				`[OBSERVATION TRIGGER: ${trigger}] Describe what you see on screen and call save_observation with trigger="${trigger}". Do not speak aloud.`
+			);
+			logInfo('Observation', `Trigger fired: ${trigger} (app: ${appName}, count: ${this._observationTrigger.count})`);
+		} catch (err) {
+			logError('Observation', `Failed to check trigger: ${err?.message || err}`);
+		}
 	}
 
 	async _extractRecentSeenTerms(captureFrame) {
