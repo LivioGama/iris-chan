@@ -83,9 +83,10 @@ const performanceMonitor = BENCHMARKING_ENABLED
 performanceMonitor?.exposeGlobal(window);
 performanceMonitor?.startBackgroundSampling();
 
-const { renderer, camera, scene } = createScene();
+const { renderer, camera, scene, avatarLightRig } = createScene();
 const scenePerformanceProbe = createScenePerformanceProbe({ renderer, performanceMonitor });
-const { vrm, mixer, glowMaterials = [] } = await loadAvatar(scene, avatarType);
+const { vrm, mixer } = await loadAvatar(scene, avatarType);
+avatarLightRig.attach(vrm.scene);
 
 const gemini = new GeminiClient();
 const capture = new AudioCapture();
@@ -181,12 +182,15 @@ function animate() {
 	elapsedTime += delta;
 	scenePerformanceProbe.recordFrame(delta);
 	mixer.update(delta);
-	applyOverlays(vrm, elapsedTime, () => voice.getSpeakingVolume());
+	const speakingVolume = voice.getSpeakingVolume();
+	applyOverlays(vrm, elapsedTime, () => speakingVolume);
 	vrm.update(delta);
-	for (const mat of glowMaterials) {
-		const shader = mat.userData?._glowShader;
-		if (shader?.uniforms?.uGlowTime) shader.uniforms.uGlowTime.value = elapsedTime;
-	}
+	avatarLightRig.update({
+		elapsedTime,
+		thinking: voice.state === 'PROCESSING' || voice.state === 'TOOL_EXECUTING',
+		speaking: voice.state === 'RESPONDING',
+		speakingVolume,
+	});
 	renderer.render(scene, camera);
 }
 animate();
