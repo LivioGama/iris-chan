@@ -87,10 +87,11 @@ function startRuntime({ apiKey }) {
 	registerIpc({ healthService, behaviorEngine, eventBus, taskEngine, uiTaskService, convexClient, dailyLoop, kanbanWindow, intentEngine });
 	taskQueueService.setBehaviorEngine(behaviorEngine);
 
-	const linkCapturePoller = appConfig.linkCapture.enabled
+	const linkCfg = appConfig.linkCapture || {};
+	const linkCapturePoller = linkCfg.enabled !== false
 		? new LinkCapturePoller({
-			pollIntervalMs: appConfig.linkCapture.pollIntervalMs,
-			maxSeenCacheSize: appConfig.linkCapture.maxSeenCacheSize,
+			pollIntervalMs: linkCfg.pollIntervalMs || 10000,
+			maxSeenCacheSize: linkCfg.maxSeenCacheSize || 5000,
 		})
 		: null;
 
@@ -113,7 +114,15 @@ function startRuntime({ apiKey }) {
 
 		registerShortcuts({ behaviorEngine });
 		vocabMonitor.start(apiKey, () => avatarWindow.getWindow());
-		if (linkCapturePoller) linkCapturePoller.start();
+		if (linkCapturePoller) {
+			try {
+				linkCapturePoller.start();
+			} catch (err) {
+				console.error('[LinkCapture] Failed to start:', err.message);
+			}
+		} else {
+			console.log('[LinkCapture] Disabled by config');
+		}
 	});
 
 	app.on('will-quit', () => {

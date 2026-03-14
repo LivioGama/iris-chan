@@ -4,6 +4,7 @@ const { describeLink } = require('./describer');
 const convexStore = require('../convex-store');
 
 const INTERNAL_URL_RE = /^(about|chrome|edge|brave|arc|devtools|extensions|chrome-extension):/;
+const LOG_TAG = '[LinkCapture]';
 
 class LinkCapturePoller {
 	constructor({ pollIntervalMs = 10000, maxSeenCacheSize = 5000 } = {}) {
@@ -14,33 +15,41 @@ class LinkCapturePoller {
 		this._timer = null;
 		this._seenUrls = new Set();
 		this._processing = false;
+		this._tickCount = 0;
 	}
 
 	start() {
 		if (this._timer) return;
 		this._timer = setInterval(() => {
-			this._poll().catch(err => console.error('[LinkCapture] Poll error:', err.message));
+			this._poll().catch(err => console.error(LOG_TAG, 'Poll error:', err.message));
 		}, this._pollIntervalMs);
-		console.log(`[LinkCapture] Started (interval: ${this._pollIntervalMs}ms)`);
+		console.log(`${LOG_TAG} Started (interval: ${this._pollIntervalMs}ms)`);
 	}
 
 	stop() {
 		if (!this._timer) return;
 		clearInterval(this._timer);
 		this._timer = null;
-		console.log('[LinkCapture] Stopped');
+		console.log(`${LOG_TAG} Stopped`);
 	}
 
 	async _poll() {
 		if (this._processing) return;
 		this._processing = true;
+		this._tickCount++;
+		const tick = this._tickCount;
 		try {
 			const frontmost = await this._world.getFrontmostApp({ force: true });
 			if (!frontmost.ok || !frontmost.name) return;
-			if (!this._browser.isSupported(frontmost.name)) return;
 
-			const pageInfo = this._browser.getCurrentPageInfo({ appName: frontmost.name });
-			if (!pageInfo.ok || !pageInfo.href) return;
+			const appName = frontmost.name;
+			if (!this._browser.isSupported(appName)) return;
+
+			const pageInfo = this._browser.getCurrentPageInfo({ appName });
+			if (!pageInfo.ok || !pageInfo.href) {
+				console.warn(LOG_TAG, `[tick ${tick}] pageInfo failed for ${appName}:`, pageInfo.code || pageInfo.error || 'no href');
+				return;
+			}
 			if (INTERNAL_URL_RE.test(pageInfo.href)) return;
 
 			const canonical = canonicalUrl(pageInfo.href);
@@ -53,6 +62,7 @@ class LinkCapturePoller {
 			}
 			this._seenUrls.add(canonical);
 
+			console.log(LOG_TAG, `[tick ${tick}] Captured: ${canonical} — "${(pageInfo.title || '').slice(0, 60)}"`);
 			this._captureAsync(canonical, pageInfo);
 		} finally {
 			this._processing = false;
@@ -73,8 +83,9 @@ class LinkCapturePoller {
 				snippet: snippet || '',
 				source: 'browser_capture',
 			});
+			console.log(LOG_TAG, `Saved: ${canonical} (snippet: ${snippet ? snippet.length + ' chars' : 'none'})`);
 		} catch (err) {
-			console.error('[LinkCapture] Capture error:', err.message);
+			console.error(LOG_TAG, 'Capture error:', err.message);
 		}
 	}
 }
