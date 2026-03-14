@@ -255,4 +255,21 @@ export const toolDeclarations = [
 			queue_bucket: { type: 'STRING', description: 'Optional queue bucket label used to group queued work inside a lane.' },
 		}, required: ['description'] },
 	},
+	{
+		name: 'recall_link',
+		description: 'Search your saved link history using natural language. Use when the user asks "what was that article about X?", "find that link about Y", "do you remember that page about Z?", or wants to browse previously seen links. Returns matching links ranked by relevance.',
+		parameters: { type: 'OBJECT', properties: {
+			query: { type: 'STRING', description: 'Natural language description of the link to find, e.g. "React performance article" or "that YouTube video about cooking"' },
+			domain: { type: 'STRING', description: 'Optional domain filter, e.g. "github.com" or "youtube.com"' },
+			limit: { type: 'NUMBER', description: 'Max results to return (default 5, max 10)' },
+		}, required: ['query'] },
+	},
+	{
+		name: 'open_link',
+		description: 'Open a previously seen link in the default browser. Can find the link by natural language query or by direct URL. Use when the user says "open that link about X", "go to that article about Y", or "take me to that page".',
+		parameters: { type: 'OBJECT', properties: {
+			query: { type: 'STRING', description: 'Natural language description to find the link, e.g. "that React article"' },
+			url: { type: 'STRING', description: 'Direct URL to open (skips search if provided)' },
+		} },
+	},
 ];
