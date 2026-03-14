@@ -5,28 +5,143 @@ const log = require('../logger');
 const os = require('os');
 const path = require('path');
 
-// Common OTP regex patterns (4-8 digit codes with surrounding context)
+// ---- HTML / text utilities ----
+
+function stripHtmlTags(html) {
+	if (!html) return '';
+	return html
+		.replace(/<br\s*\/?>/gi, '\n')
+		.replace(/<[^>]+>/g, '')
+		.replace(/&nbsp;/gi, ' ')
+		.replace(/&amp;/gi, '&')
+		.replace(/&lt;/gi, '<')
+		.replace(/&gt;/gi, '>')
+		.replace(/&quot;/gi, '"')
+		.replace(/&#39;/gi, "'");
+}
+
+// ---- iMessage NSArchiver binary data decoder ----
+
+const BINARY_MARKERS = ['streamtyped', 'NSArchiver', 'NSKeyedArchiver', 'NSMutableAttributedString', 'NSMutableString', 'NSString'];
+
+function extractTextFromBinaryData(data) {
+	if (!data) return '';
+	const isBinary = BINARY_MARKERS.some(m => data.includes(m));
+	if (!isBinary) return data;
+
+	// Extract printable character sequences (≥3 chars)
+	const segments = [];
+	let current = '';
+	for (let i = 0; i < data.length; i++) {
+		const code = data.charCodeAt(i);
+		// Printable ASCII, common Unicode, or whitespace
+		if ((code >= 32 && code <= 126) || code >= 0x4E00 || (code >= 0x0600 && code <= 0x06FF) || (code >= 0x3000 && code <= 0x30FF) || code === 10 || code === 13) {
+			current += data[i];
+		} else {
+			if (current.length >= 3) segments.push(current.trim());
+			current = '';
+		}
+	}
+	if (current.length >= 3) segments.push(current.trim());
+
+	// Filter out class names and internal markers
+	const filtered = segments.filter(s =>
+		!s.startsWith('NS') &&
+		!s.startsWith('__kIM') &&
+		!s.startsWith('streamtyped') &&
+		s.length >= 3
+	);
+
+	// Prefer segments with spaces (actual messages) over short tokens
+	const withSpaces = filtered.filter(s => s.includes(' ') && s.length >= 10);
+	if (withSpaces.length) return withSpaces.join(' ');
+	return filtered.join(' ');
+}
+
+// ---- Verification link detection ----
+
+const VERIFY_KEYWORDS = /\b(?:verify|confirm|activate|validate|verification|sign.?in|log.?in|authorize|auth)\b/i;
+const VERIFY_URL_PATHS = /\/(?:verify|confirm|login|auth|signin|activate|validate|token=|code=)/i;
+
+function extractVerificationLink(text) {
+	if (!text) return null;
+	// Check <a href="..."> tags first
+	const hrefMatches = [...text.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi)];
+	for (const m of hrefMatches) {
+		const url = m[1].replace(/&amp;/g, '&');
+		const linkText = m[2];
+		if (VERIFY_KEYWORDS.test(linkText) || VERIFY_URL_PATHS.test(url)) {
+			const type = /sign.?in|log.?in|login/i.test(linkText + ' ' + url) ? 'sign-in' : 'verification';
+			return { url, type };
+		}
+	}
+	// Check plain URLs
+	const urlMatches = [...text.matchAll(/https?:\/\/[^\s<>"']+/gi)];
+	for (const m of urlMatches) {
+		const url = m[0].replace(/&amp;/g, '&');
+		if (VERIFY_URL_PATHS.test(url) || VERIFY_KEYWORDS.test(text)) {
+			const type = /sign.?in|log.?in|login/i.test(url) ? 'sign-in' : 'verification';
+			return { url, type };
+		}
+	}
+	return null;
+}
+
+// ---- OTP extraction (Raycast-inspired, multilingual) ----
+
+// Strip URLs and phone numbers before extraction to avoid false positives
+function cleanTextForOTP(text) {
+	return text
+		.replace(/https?:\/\/[^\s]+/g, '')
+		.replace(/\+?\d{1,3}[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g, '')
+		.replace(/\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b/g, '');
+}
+
+// Keyword-anchored patterns (high confidence)
 const OTP_PATTERNS = [
-	/(?:code|código|codice|Code)[:\s]+(\d{4,8})\b/i,
-	/(?:verification|verify|confirma)[:\s]+(\d{4,8})\b/i,
-	/(?:OTP|otp|pin|PIN)[:\s]+(\d{4,8})\b/i,
-	/\b(\d{4,8})\s+(?:is your|est votre|ist Ihr|è il tuo)/i,
-	/\b(\d{4,8})\s+(?:code|Code|código)/i,
-	/(?:enter|use|saisir|eingeben|inserisci)\s+(\d{4,8})\b/i,
 	/(?:G-|Google-)(\d{4,8})\b/,
+	/(?:code|código|codice|Code|コード)[:\s：]+(\d{3,8})\b/i,
+	/(?:验证码|認證碼)[:\s：]*(\d{3,8})\b/,
+	/(?:verification|verify|confirma|Einmalcode)[:\s]+(\d{3,8})\b/i,
+	/(?:OTP|otp|pin|PIN|passcode|パスワード)[:\s：]+(\d{3,8})\b/i,
+	/\b(\d{3,8})\s+(?:is your|est votre|ist Ihr|è il tuo)/i,
+	/\b(\d{3,8})\s+(?:code|Code|código)/i,
+	/(?:enter|use|saisir|eingeben|inserisci)\s+(?:code\s+)?(\d{3,8})\b/i,
 	/\b(\d{6})\b(?=.*(?:expire|valid|minute|min))/i,
+	// Portuguese patterns
+	/(?:Código de Autorização|O seu código)[:\s]+(\d{4,8})\b/i,
+	/(?:Codigo de Autorizacao|O seu codigo)[:\s]+(\d{4,8})\b/i,
 ];
 
-// Fallback: standalone 4-8 digit number (less precise)
-const FALLBACK_OTP = /\b(\d{4,8})\b/;
+// Dashed codes: "719-839" → "719839"
+const DASHED_CODE = /\b(\d{3,4})-(\d{3,4})\b/;
+
+// Alphanumeric codes: "5WGU8G", "CWGUG8", "7645W453" (must have both letters and digits)
+const ALPHANUM_CODE = /\b([A-Z0-9]{4,8})\b/g;
+function isAlphanumericCode(s) {
+	return /[A-Z]/i.test(s) && /\d/.test(s) && /^[A-Z0-9]+$/i.test(s);
+}
 
 function extractOTP(text) {
+	if (!text) return null;
+	const cleaned = cleanTextForOTP(text);
+
+	// 1. Try keyword-anchored patterns (highest confidence)
 	for (const pat of OTP_PATTERNS) {
-		const m = text.match(pat);
+		const m = cleaned.match(pat);
 		if (m) return m[1];
 	}
-	// Fallback: find any 4-8 digit number, prefer 6-digit
-	const allNums = [...text.matchAll(/\b(\d{4,8})\b/g)].map(m => m[1]);
+
+	// 2. Try dashed codes
+	const dashed = cleaned.match(DASHED_CODE);
+	if (dashed) return dashed[1] + dashed[2];
+
+	// 3. Try alphanumeric codes (last match preferred per Raycast)
+	const alphaMatches = [...cleaned.matchAll(ALPHANUM_CODE)].map(m => m[1]).filter(isAlphanumericCode);
+	if (alphaMatches.length) return alphaMatches[alphaMatches.length - 1];
+
+	// 4. Fallback: any 4-8 digit number, prefer 6-digit
+	const allNums = [...cleaned.matchAll(/\b(\d{4,8})\b/g)].map(m => m[1]);
 	const sixDigit = allNums.find(n => n.length === 6);
 	if (sixDigit) return sixDigit;
 	return allNums[0] || null;
@@ -47,10 +162,10 @@ async function readMessages(maxAgeSeconds = 300) {
 	// Query messages from the last N seconds
 	// Messages.app date epoch: 2001-01-01 (Core Data), stored as nanoseconds since that epoch
 	const sql = `
-		SELECT m.text, m.date, h.id as sender
+		SELECT m.text, m.attributedBody, m.date, h.id as sender
 		FROM message m
 		LEFT JOIN handle h ON m.handle_id = h.ROWID
-		WHERE m.text IS NOT NULL
+		WHERE (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
 		  AND m.date > (strftime('%s','now') - 978307200 - ${maxAgeSeconds}) * 1000000000
 		ORDER BY m.date DESC
 		LIMIT 30;
@@ -63,7 +178,11 @@ async function readMessages(maxAgeSeconds = 300) {
 	}
 	return result.output.split('\n').filter(Boolean).map(line => {
 		const parts = line.split('|||');
-		return { text: parts[0] || '', sender: parts[2] || 'unknown' };
+		const plainText = parts[0] || '';
+		const binaryBody = parts[1] || '';
+		// Use plain text if available, otherwise decode NSArchiver binary data
+		const text = plainText || extractTextFromBinaryData(binaryBody);
+		return { text, sender: parts[3] || 'unknown' };
 	});
 }
 
@@ -92,7 +211,7 @@ end tell`;
 		return [];
 	}
 	return result.output.split('---').filter(Boolean).map(chunk => ({
-		text: chunk.trim(),
+		text: stripHtmlTags(chunk.trim()),
 		sender: 'mail',
 	}));
 }
@@ -167,4 +286,4 @@ async function auto_2fa(args) {
 	}
 }
 
-module.exports = { auto_2fa, readMessages, readMail, readNotifications, extractOTP };
+module.exports = { auto_2fa, readMessages, readMail, readNotifications, extractOTP, stripHtmlTags, extractTextFromBinaryData, extractVerificationLink };
