@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const config = require('../../shared/config').default;
 const log = require('../logger');
 const { planLikelySatisfiesGoal, inferDomain } = require('./skill-policy');
+const { PILLARS } = require('../../shared/core-principles');
 
 const REGISTRY_VERSION = 1;
 const REPEAT_THRESHOLD = 2;
@@ -117,6 +118,9 @@ function inferCapabilityBundle(args = {}) {
 	if (/\b(draft|write|writing|compose|content|blog|post|article|copy|newsletter|memo|doc|document)\b/.test(text)) {
 		return ['draft', 'revise', 'format'];
 	}
+	if (PILLARS.VERIFICATION.keywords.some((kw) => text.includes(kw))) {
+		return ['verify_action', 'evidence_collection', 'checkpoint_confirmation'];
+	}
 	return ['fulfill_request', 'adjacent_follow_up_readiness'];
 }
 
@@ -146,6 +150,7 @@ function inferLaneFromIntent(args = {}) {
 	if (!text) return 'skill';
 	if (/\bmemory|remember|policy|context|history|recall\b/.test(text)) return 'memory';
 	if (/\bsafety|guardrail|permission|verify|verification|risk|danger|destructive\b/.test(text)) return 'safety';
+	if (PILLARS.VERIFICATION.keywords.some((kw) => text.includes(kw))) return 'safety';
 	if (/\bresearch|observability|instrument|telemetry|runtime|logs?|metrics|benchmark|evidence|debug\b/.test(text)) return 'research-observability';
 	return 'skill';
 }
