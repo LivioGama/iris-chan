@@ -12,6 +12,7 @@ function createPlanSignature(plan = {}) {
 			direction: normalizeSignatureText(step.direction || ''),
 			query: normalizeSignatureText(step.query || ''),
 			value: normalizeSignatureText(step.value || ''),
+			target: normalizeSignatureText(step.target || step.rawGoal || ''),
 			resultKind: normalizeSignatureText(step.resultKind || ''),
 			position: Number(step.position || 0),
 			selectorText: normalizeSignatureText(step.selector?.text || ''),
