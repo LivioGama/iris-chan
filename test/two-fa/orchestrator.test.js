@@ -69,6 +69,32 @@ require.cache[require.resolve('../../src/main/logger')] = {
 	exports: { info() {}, warn() {}, error() {}, debug() {} },
 };
 
+// Mock auth (extractOTP)
+require.cache[require.resolve('../../src/main/tools/auth')] = {
+	id: require.resolve('../../src/main/tools/auth'),
+	filename: require.resolve('../../src/main/tools/auth'),
+	loaded: true,
+	exports: {
+		extractOTP: (text) => { const m = text.match(/\b(\d{4,8})\b/); return m ? m[1] : null; },
+		readMessages: async () => [], readMail: async () => [], readNotifications: async () => [],
+		auto_2fa: async () => ({ ok: false }),
+	},
+};
+
+// Mock notification monitor (prevent spawning real helper process)
+require.cache[require.resolve('../../src/main/two-fa/notification-monitor')] = {
+	id: require.resolve('../../src/main/two-fa/notification-monitor'),
+	filename: require.resolve('../../src/main/two-fa/notification-monitor'),
+	loaded: true,
+	exports: {
+		NotificationMonitor: class {
+			constructor() {}
+			async start() {}
+			stop() {}
+		},
+	},
+};
+
 const { TwoFAOrchestrator } = require('../../src/main/two-fa/orchestrator');
 
 // ---- Helpers ----
@@ -305,6 +331,83 @@ async function runTests() {
 		await o._tick();
 		const secondSuccess = bus.events.filter(e => e.type === 'TWO_FA_FILL_SUCCESS');
 		assert.strictEqual(secondSuccess.length, 0, 'Should not fill same field again within cooldown');
+	});
+
+	// ---- Notification callback tests ----
+
+	await testAsync('notification callback ignores when no active field', async () => {
+		resetMocks();
+		const bus = makeEventBus();
+		const o = new TwoFAOrchestrator({ eventBus: bus, behaviorEngine: makeBehaviorEngine() });
+		// No _tick called, so _lastFieldInfo is null
+		await o._onNotificationReceived({ type: 'notification', texts: ['Your code is 123456'], timestamp: Date.now() });
+		assert.strictEqual(bus.events.length, 0, 'Should not emit when no field active');
+	});
+
+	await testAsync('notification callback extracts OTP and fills when field is active', async () => {
+		resetMocks();
+		mockDetectResult = {
+			detected: true, type: 'single', appName: 'Arc', windowTitle: 'Confirm - Facebook',
+			confidence: 0.95, fieldContext: 'Enter code', focusedValue: '', fieldQuery: 'code',
+		};
+		mockGatherResult = []; // no codes from poll sources
+		mockConfidenceResult = 0.9;
+		mockFillResult = { ok: true, method: 'type_text' };
+		mockVerifyResult = { verified: true };
+
+		const bus = makeEventBus();
+		const o = new TwoFAOrchestrator({ eventBus: bus, behaviorEngine: makeBehaviorEngine() });
+		// First tick detects field but no code
+		await o._tick();
+		assert.ok(bus.events.find(e => e.type === 'TWO_FA_NO_CODE'), 'Should emit NO_CODE from tick');
+
+		// Now notification arrives with code
+		bus.events.length = 0;
+		await o._onNotificationReceived({ type: 'notification', texts: ['148966 is your Facebook code'], timestamp: Date.now() });
+		const success = bus.events.find(e => e.type === 'TWO_FA_FILL_SUCCESS');
+		assert.ok(success, 'Expected TWO_FA_FILL_SUCCESS from notification');
+		assert.strictEqual(success.payload.source, 'notifications');
+	});
+
+	await testAsync('notification callback respects cooldown/dedup', async () => {
+		resetMocks();
+		mockDetectResult = {
+			detected: true, type: 'single', appName: 'Safari', windowTitle: 'Login',
+			confidence: 0.95, fieldContext: 'verification code', focusedValue: '', fieldQuery: 'code',
+		};
+		mockGatherResult = [];
+		mockConfidenceResult = 0.9;
+		mockFillResult = { ok: true, method: 'ax_set_value' };
+		mockVerifyResult = { verified: true };
+
+		const bus = makeEventBus();
+		const o = new TwoFAOrchestrator({ eventBus: bus, behaviorEngine: makeBehaviorEngine() });
+		await o._tick(); // detect field, no code
+
+		// First notification fills
+		await o._onNotificationReceived({ type: 'notification', texts: ['Code: 999888'], timestamp: Date.now() });
+		assert.ok(bus.events.find(e => e.type === 'TWO_FA_FILL_SUCCESS'), 'First fill should succeed');
+
+		// Second notification should be blocked by dedup (field cleared after fill)
+		bus.events.length = 0;
+		await o._onNotificationReceived({ type: 'notification', texts: ['Code: 777666'], timestamp: Date.now() });
+		assert.strictEqual(bus.events.filter(e => e.type === 'TWO_FA_FILL_SUCCESS').length, 0, 'Should not fill again');
+	});
+
+	await testAsync('notification callback ignores text without OTP', async () => {
+		resetMocks();
+		mockDetectResult = {
+			detected: true, type: 'single', appName: 'Arc', windowTitle: 'Login',
+			confidence: 0.95, fieldContext: 'Enter code', focusedValue: '', fieldQuery: 'code',
+		};
+		mockGatherResult = [];
+		const bus = makeEventBus();
+		const o = new TwoFAOrchestrator({ eventBus: bus, behaviorEngine: makeBehaviorEngine() });
+		await o._tick();
+
+		bus.events.length = 0;
+		await o._onNotificationReceived({ type: 'notification', texts: ['New message from John'], timestamp: Date.now() });
+		assert.strictEqual(bus.events.filter(e => e.type === 'TWO_FA_FILL_START').length, 0, 'Should not attempt fill without OTP');
 	});
 
 	console.log('\nAll orchestrator tests passed!');
