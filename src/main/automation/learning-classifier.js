@@ -352,6 +352,72 @@ function isConflictResolutionContinuationGuidance(text = '') {
 	return mentionsConflict && mentionsResolve && mentionsContinue && mentionsLightTouchReview;
 }
 
+function isFrustrationOrFeatureRequest(text = '') {
+	const raw = String(text || '').trim();
+	if (!raw) return false;
+	const normalized = normalizeText(raw);
+	if (!normalized) return false;
+	const wordCount = normalized.split(/\s+/).length;
+	if (wordCount < 4) return false;
+	const wishPattern = /\bi wish (?:you|iris) could\b/.test(normalized)
+		|| /\bit would be nice if\b/.test(normalized)
+		|| /\bit'?d be nice if\b/.test(normalized)
+		|| /\bif only you could\b/.test(normalized)
+		|| /\bi need you to be able to\b/.test(normalized)
+		|| /\byou should be able to\b/.test(normalized)
+		|| /\bcan you learn to\b/.test(normalized)
+		|| /\byou should learn to\b/.test(normalized)
+		|| /\bit would help if you could\b/.test(normalized);
+	const whyPattern = /\bwhy (?:can'?t|don'?t|cant|dont) you\b/.test(normalized);
+	const complaintPattern = /\byou (?:can'?t|cant) even\b/.test(normalized)
+		|| /\byou still (?:can'?t|cant)\b/.test(normalized)
+		|| /\byou always fail to\b/.test(normalized);
+	const frustrationPattern = /\b(?:this is|it'?s|its) (?:so )?frustrating\b/.test(normalized)
+		|| /\bi'?m frustrated\b/.test(normalized)
+		|| /\bwhy is this so hard\b/.test(normalized);
+	const transliteratedPattern = /काश\s+(?:तुम|तू|तिमी)/i.test(raw)
+		|| /किन\s+गर्न\s+सक्दैन/i.test(raw)
+		|| /ये\s+क्यों\s+नहीं\s+कर\s+सकत/i.test(raw);
+	return wishPattern || whyPattern || complaintPattern || frustrationPattern || transliteratedPattern;
+}
+
+function extractFrustrationSummary(text = '') {
+	const normalized = normalizeText(text);
+	if (!normalized) return text.trim();
+	const patterns = [
+		/\bi wish (?:you|iris) could\s+(.+)/,
+		/\bit would be nice if\s+(.+)/,
+		/\bit'?d be nice if\s+(.+)/,
+		/\bif only you could\s+(.+)/,
+		/\bi need you to be able to\s+(.+)/,
+		/\byou should be able to\s+(.+)/,
+		/\bcan you learn to\s+(.+)/,
+		/\byou should learn to\s+(.+)/,
+		/\bit would help if you could\s+(.+)/,
+		/\bwhy (?:can'?t|don'?t|cant|dont) you\s+(.+)/,
+		/\byou (?:can'?t|cant) even\s+(.+)/,
+		/\byou still (?:can'?t|cant)\s+(.+)/,
+		/\byou always fail to\s+(.+)/,
+		/\bi'?m frustrated (?:with|that|because)\s+(.+)/,
+	];
+	for (const pattern of patterns) {
+		const match = normalized.match(pattern);
+		if (match && match[1]) return match[1].trim();
+	}
+	return text.trim();
+}
+
+function classifyFrustrationSignals(text = '') {
+	const normalized = normalizeText(text);
+	const signals = [];
+	if (/\bi wish\b|\bif only\b|\bit would (?:be nice|help)\b|\bit'?d be nice\b/.test(normalized)) signals.push('wish');
+	if (/\bwhy (?:can'?t|don'?t|cant|dont) you\b/.test(normalized)) signals.push('why-cant');
+	if (/\byou (?:can'?t|cant) even\b|\byou still (?:can'?t|cant)\b|\byou always fail\b/.test(normalized)) signals.push('complaint');
+	if (/\bfrustrat/.test(normalized) || /\bwhy is this so hard\b/.test(normalized)) signals.push('explicit-frustration');
+	if (/काश|किन\s+गर्न|क्यों\s+नहीं/.test(String(text || ''))) signals.push('transliterated');
+	return signals.length ? signals : ['general'];
+}
+
 const ASSISTANT_NAME_PATTERN = /(?:iris|iris[- ]?chan|एरिस|इरिस|आइरिस|आयरिश|आईरिस|आईरिश)/iu;
 
 function mentionsAssistantName(text = '') {
@@ -568,6 +634,22 @@ class LearningClassifier {
 					source: 'user_correction',
 					confidence: 0.93,
 					evidence: text,
+				},
+			};
+		}
+		if (isFrustrationOrFeatureRequest(text)) {
+			const summary = extractFrustrationSummary(text);
+			const signals = classifyFrustrationSignals(text);
+			return {
+				type: 'frustration',
+				key: 'frustration:missing-feature',
+				pillar: PILLARS.LEARNING.name,
+				reason: 'frustration or missing feature expression',
+				payload: {
+					summary,
+					signals,
+					evidence: text.trim(),
+					confidence: 0.85,
 				},
 			};
 		}
@@ -895,4 +977,7 @@ class LearningClassifier {
 
 module.exports = {
 	LearningClassifier,
+	isFrustrationOrFeatureRequest,
+	extractFrustrationSummary,
+	classifyFrustrationSignals,
 };
