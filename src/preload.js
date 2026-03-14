@@ -145,6 +145,14 @@ const electronAPI = {
 	setDirectMode: (enabled) => ipcRenderer.invoke(RUNTIME_CHANNELS.DIRECT_MODE_SET, enabled),
 	onDirectModeChanged: (cb) => ipcRenderer.on('direct-mode-changed', (_, enabled) => cb(enabled)),
 	predictIntent: (params) => ipcRenderer.invoke(RUNTIME_CHANNELS.INTENT_PREDICT, params),
+	feedbackAdd: (text, metadata) => ipcRenderer.invoke(CHANNELS.FEEDBACK_ADD, text, metadata),
+	feedbackGetAll: (filter) => ipcRenderer.invoke(CHANNELS.FEEDBACK_GET_ALL, filter),
+	feedbackGetPending: () => ipcRenderer.invoke(CHANNELS.FEEDBACK_GET_PENDING),
+	feedbackApprove: (id) => ipcRenderer.invoke(CHANNELS.FEEDBACK_APPROVE, id),
+	feedbackDismiss: (id) => ipcRenderer.invoke(CHANNELS.FEEDBACK_DISMISS, id),
+	feedbackRemove: (id) => ipcRenderer.invoke(CHANNELS.FEEDBACK_REMOVE, id),
+	feedbackClear: (filter) => ipcRenderer.invoke(CHANNELS.FEEDBACK_CLEAR, filter),
+	feedbackPendingCount: () => ipcRenderer.invoke(CHANNELS.FEEDBACK_PENDING_COUNT),
 };
 
 // Namespaced API
@@ -236,6 +244,17 @@ electronAPI.window = {
 	onToggleAutonomous: electronAPI.onToggleAutonomous,
 	getWindowGeometry: electronAPI.getWindowGeometry,
 	setWindowGeometry: electronAPI.setWindowGeometry,
+};
+
+electronAPI.feedback = {
+	add: electronAPI.feedbackAdd,
+	getAll: electronAPI.feedbackGetAll,
+	getPending: electronAPI.feedbackGetPending,
+	approve: electronAPI.feedbackApprove,
+	dismiss: electronAPI.feedbackDismiss,
+	remove: electronAPI.feedbackRemove,
+	clear: electronAPI.feedbackClear,
+	pendingCount: electronAPI.feedbackPendingCount,
 };
 
 electronAPI.search = {
