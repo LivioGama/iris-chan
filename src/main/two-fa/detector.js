@@ -63,15 +63,19 @@ async function detect2FAField() {
 		const result = await runHelper({ action: 'ax_snapshot', limit: 80 });
 		if (!result.ok || !result.result) return nil;
 
-		const elements = typeof result.result === 'string' ? JSON.parse(result.result) : result.result;
-		if (!Array.isArray(elements) || !elements.length) return nil;
+		const parsed = typeof result.result === 'string' ? JSON.parse(result.result) : result.result;
+		// ax_snapshot returns { appName, windowTitle, focused, elements } — unwrap
+		const snapshot = Array.isArray(parsed) ? { appName: '', windowTitle: '', elements: parsed } : parsed;
+		const elements = snapshot.elements || [];
+		if (!elements.length) return nil;
 
-		// Extract app and window info from first element (usually the window/app)
-		const appName = elements[0]?.app || elements[0]?.application || '';
-		const windowTitle = elements[0]?.windowTitle || elements[0]?.title || '';
+		const appName = snapshot.appName || '';
+		const windowTitle = snapshot.windowTitle || '';
 
 		// Combine all text for context matching
 		const allText = elements.map(textOf).join(' ');
+		const textFields = elements.filter(el => TEXT_FIELD_ROLES.has(el.role));
+		log.debug('2FA-Detector', `AX: app=${appName}, window=${windowTitle}, elements=${elements.length}, textFields=${textFields.length}`);
 
 		// Strategy 1: Find focused text field matching 2FA patterns
 		const focused = elements.find(el => el.focused && TEXT_FIELD_ROLES.has(el.role));

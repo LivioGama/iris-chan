@@ -75,7 +75,10 @@ class TwoFAOrchestrator {
 		try {
 			// Respect behavior mode
 			const mode = this._behaviorEngine?.getMode?.() || this._behaviorEngine?.mode;
-			if (mode === 'silent') return;
+			if (mode === 'silent') {
+				log.debug('2FA', 'Tick skipped: behavior mode is silent');
+				return;
+			}
 
 			// Prune expired fingerprints
 			const now = Date.now();
@@ -85,7 +88,10 @@ class TwoFAOrchestrator {
 
 			// 1. Detect 2FA field
 			const fieldInfo = await detect2FAField();
-			if (!fieldInfo.detected) return;
+			if (!fieldInfo.detected) {
+				log.debug('2FA', `No 2FA field detected (app: ${fieldInfo.appName || 'unknown'}, window: ${fieldInfo.windowTitle || 'unknown'})`);
+				return;
+			}
 
 			// 2. Check dedup
 			const fingerprint = `${fieldInfo.appName}:${fieldInfo.windowTitle}:${fieldInfo.fieldContext?.slice(0, 100)}`;
