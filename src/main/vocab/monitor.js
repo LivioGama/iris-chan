@@ -1,7 +1,8 @@
-// Background clipboard/window scanning + Gemini extraction
+// Background clipboard/window scanning + AX tree + Gemini extraction
 const config = require('../../shared/config').default;
 const vocabStore = require('./store');
 const toolExecutor = require('../tools');
+const { runHelper } = require('../native-helper');
 const log = require('../logger');
 
 let vocabBuffer = [];
@@ -54,6 +55,58 @@ async function extractTermsWithGemini(textChunks, apiKey) {
 	return [];
 }
 
+const GENERIC_AX_LABELS = new Set([
+	'close', 'minimize', 'zoom', 'back', 'forward', 'save', 'cancel',
+	'ok', 'done', 'next', 'previous', 'search', 'file', 'edit', 'view',
+	'window', 'help', 'new', 'open', 'delete', 'copy', 'paste', 'cut',
+	'undo', 'redo', 'select all', 'quit', 'preferences', 'settings',
+	'toolbar', 'scroll bar', 'menu bar', 'tab bar', 'group', 'list',
+	'button', 'text', 'image', 'icon', 'menu', 'menu item', 'separator',
+	'scroll area', 'content', 'main', 'navigation', 'banner',
+]);
+
+async function extractFromAccessibility(getWin) {
+	try {
+		const result = await runHelper({ action: 'ax_snapshot', limit: config.vocab.axMaxElements || 80 });
+		if (!result.ok || !result.result) return;
+
+		const parsed = typeof result.result === 'string' ? JSON.parse(result.result) : result.result;
+		const appName = parsed.appName || '';
+		const windowTitle = parsed.windowTitle || '';
+
+		// App names are always valid vocabulary — add directly as hot terms
+		if (appName && appName.length >= 2 && appName.length <= 40) {
+			vocabStore.addHotTerm(appName);
+		}
+
+		// Extract text from AX element fields
+		const elements = Array.isArray(parsed.elements) ? parsed.elements : [];
+		const texts = [];
+		for (const el of elements) {
+			for (const field of ['title', 'value', 'description']) {
+				const val = String(el[field] || '').trim();
+				if (val && val.length >= 3 && val.length <= 60 && !GENERIC_AX_LABELS.has(val.toLowerCase())) {
+					texts.push(val);
+				}
+			}
+		}
+
+		// Deduplicate and push into vocabBuffer for Gemini batch processing
+		const unique = [...new Set(texts)];
+		if (unique.length) {
+			vocabBuffer.push(`[AX:${appName}] ${unique.join(' | ')}`);
+		}
+
+		// Push to renderer for recent-seen speech hints
+		const win = getWin();
+		if (win && !win.isDestroyed() && unique.length) {
+			win.webContents.send('ax-vocab-terms', { appName, windowTitle, terms: unique });
+		}
+	} catch (err) {
+		log.error('VocabAX', 'AX extraction error:', err.message);
+	}
+}
+
 function start(apiKey, getWin) {
 	// Clipboard collector — every 5 seconds
 	intervalIds.push(setInterval(async () => {
@@ -103,6 +156,9 @@ function start(apiKey, getWin) {
 		for (const t of terms) vocabStore.addHotTerm(t);
 		log.info('VocabAI', `Batch: ${chunks.length} chunks → ${terms.length} terms: ${terms.join(', ')}`);
 	}, config.vocab.batchExtractMs));
+
+	// Accessibility tree extraction — every 15 seconds (free, no API cost)
+	intervalIds.push(setInterval(() => extractFromAccessibility(getWin), config.vocab.axPollMs));
 
 	// Promote/expire hot terms — every 60 seconds
 	intervalIds.push(setInterval(() => vocabStore.promoteAndCleanHot(), config.vocab.promoteCleanMs));
