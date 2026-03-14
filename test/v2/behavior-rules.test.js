@@ -8,6 +8,7 @@ function simulateBehavior() {
 	let idleAckSent = false;
 	let proactiveLastAt = 0;
 	let lastUserActivityAt = Date.now();
+	let proactiveSuggestionsEnabled = true;
 	let lastProactiveFingerprint = '';
 	let lastProactiveEvalFingerprint = '';
 	let lastProactiveEvalAt = 0;
@@ -40,6 +41,9 @@ function simulateBehavior() {
 		setMode(nextMode) {
 			mode = nextMode;
 		},
+		setProactiveSuggestionsEnabled(enabled) {
+			proactiveSuggestionsEnabled = !!enabled;
+		},
 		canSpeak({ directReply = false, majorMilestone = false, selfFixAck = false } = {}) {
 			if (selfFixAck) return !idleAckSent;
 			if (directReply) return true;
@@ -51,6 +55,7 @@ function simulateBehavior() {
 		},
 		shouldEvaluateProactively({ contextFingerprint, captureAgeMs = 0, now = Date.now() } = {}) {
 			if (mode === 'silent') return false;
+			if (!proactiveSuggestionsEnabled) return false;
 			if (!contextFingerprint) return false;
 			if (mode === 'attentive' && now - lastUserActivityAt > proactiveUserActiveWindowMs) return false;
 			if (captureAgeMs > 20000) return false;
@@ -62,6 +67,7 @@ function simulateBehavior() {
 		},
 		canSuggest({ confidence, contextFingerprint, now }) {
 			if (mode === 'silent') return false;
+			if (!proactiveSuggestionsEnabled) return false;
 			if (confidence < proactiveMinConfidence[mode]) return false;
 			if (mode === 'attentive' && now - lastUserActivityAt > proactiveUserActiveWindowMs) return false;
 			if (now - proactiveLastAt < proactiveModeCooldownMs[mode]) return false;
@@ -119,6 +125,15 @@ async function main() {
 }
 
 {
+	const b = simulateBehavior();
+	const t0 = Date.now();
+	b.setMode('autonomous');
+	b.setProactiveSuggestionsEnabled(false);
+	assert.strictEqual(b.shouldEvaluateProactively({ contextFingerprint: 'ctx-a', captureAgeMs: 1000, now: t0 }), false, 'disabled proactive suggestions block proactive evaluation');
+	assert.strictEqual(b.canSuggest({ confidence: 0.95, contextFingerprint: 'ctx-a', now: t0 }), false, 'disabled proactive suggestions block proactive output');
+}
+
+{
 	// 30-minute idle simulation: assistant should never keep speaking repeatedly
 	const b = simulateBehavior();
 	let emissions = 0;
@@ -157,6 +172,22 @@ async function main() {
 		replyOptions: ['Sounds good', 'Let me check'],
 	}, { mode: 'proactive', feedbackEnabled: true, introversionEnabled: false });
 	assert.match(feedbackReply.spoken, /make 1 warmer, shorter, or clearer/i, 'feedback mode should make revision affordances explicit');
+
+	const proactivePrompt = policy.buildInteractionPromptPolicy({
+		mode: 'proactive',
+		proactiveSuggestionsEnabled: true,
+		feedbackEnabled: false,
+		introversionEnabled: false,
+	});
+	assert.match(proactivePrompt, /Proactive suggestions are enabled for proactive mode/i, 'interaction policy should advertise enabled proactive suggestions');
+
+	const disabledPrompt = policy.buildInteractionPromptPolicy({
+		mode: 'proactive',
+		proactiveSuggestionsEnabled: false,
+		feedbackEnabled: false,
+		introversionEnabled: false,
+	});
+	assert.match(disabledPrompt, /Primary mode posture: proactive mode with unsolicited suggestions disabled/i, 'interaction policy should surface when proactive suggestions are disabled');
 
 	const introvertReply = policy.buildReplyPresentation({
 		replyPrompt: false,

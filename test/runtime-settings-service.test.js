@@ -20,6 +20,7 @@ async function main() {
 	const initial = settings.init();
 	assert.ok(fs.existsSync(process.env.IRIS_SETTINGS_PATH), 'settings init should create ~/.iris/settings.json when absent');
 	assert.strictEqual(initial.voice.modelVoiceName, 'Charon', 'voice defaults should come from the shared config contract');
+	assert.strictEqual(initial.behavior.proactiveSuggestionsEnabled, true, 'proactive suggestions should default on');
 
 	const updated = settings.updateSettings({
 		voice: {
@@ -50,6 +51,7 @@ async function main() {
 	const diskSettings = JSON.parse(fs.readFileSync(process.env.IRIS_SETTINGS_PATH, 'utf-8'));
 	assert.strictEqual(diskSettings.voice.modelVoiceName, 'Aoede', 'voice updates should persist to disk');
 	assert.strictEqual(diskSettings.avatar.current, 'tripo3d', 'avatar settings should persist to disk');
+	assert.strictEqual(diskSettings.behavior.proactiveSuggestionsEnabled, true, 'new behavior defaults should persist to disk');
 
 	const presetPatch = settings.buildVoicePresetPatch('soft bloom');
 	assert.ok(presetPatch, 'settings should expose built-in preset helpers');
@@ -81,6 +83,7 @@ async function main() {
 	assert.ok(watched, 'file watcher should notice external settings.json edits');
 	assert.strictEqual(watched.nextSettings.voice.modelVoiceName, 'Aoede', 'watch reload should broadcast the new voice settings');
 	assert.strictEqual(watched.nextSettings.logging.console.level, 'warn', 'watch reload should merge valid external changes');
+	assert.strictEqual(watched.nextSettings.behavior.proactiveSuggestionsEnabled, true, 'watch reload should preserve proactive suggestion defaults when omitted externally');
 	assert.strictEqual(settings.getSettings().voice.modelVoiceName, 'Aoede', 'in-memory settings should track the externally edited file');
 	settings.shutdown();
 

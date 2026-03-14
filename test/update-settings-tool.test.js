@@ -46,6 +46,7 @@ async function main() {
 	});
 	assert.strictEqual(proactiveModeResult.ok, true, 'legacy autonomous mode requests should still succeed');
 	assert.strictEqual(settings.getSettings().behavior.mode, 'proactive', 'legacy autonomous should normalize to proactive');
+	assert.strictEqual(settings.getSettings().behavior.proactiveSuggestionsEnabled, true, 'proactive suggestions should remain enabled by default in proactive mode');
 
 	const passiveModeResult = await update_settings({
 		request: 'set mode to attentive',
@@ -64,6 +65,19 @@ async function main() {
 	});
 	assert.strictEqual(introversionModeResult.ok, true, 'introversion mode requests should succeed');
 	assert.strictEqual(settings.getSettings().behavior.introversionEnabled, true, 'introversion mode should persist in behavior settings');
+
+	const proactiveSuggestionsResult = await update_settings({
+		request: 'turn proactive suggestions off',
+	});
+	assert.strictEqual(proactiveSuggestionsResult.ok, true, 'proactive suggestions toggle requests should succeed');
+	assert.strictEqual(settings.getSettings().behavior.proactiveSuggestionsEnabled, false, 'proactive suggestions toggle should persist in behavior settings');
+
+	const proactiveSuggestionsQuery = await query_settings({
+		request: 'are proactive suggestions on',
+	});
+	assert.strictEqual(proactiveSuggestionsQuery.ok, true, 'proactive suggestions query should succeed');
+	assert.strictEqual(proactiveSuggestionsQuery.queryKind, 'behavior_proactive_suggestions', 'proactive suggestions query should use a dedicated query kind');
+	assert.match(proactiveSuggestionsQuery.summary, /off/i, 'proactive suggestions query should summarize the current toggle state');
 
 	const presetListResult = await query_settings({
 		request: 'list available voice presets',
