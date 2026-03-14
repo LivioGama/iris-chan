@@ -491,6 +491,7 @@ class LearningManager {
 		this.activeIssues = new Set();
 		this.deferredIssueQueue = [];
 		this.activeSelfFixCount = 0;
+		this._recentFrustrationKeys = new Map();
 		this._ensureFiles();
 	}
 
@@ -808,6 +809,10 @@ class LearningManager {
 	}
 
 	async _processEvent(event) {
+		if (event.type === 'frustration') {
+			await this._applyFrustrationEvent(event);
+			return;
+		}
 		if (event.type === 'memory') {
 			await this._applyMemoryEvent(event);
 			return;
@@ -862,6 +867,70 @@ class LearningManager {
 					log.info('Learning', `Memory updated: key=${storedApp.key} value=${appName}`);
 				}
 			}
+		}
+	}
+
+	_frustrationDedupeKey(summary = '') {
+		const tokens = tokenizeIssueText(summary).slice(0, 6);
+		return hash(tokens.join('+') || summary);
+	}
+
+	_sweepExpiredFrustrationKeys() {
+		const now = Date.now();
+		const ttl = 15 * 60 * 1000;
+		for (const [key, timestamp] of this._recentFrustrationKeys) {
+			if (now - timestamp > ttl) this._recentFrustrationKeys.delete(key);
+		}
+	}
+
+	async _applyFrustrationEvent(event) {
+		const payload = event.classification?.payload || {};
+		const summary = payload.summary || event.userText || '';
+		const signals = payload.signals || [];
+		if (!summary) return;
+
+		this._sweepExpiredFrustrationKeys();
+		const dedupeKey = this._frustrationDedupeKey(summary);
+		if (this._recentFrustrationKeys.has(dedupeKey)) {
+			log.info('Learning', `Skipping duplicate frustration task: key=${dedupeKey} summary=${summary.slice(0, 60)}`);
+			return;
+		}
+		this._recentFrustrationKeys.set(dedupeKey, Date.now());
+
+		let createFn;
+		try {
+			createFn = require('../task-queue/service').createFrustrationQueuedTask;
+		} catch {
+			log.warn('Learning', 'Task queue service unavailable for frustration capture');
+			return;
+		}
+
+		let projectPath = process.cwd();
+		try {
+			projectPath = require('../workspace').get() || projectPath;
+		} catch {}
+
+		try {
+			const result = await createFn({
+				summary,
+				rawPrompt: summary,
+				signals,
+				utterance: event.userText || '',
+				confidence: payload.confidence,
+				projectPath,
+				intake: {
+					source: 'conversation',
+					mode: 'frustration-capture',
+					dedupeKey,
+					frustration: true,
+					frustrationSignals: signals,
+					utterance: event.userText || '',
+					capturedAt: Date.now(),
+				},
+			});
+			log.info('Learning', `Created frustration task: taskId=${result?.taskId} summary=${summary.slice(0, 80)}`);
+		} catch (err) {
+			log.warn('Learning', `Failed to create frustration task: ${err.message}`);
 		}
 	}
 
@@ -962,6 +1031,22 @@ class LearningManager {
 			issue.status = 'background_only';
 			this._writeJson(this.issuePath, issues);
 			return;
+		}
+		const currentBehavior = require('../settings').getNamespace('behavior');
+		if (currentBehavior?.feedbackEnabled) {
+			const { getFeedbackStore } = require('./service-ref');
+			const store = getFeedbackStore();
+			if (store) {
+				store.addItem({
+					text: event.guidanceText || event.userText || issue.description,
+					source: 'tool_gate',
+					metadata: { toolBlocked: 'self_fix_auto', issueSignature: issue.issueSignature },
+				});
+				issue.status = 'feedback_captured';
+				log.info('Learning', `Feedback mode gate: captured self-fix as feedback item for issue=${issue.issueSignature}`);
+				this._writeJson(this.issuePath, issues);
+				return;
+			}
 		}
 		const queueImmediately = event.forceImmediate === true;
 		if (queueImmediately || issue.count >= 2) {
