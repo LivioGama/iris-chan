@@ -2,6 +2,7 @@ const MAX_EVENTS = 30;
 
 export function pushTimelineEvent(evt) {
 	if (!evt?.type) return;
+	if (evt.type === 'INTENT_PREDICTION') return;
 	const root = document.getElementById('activity-timeline');
 	if (!root) return;
 
