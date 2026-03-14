@@ -58,7 +58,7 @@ export const getRecentObservations = query({
     if (args.sessionId) {
       return await ctx.db
         .query("visual_observations")
-        .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+        .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId!))
         .order("desc")
         .take(limit);
     }
