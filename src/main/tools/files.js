@@ -114,6 +114,48 @@ function classifyInstallArtifactPath(targetPath) {
 	return null;
 }
 
+function getMountedDiskImages() {
+	try {
+		const raw = execSync('hdiutil info -plist | plutil -convert json -o - -', {
+			timeout: 10000,
+			stdio: ['pipe', 'pipe', 'pipe'],
+		}).toString();
+		const info = JSON.parse(raw);
+		const images = info.images || [];
+		const result = [];
+		for (const img of images) {
+			if (img.autodiskmount === false) continue;
+			if (typeof img['owner-uid'] === 'number' && img['owner-uid'] !== 501) continue;
+			const imagePath = img['image-path'] || '';
+			if (/com_apple_|CoreSimulator|BaseSystem/i.test(imagePath)) continue;
+			const entities = img['system-entities'] || [];
+			for (const entity of entities) {
+				const mountPoint = entity['mount-point'];
+				if (!mountPoint) continue;
+				result.push({
+					imagePath,
+					mountPoint,
+					volumeName: path.basename(mountPoint),
+				});
+			}
+		}
+		return result;
+	} catch {
+		return [];
+	}
+}
+
+function findSourceDmgForVolume(volumePath) {
+	const normalized = path.resolve(String(volumePath || ''));
+	const images = getMountedDiskImages();
+	for (const img of images) {
+		if (path.resolve(img.mountPoint) === normalized) {
+			return fs.existsSync(img.imagePath) ? img.imagePath : null;
+		}
+	}
+	return null;
+}
+
 function finderResolveItemByName(name) {
 	return runFinderAppleScript(`
 		tell application "Finder"
@@ -357,5 +399,7 @@ module.exports = {
 	resolve_install_cleanup_target,
 	cleanup_install_artifact,
 	classifyInstallArtifactPath,
+	getMountedDiskImages,
+	findSourceDmgForVolume,
 	download_browser_image,
 };
