@@ -92,17 +92,22 @@ class TwoFAOrchestrator {
 	}
 
 	async _tick() {
-		if (this._filling) return;
+		log.info('2FA', '[Tick] Detector running...');
+		if (this._filling) {
+			log.debug('2FA', '[Tick] Skipped: already filling');
+			return;
+		}
 		this._filling = true;
+		log.info('2FA', '[Tick] Starting detection...');
 
 		try {
 			// Respect behavior mode
 			const mode = this._behaviorEngine?.getMode?.() || this._behaviorEngine?.mode;
 			if (mode === 'silent') {
-				log.debug('2FA', 'Tick skipped: behavior mode is silent');
+				log.info('2FA', 'Tick skipped: behavior mode is silent');
 				return;
 			}
-			log.debug('2FA', `[Tick] Mode: ${mode}, checking for 2FA field...`);
+			log.info('2FA', `[Tick] Mode: ${mode}, checking for 2FA field...`);
 
 			// Prune expired fingerprints
 			const now = Date.now();
@@ -114,7 +119,7 @@ class TwoFAOrchestrator {
 			const fieldInfo = await detect2FAField();
 			if (!fieldInfo.detected) {
 				this._lastFieldInfo = null;
-				log.debug('2FA', `No 2FA field detected (app: ${fieldInfo.appName || 'unknown'}, window: ${fieldInfo.windowTitle || 'unknown'})`);
+				log.info('2FA', `No 2FA field detected (app: ${fieldInfo.appName || 'unknown'}, window: ${fieldInfo.windowTitle || 'unknown'})`);
 				return;
 			}
 
@@ -150,6 +155,7 @@ class TwoFAOrchestrator {
 		// Also include recently cached codes (SMS/notifications that arrived earlier but weren't filled)
 		const recentCached = this._codeCache.getLatest(5);
 		if (recentCached.length > 0) {
+			log.info('2FA', `Found ${recentCached.length} recent cached codes for pool`);
 			codes.unshift(...recentCached.map(c => ({
 				code: c.code,
 				source: c.source || 'cache',
@@ -166,6 +172,7 @@ class TwoFAOrchestrator {
 
 			// 5. Pick best and gate on confidence
 			const best = codes[0];
+			log.info('2FA', `Selected code from ${best.source} (${codes.length} available)`);
 			const overallConfidence = computeConfidence(fieldInfo, best);
 			if (overallConfidence < this._confidenceThreshold) {
 				this._emit('TWO_FA_LOW_CONFIDENCE', {
