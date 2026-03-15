@@ -35,10 +35,15 @@ async function open_link(args = {}) {
 
 	let targetUrl = url;
 	if (!targetUrl && query) {
-		const results = await convexStore.searchLinks(query, 1);
+		let results;
+		if (RECENCY_PATTERN.test(query)) {
+			results = await convexStore.getRecentLinks(1);
+		} else {
+			results = await convexStore.searchLinks(query, 1);
+		}
 		if (results.length) targetUrl = results[0].url;
 	}
-	if (!targetUrl) return { ok: false, result: 'No link found matching your query.' };
+	if (!targetUrl) return { ok: false, result: `No saved link found matching "${query || 'your request'}". Links are captured automatically when you browse.` };
 
 	return new Promise((resolve) => {
 		exec(`open "${targetUrl.replace(/"/g, '\\"')}"`, { timeout: 5000 }, (err) => {
