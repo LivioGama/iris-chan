@@ -13,13 +13,6 @@ require('ts-node').register({ transpileOnly: true });
 
 const { app } = require('electron');
 
-// Enforce single instance: quit if another instance is already running
-const gotTheLock = app.requestSingleInstanceLock();
-if (!gotTheLock) {
-	app.quit();
-	process.exit(0);
-}
-
 // Force ANGLE Metal backend before any window is created
 app.commandLine.appendSwitch('use-angle', 'metal');
 app.commandLine.appendSwitch('enable-gpu-rasterization');

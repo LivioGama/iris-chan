@@ -39,6 +39,15 @@ const { LinkCapturePoller } = require('./link-capture/poller');
 const appConfig = require('../shared/config').default;
 
 function startRuntime({ apiKey }) {
+	// Enforce single instance: quit if another instance is already running
+	const { app } = require('electron');
+	const gotTheLock = app.requestSingleInstanceLock();
+	if (!gotTheLock) {
+		require('./logger').info('Runtime', 'Another instance is already running. Quitting.');
+		app.quit();
+		return { apiKey };
+	}
+
 	const eventBus = new RuntimeEventBus();
 	const convexClient = new ConvexClient({ eventBus });
 	setUnifiedConvexClient(convexClient);
