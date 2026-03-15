@@ -432,18 +432,46 @@ const convexStore = {
     if (!config.url) return [];
     const clean = cleanText(queryText);
     if (!clean) return [];
+
+    // Phase 1: semantic vector search (requires ready embeddings)
     const { embedding, status } = await generateEmbedding(clean);
-    if (status !== 'ready') return [];
+    if (status === 'ready') {
+      try {
+        const result = await httpRun('links:semanticLinkSearch', {
+          embedding,
+          limit,
+          minScore: 0.3,
+          domainFilter: domainFilter || undefined,
+        });
+        const hits = Array.isArray(result?.value) ? result.value : [];
+        if (hits.length) return hits;
+      } catch (err) {
+        console.error('[ConvexStore] searchLinks semantic error:', err.message);
+      }
+    }
+
+    // Phase 2: text-based fallback (works even with pending/failed embeddings)
     try {
-      const result = await httpRun('links:semanticLinkSearch', {
-        embedding,
-        limit,
-        minScore: 0.3,
+      const result = await httpRun('links:searchLinksByText', {
+        limit: 50,
         domainFilter: domainFilter || undefined,
       });
-      return Array.isArray(result?.value) ? result.value : [];
+      const candidates = Array.isArray(result?.value) ? result.value : [];
+      if (!candidates.length) return [];
+      const keywords = clean.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+      if (!keywords.length) return [];
+      const scored = candidates
+        .map(link => {
+          const haystack = `${link.title || ''} ${link.domain || ''} ${link.url || ''} ${link.snippet || ''}`.toLowerCase();
+          const matchCount = keywords.reduce((s, kw) => s + (haystack.includes(kw) ? 1 : 0), 0);
+          return { ...link, _score: matchCount / keywords.length };
+        })
+        .filter(r => r._score > 0)
+        .sort((a, b) => b._score - a._score)
+        .slice(0, limit);
+      return scored;
     } catch (err) {
-      console.error('[ConvexStore] searchLinks error:', err.message);
+      console.error('[ConvexStore] searchLinks text fallback error:', err.message);
       return [];
     }
   },
