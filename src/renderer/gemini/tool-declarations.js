@@ -300,9 +300,9 @@ export const toolDeclarations = [
 	},
 	{
 		name: 'recall_link',
-		description: 'Search your saved link history using natural language. Use when the user asks "what was that article about X?", "find that link about Y", "do you remember that page about Z?", or wants to browse previously seen links. Returns matching links ranked by relevance.',
+		description: 'Search your saved link history using natural language. Use when the user asks "what was that article about X?", "find that link about Y", "do you remember that page about Z?", "what\'s the most recent link?", or wants to browse previously seen links. Supports both topic-based search and recency queries like "most recent", "latest", "last link". Returns matching links ranked by relevance or recency.',
 		parameters: { type: 'OBJECT', properties: {
-			query: { type: 'STRING', description: 'Natural language description of the link to find, e.g. "React performance article" or "that YouTube video about cooking"' },
+			query: { type: 'STRING', description: 'Natural language description of the link to find, e.g. "React performance article", "that YouTube video about cooking", or "most recent link"' },
 			domain: { type: 'STRING', description: 'Optional domain filter, e.g. "github.com" or "youtube.com"' },
 			limit: { type: 'NUMBER', description: 'Max results to return (default 5, max 10)' },
 		}, required: ['query'] },
