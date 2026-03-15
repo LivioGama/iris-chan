@@ -16,6 +16,9 @@ const intakeValidator = v.object({
 
 const executionValidator = v.object({
   strategy: v.optional(v.string()),
+  executionLane: v.optional(v.string()),
+  hireableProfile: v.optional(v.string()),
+  queueBucket: v.optional(v.string()),
   lastEvent: v.optional(v.string()),
   lastErrorCode: v.optional(v.string()),
   lastAttemptAt: v.optional(v.number()),
