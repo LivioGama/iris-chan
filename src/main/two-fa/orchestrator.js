@@ -102,6 +102,7 @@ class TwoFAOrchestrator {
 				log.debug('2FA', 'Tick skipped: behavior mode is silent');
 				return;
 			}
+			log.debug('2FA', `[Tick] Mode: ${mode}, checking for 2FA field...`);
 
 			// Prune expired fingerprints
 			const now = Date.now();
@@ -198,11 +199,6 @@ class TwoFAOrchestrator {
 
 	async _onNotificationReceived(evt) {
 		if (this._filling) return;
-		const fieldInfo = this._lastFieldInfo;
-		if (!fieldInfo) {
-			log.debug('2FA', 'Notification received but no active 2FA field');
-			return;
-		}
 
 		const texts = Array.isArray(evt.texts) ? evt.texts : [];
 		if (!texts.length) return;
@@ -215,6 +211,17 @@ class TwoFAOrchestrator {
 		}
 		// Cache the code regardless of fill outcome
 		this._codeCache.add({ code, source: 'notifications', sender: 'notification', text: allText, timestamp: Date.now() });
+
+		let fieldInfo = this._lastFieldInfo;
+		if (!fieldInfo) {
+			log.debug('2FA', 'Notification received with OTP but no cached 2FA field. Attempting to detect field now...');
+			fieldInfo = await detect2FAField();
+			if (!fieldInfo.detected) {
+				log.debug('2FA', 'No 2FA field detected. Code cached for later polling.');
+				return;
+			}
+			log.info('2FA', 'Found 2FA field upon notification arrival');
+		}
 
 		// Check dedup
 		if (this._recentFills.has(fieldInfo.fingerprint)) return;
