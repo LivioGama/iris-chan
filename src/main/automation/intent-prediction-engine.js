@@ -35,6 +35,9 @@ const PREDICTION_USER_TEMPLATE = `Current context:
 - Window titles: {windowTitles}
 - Behavior mode: {behaviorMode}
 - Time of day: {timeOfDay}
+- Workspace: {workspacePath}
+- Project type: {projectType}
+- Git branch: {gitBranch}
 
 Screen content (UI elements visible):
 {screenContent}
@@ -106,6 +109,9 @@ function fillTemplate(template, context) {
 		.replace('{windowTitles}', (context.windowTitles || []).join(', ') || '(none)')
 		.replace('{behaviorMode}', context.behaviorMode)
 		.replace('{timeOfDay}', context.timeOfDay)
+		.replace('{workspacePath}', context.workspacePath || '(none)')
+		.replace('{projectType}', context.projectType || 'unknown')
+		.replace('{gitBranch}', context.gitBranch || '(none)')
 		.replace('{screenContent}', context.screenContent || '(not available)')
 		.replace('{recentTools}', formatTools(context.recentTools))
 		.replace('{recentTurns}', formatTurns(context.recentTurns))

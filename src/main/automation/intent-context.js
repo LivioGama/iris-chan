@@ -1,3 +1,8 @@
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const workspace = require('../workspace');
+
 const AX_PRIORITY_ROLES = ['AXTextField', 'AXTextArea', 'AXButton', 'AXLink', 'AXStaticText', 'AXMenuItem', 'AXTabGroup'];
 
 function summarizeAx(axSnapshot, limit = 20) {
@@ -29,6 +34,26 @@ function summarizeAx(axSnapshot, limit = 20) {
 		parts.push(`[${el.role || 'element'} "${truncateText(text, 50)}"]`);
 	}
 	return parts.join(' ');
+}
+
+function detectProjectType(dir) {
+	if (!dir) return 'unknown';
+	try {
+		if (fs.existsSync(path.join(dir, 'package.json'))) return 'node';
+		if (fs.existsSync(path.join(dir, 'Cargo.toml'))) return 'rust';
+		if (fs.existsSync(path.join(dir, 'pyproject.toml')) || fs.existsSync(path.join(dir, 'setup.py'))) return 'python';
+		if (fs.existsSync(path.join(dir, 'go.mod'))) return 'go';
+	} catch {}
+	return 'unknown';
+}
+
+function getGitBranch(dir) {
+	if (!dir) return null;
+	try {
+		return execSync('git rev-parse --abbrev-ref HEAD', { cwd: dir, timeout: 2000, encoding: 'utf-8' }).trim() || null;
+	} catch {
+		return null;
+	}
 }
 
 function getTimeOfDay() {
@@ -72,6 +97,9 @@ function buildIntentContext({ learningManager, memoryStore, behaviorMode, frontm
 	const recentTools = summarizeTools(learningManager?.recentToolExecutions);
 	const recentTurns = summarizeTurns(learningManager?.recentTurns);
 	const activePolicies = summarizePolicies(memoryStore?.getEntries?.() || []);
+	const workspacePath = workspace.get() || null;
+	const projectType = detectProjectType(workspacePath);
+	const gitBranch = getGitBranch(workspacePath);
 
 	return {
 		frontmostApp: String(frontmostApp || '').trim() || 'unknown',
@@ -85,6 +113,9 @@ function buildIntentContext({ learningManager, memoryStore, behaviorMode, frontm
 			: null,
 		windowTitles: Array.isArray(windowTitles) ? windowTitles.filter(Boolean) : [],
 		screenContent: summarizeAx(axSnapshot),
+		workspacePath,
+		projectType,
+		gitBranch,
 	};
 }
 
