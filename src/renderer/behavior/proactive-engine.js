@@ -181,6 +181,7 @@ export class ProactiveEngine {
 				suggestion: String(topIntent.suggestedAction || topIntent.description || '').trim(),
 				confidence: Number(topIntent.confidence || 0),
 				tier: tierForConfidence(topIntent.confidence),
+				toolHints: Array.isArray(prediction.toolHints) ? prediction.toolHints : [],
 				context: {
 					app: frontmostApp,
 					contextFingerprint,
