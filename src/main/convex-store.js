@@ -452,15 +452,20 @@ const convexStore = {
 
     // Phase 2: text-based fallback (works even with pending/failed embeddings)
     try {
-      const result = await httpRun('links:searchLinksByText', {
-        limit: 50,
-        domainFilter: domainFilter || undefined,
-      });
+      const result = await httpRun('links:getRecentLinks', { limit: 50 });
+      if (result.error) {
+        console.warn('[ConvexStore] searchLinks text fallback query error:', result.error);
+        return [];
+      }
       const candidates = Array.isArray(result?.value) ? result.value : [];
       if (!candidates.length) return [];
       const keywords = clean.toLowerCase().split(/\s+/).filter(w => w.length > 1);
       if (!keywords.length) return [];
-      const scored = candidates
+      let filtered = candidates;
+      if (domainFilter) {
+        filtered = filtered.filter(link => (link.domain || '') === domainFilter);
+      }
+      const scored = filtered
         .map(link => {
           const haystack = `${link.title || ''} ${link.domain || ''} ${link.url || ''} ${link.snippet || ''}`.toLowerCase();
           const matchCount = keywords.reduce((s, kw) => s + (haystack.includes(kw) ? 1 : 0), 0);
@@ -472,6 +477,22 @@ const convexStore = {
       return scored;
     } catch (err) {
       console.error('[ConvexStore] searchLinks text fallback error:', err.message);
+      return [];
+    }
+  },
+
+  async getRecentLinks(limit = 5) {
+    const config = initConfig();
+    if (!config.url) return [];
+    try {
+      const result = await httpRun('links:getRecentLinks', { limit });
+      if (result.error) {
+        console.warn('[ConvexStore] getRecentLinks error:', result.error);
+        return [];
+      }
+      return Array.isArray(result?.value) ? result.value : [];
+    } catch (err) {
+      console.error('[ConvexStore] getRecentLinks error:', err.message);
       return [];
     }
   },
