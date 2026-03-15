@@ -138,6 +138,30 @@ class IntentPredictionEngine {
 		this._loopInterval = null;
 		this._loopInFlight = false;
 		this._lastFingerprint = '';
+		this._lastPrediction = null;
+		this._setupOutcomeTracking();
+	}
+
+	_setupOutcomeTracking() {
+		if (!this._eventBus || !this._patternStore) return;
+		this._eventBus.on('event', (evt) => {
+			if (evt?.type !== 'TOOL_END' || !this._lastPrediction) return;
+			const elapsed = Date.now() - this._lastPrediction.timestamp;
+			if (elapsed > 30000) return;
+			const toolName = evt.payload?.toolName || evt.payload?.name || '';
+			if (!toolName) return;
+			for (const intent of this._lastPrediction.intents) {
+				const hints = this._lastPrediction.toolHints || [];
+				const hit = hints.includes(toolName);
+				this._patternStore.recordOutcome({
+					appName: this._lastPrediction.appName,
+					timeOfDay: this._lastPrediction.timeOfDay,
+					intentType: intent.type,
+					hit,
+				});
+			}
+			this._lastPrediction = null;
+		});
 	}
 
 	get available() {
@@ -171,7 +195,18 @@ class IntentPredictionEngine {
 			return { intents: [], toolHints: [], contextFingerprint: fingerprint };
 		}
 
-		const userMessage = fillTemplate(PREDICTION_USER_TEMPLATE, context);
+		let userMessage = fillTemplate(PREDICTION_USER_TEMPLATE, context);
+
+		if (this._patternStore) {
+			const calibrationParts = [];
+			for (const kind of INTENT_KINDS) {
+				const rate = this._patternStore.getHitRate({ intentType: kind });
+				if (rate !== null) calibrationParts.push(`${kind}=${Math.round(rate * 100)}%`);
+			}
+			if (calibrationParts.length > 0) {
+				userMessage += `\n\nHistorical accuracy: ${calibrationParts.join(', ')}. Adjust confidence based on this.`;
+			}
+		}
 
 		const result = await this._groq.complete(
 			[
@@ -210,6 +245,16 @@ class IntentPredictionEngine {
 					intentType: intent.type,
 				});
 			}
+		}
+
+		if (intents.length > 0) {
+			this._lastPrediction = {
+				timestamp: Date.now(),
+				appName: context.frontmostApp,
+				timeOfDay: context.timeOfDay,
+				intents,
+				toolHints,
+			};
 		}
 
 		info(TAG, `Predicted ${intents.length} intent(s) for ${frontmostApp || 'unknown'}: ${intents.map((i) => `${i.type}@${i.confidence.toFixed(2)}`).join(', ') || 'none'}`);
