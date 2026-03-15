@@ -113,7 +113,7 @@ function startRuntime({ apiKey }) {
 		taskQueueWatcher.start(undefined, behaviorEngine);
 
 		registerShortcuts({ behaviorEngine });
-		vocabMonitor.start(apiKey, () => avatarWindow.getWindow());
+		vocabMonitor.start(apiKey, () => avatarWindow.get());
 		if (linkCapturePoller) {
 			try {
 				linkCapturePoller.start();

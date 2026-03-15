@@ -5,7 +5,7 @@ const settings = require('./settings');
 
 const LOG_PATH = process.env.IRIS_LOG_PATH || path.join(os.homedir(), 'Desktop', 'consolidated_messages.log');
 const MAX_SIZE = 2 * 1024 * 1024;
-const LEVEL_RANK = { info: 0, warn: 1, error: 2, silent: 3 };
+const LEVEL_RANK = { debug: -1, info: 0, warn: 1, error: 2, silent: 3 };
 
 let stdoutOk = true;
 let stderrOk = true;
@@ -163,6 +163,10 @@ function log(level, tag, ...args) {
 	write(normalizeLevel(level), tag, args);
 }
 
+function debug(tag, ...args) {
+	write('debug', tag, args);
+}
+
 function info(tag, ...args) {
 	write('info', tag, args);
 }
@@ -216,6 +220,7 @@ module.exports = {
 	cycleConsoleLevel,
 	installConsoleInterceptor,
 	log,
+	debug,
 	info,
 	warn,
 	error,
