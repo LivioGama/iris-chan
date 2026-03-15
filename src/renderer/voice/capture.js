@@ -194,16 +194,24 @@ export class AudioCapture extends Emitter {
 
 	async start(retries = 2) {
 		this.stop();
-		this.stream = await navigator.mediaDevices.getUserMedia({
-			audio: {
-				channelCount: 1,
-				echoCancellation: true,
-				noiseSuppression: true,
-				autoGainControl: false,
-				latency: 0,
-				sampleRate: 16000,
-			}
-		});
+		const audioConstraints = {
+			channelCount: 1,
+			echoCancellation: true,
+			noiseSuppression: true,
+			autoGainControl: false,
+			latency: 0,
+			sampleRate: 16000,
+		};
+		// Allow selecting a specific audio input device by name (e.g. "BlackHole 2ch")
+		const preferredDevice = window.__irisAudioDevice;
+		if (preferredDevice) {
+			try {
+				const devices = await navigator.mediaDevices.enumerateDevices();
+				const match = devices.find(d => d.kind === 'audioinput' && d.label.includes(preferredDevice));
+				if (match) audioConstraints.deviceId = { exact: match.deviceId };
+			} catch {}
+		}
+		this.stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
 		this.ctx = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' });
 
 		const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });

@@ -19,6 +19,14 @@ app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-features', 'Metal');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
+// Test mode: use a WAV file as fake audio input (set IRIS_TEST_AUDIO=/path/to.wav)
+if (process.env.IRIS_TEST_AUDIO) {
+	app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+	if (process.env.IRIS_TEST_AUDIO !== '1') {
+		app.commandLine.appendSwitch('use-file-for-fake-audio-capture', process.env.IRIS_TEST_AUDIO);
+	}
+}
+
 const { loadEnv } = require('../shared/env-loader');
 loadEnv();
 

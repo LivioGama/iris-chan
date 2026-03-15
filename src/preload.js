@@ -16,6 +16,9 @@ function formatHomeRelativePath(targetPath) {
 }
 
 contextBridge.exposeInMainWorld('avatarConfig', null);
+if (process.env.IRIS_AUDIO_DEVICE) {
+	contextBridge.exposeInMainWorld('__irisAudioDevice', process.env.IRIS_AUDIO_DEVICE);
+}
 contextBridge.exposeInMainWorld('getAvatarConfig', () => avatarConfigPromise);
 contextBridge.exposeInMainWorld('irisPaths', {
 	sourceDir: irisSourceDir,
