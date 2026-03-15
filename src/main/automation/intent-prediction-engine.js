@@ -32,8 +32,12 @@ Respond with JSON only. No markdown, no explanation.`;
 
 const PREDICTION_USER_TEMPLATE = `Current context:
 - Frontmost app: {frontmostApp}
+- Window titles: {windowTitles}
 - Behavior mode: {behaviorMode}
 - Time of day: {timeOfDay}
+
+Screen content (UI elements visible):
+{screenContent}
 
 Recent tool executions (most recent last):
 {recentTools}
@@ -99,19 +103,22 @@ function formatPolicies(policies = []) {
 function fillTemplate(template, context) {
 	return template
 		.replace('{frontmostApp}', context.frontmostApp)
+		.replace('{windowTitles}', (context.windowTitles || []).join(', ') || '(none)')
 		.replace('{behaviorMode}', context.behaviorMode)
 		.replace('{timeOfDay}', context.timeOfDay)
+		.replace('{screenContent}', context.screenContent || '(not available)')
 		.replace('{recentTools}', formatTools(context.recentTools))
 		.replace('{recentTurns}', formatTurns(context.recentTurns))
 		.replace('{activePolicies}', formatPolicies(context.activePolicies));
 }
 
 class IntentPredictionEngine {
-	constructor({ groqClient, learningManager, memoryStore, eventBus }) {
+	constructor({ groqClient, learningManager, memoryStore, eventBus, worldState }) {
 		this._groq = groqClient;
 		this._learningManager = learningManager;
 		this._memoryStore = memoryStore;
 		this._eventBus = eventBus;
+		this._worldState = worldState || null;
 		this._loopInterval = null;
 		this._loopInFlight = false;
 		this._lastFingerprint = '';
@@ -121,7 +128,7 @@ class IntentPredictionEngine {
 		return this._groq?.available === true;
 	}
 
-	async predict({ frontmostApp, screenMeta, behaviorMode } = {}) {
+	async predict({ frontmostApp, screenMeta, behaviorMode, windowTitles, axSnapshot } = {}) {
 		if (!this.available) return { intents: [], toolHints: [], contextFingerprint: '' };
 
 		const context = buildIntentContext({
@@ -130,6 +137,8 @@ class IntentPredictionEngine {
 			behaviorMode,
 			frontmostApp,
 			screenMeta,
+			windowTitles,
+			axSnapshot,
 		});
 
 		const fingerprint = hashString(
@@ -233,7 +242,19 @@ class IntentPredictionEngine {
 		if (this._loopInFlight) return;
 		this._loopInFlight = true;
 		try {
-			const prediction = await this.predict({});
+			let frontmostApp;
+			let windowTitles;
+			let axSnapshot;
+			if (this._worldState) {
+				const appResult = await this._worldState.getFrontmostApp().catch(() => ({ ok: false }));
+				if (appResult.ok) {
+					frontmostApp = appResult.name;
+					windowTitles = appResult.windows;
+				}
+				axSnapshot = await this._worldState.snapshotAccessibility().catch(() => ({ ok: false }));
+				this._worldState.invalidate();
+			}
+			const prediction = await this.predict({ frontmostApp, windowTitles, axSnapshot });
 			if (prediction.intents.length > 0 && this._eventBus) {
 				this._eventBus.emitEvent('INTENT_PREDICTION', {
 					intents: prediction.intents,

@@ -26,6 +26,7 @@ const { setUiTaskService, setSelfImprovementManager, setMemoryStore, setLearning
 const { FeedbackStore } = require('./feedback/store');
 const { GroqClient } = require('./automation/groq-client');
 const { IntentPredictionEngine } = require('./automation/intent-prediction-engine');
+const { WorldState } = require('./automation/world-state');
 const { setConvexClient: setUnifiedConvexClient } = require('./runtime/convex-adapter');
 const taskQueueWatcher = require('./task-queue/watcher');
 const { RuntimeEventPersistence } = require('./runtime/event-persistence');
@@ -49,7 +50,8 @@ function startRuntime({ apiKey }) {
 	const selfImprovementManager = new SelfImprovementManager({ skillsEngine: skills });
 	const learningManager = new LearningManager({ memoryStore, selfImprovementManager });
 	const groqClient = new GroqClient({ apiKey: process.env.GROQ_API_KEY || '' });
-	const intentEngine = new IntentPredictionEngine({ groqClient, learningManager, memoryStore, eventBus });
+	const worldState = new WorldState();
+	const intentEngine = new IntentPredictionEngine({ groqClient, learningManager, memoryStore, eventBus, worldState });
 	const uiTaskService = new UITaskService({ eventBus, selfImprovementManager, nativeFallbackManager, episodeRecorder });
 	const healthService = new HealthService({
 		convexClient,
