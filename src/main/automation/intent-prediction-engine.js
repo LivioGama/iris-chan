@@ -2,6 +2,8 @@ const { info, error: logError } = require('../logger');
 const { buildIntentContext } = require('./intent-context');
 
 const TAG = 'IntentPrediction';
+const CLASSIFY_CACHE_MAX = 50;
+const CLASSIFY_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const INTENT_KINDS = ['reply', 'next-step', 'warning', 'fix', 'follow-up', 'opportunity'];
 
@@ -139,6 +141,7 @@ class IntentPredictionEngine {
 		this._loopInFlight = false;
 		this._lastFingerprint = '';
 		this._lastPrediction = null;
+		this._classifyCache = new Map();
 		this._setupOutcomeTracking();
 	}
 
@@ -266,6 +269,12 @@ class IntentPredictionEngine {
 		if (!this.available) return null;
 		if (!text || typeof text !== 'string') return null;
 
+		const cacheKey = hashString(text.slice(0, 500).toLowerCase().trim());
+		const cached = this._classifyCache.get(cacheKey);
+		if (cached && (Date.now() - cached.ts) < CLASSIFY_CACHE_TTL_MS) {
+			return cached.value;
+		}
+
 		const toolsSummary = formatTools(recentTools || []);
 		const turnsSummary = formatTurns(recentTurns || []);
 
@@ -282,19 +291,35 @@ class IntentPredictionEngine {
 			{ temperature: 0.1, maxTokens: 200, responseFormat: { type: 'json_object' } },
 		);
 
-		if (!result || result.type === null || result.type === 'null') return null;
+		if (!result || result.type === null || result.type === 'null') {
+			this._cacheClassification(cacheKey, null);
+			return null;
+		}
 
 		const validTypes = ['memory', 'core-gap', 'skill'];
-		if (!validTypes.includes(result.type)) return null;
+		if (!validTypes.includes(result.type)) {
+			this._cacheClassification(cacheKey, null);
+			return null;
+		}
 
 		info(TAG, `Classified text as ${result.type}: ${result.reason || 'n/a'}`);
 
-		return {
+		const classification = {
 			type: result.type,
 			key: result.key || null,
 			reason: String(result.reason || ''),
 			payload: result.payload || null,
 		};
+		this._cacheClassification(cacheKey, classification);
+		return classification;
+	}
+
+	_cacheClassification(key, value) {
+		if (this._classifyCache.size >= CLASSIFY_CACHE_MAX) {
+			const oldest = this._classifyCache.keys().next().value;
+			this._classifyCache.delete(oldest);
+		}
+		this._classifyCache.set(key, { value, ts: Date.now() });
 	}
 
 	startPredictionLoop(intervalMs) {
