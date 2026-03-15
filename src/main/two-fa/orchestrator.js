@@ -146,6 +146,19 @@ class TwoFAOrchestrator {
 			for (const c of codes) {
 				this._codeCache.add({ code: c.code, source: c.source, sender: c.meta?.sender, text: c.meta?.text, timestamp: c.timestamp });
 			}
+
+		// Also include recently cached codes (SMS/notifications that arrived earlier but weren't filled)
+		const recentCached = this._codeCache.getLatest(5);
+		if (recentCached.length > 0) {
+			codes.unshift(...recentCached.map(c => ({
+				code: c.code,
+				source: c.source || 'cache',
+				confidence: 0.9,
+				timestamp: c.timestamp,
+				meta: { sender: c.sender, text: c.text }
+			})));
+		}
+
 			if (!codes.length) {
 				this._emit('TWO_FA_NO_CODE', { appName: fieldInfo.appName });
 				return;
