@@ -8,7 +8,7 @@ async function recall_link(args = {}) {
 	const limit = Math.min(Math.max(Number(args.limit) || 5, 1), 10);
 
 	const results = await convexStore.searchLinks(query, limit, domain);
-	if (!results.length) return { ok: true, result: 'No matching links found.' };
+	if (!results.length) return { ok: true, result: `I don't have any saved links matching "${query}". Links are saved automatically when you browse the web or when I search for something.` };
 
 	const formatted = results.map((r, i) =>
 		`${i + 1}. [${r.title || r.domain || 'Untitled'}](${r.url})${r.snippet ? ` — ${r.snippet.slice(0, 120)}` : ''}`
