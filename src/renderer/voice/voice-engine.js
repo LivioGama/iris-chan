@@ -1286,7 +1286,8 @@ export class VoiceEngine extends Emitter {
 		}
 
 		// Observation trigger check (runs independently)
-		if (!this._observationCheckInFlight) {
+		// Skip during pending DirectAsk — the realtimeText would interrupt the user's speech turn
+		if (!this._observationCheckInFlight && !this._directTurn.awaitingResponse) {
 			this._observationCheckInFlight = this._checkObservationTrigger(captureFrame)
 				.catch((err) => {
 					logError('Observation', `Trigger check failed: ${err?.message || err}`);
@@ -1299,6 +1300,9 @@ export class VoiceEngine extends Emitter {
 
 	async _checkObservationTrigger(captureFrame) {
 		if (!this._observationTrigger || !this.gemini) return;
+		// Don't fire observations while a DirectAsk is pending — the realtimeText
+		// would cause an 'interrupted' event that aborts the user's speech turn.
+		if (this._directTurn.awaitingResponse) return;
 		try {
 			const appResult = await window.electronAPI.executeTool('get_frontmost_app', {});
 			const appName = typeof appResult === 'string'

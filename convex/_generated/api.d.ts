@@ -9,6 +9,8 @@
  */
 
 import type * as conversations from "../conversations.js";
+import type * as links from "../links.js";
+import type * as observations from "../observations.js";
 import type * as runtime from "../runtime.js";
 import type * as search from "../search.js";
 import type * as taskQueue from "../taskQueue.js";
@@ -21,6 +23,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   conversations: typeof conversations;
+  links: typeof links;
+  observations: typeof observations;
   runtime: typeof runtime;
   search: typeof search;
   taskQueue: typeof taskQueue;
