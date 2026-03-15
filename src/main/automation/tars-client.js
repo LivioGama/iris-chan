@@ -1,4 +1,5 @@
 const config = require('../../shared/config').default;
+const log = require('../logger');
 
 const POINT_ACTIONS = new Set(['click', 'double_click', 'right_click']);
 const ACTION_TYPES = new Set(['click', 'double_click', 'right_click', 'drag', 'scroll', 'type', 'hotkey', 'wait', 'finished']);
@@ -510,20 +511,26 @@ async function requestTarsActionVLM({ screenshotBase64, instruction, imageWidth,
 		}
 
 		const content = payload?.choices?.[0]?.message?.content;
+		log.info('TARS', `VLM raw content: ${content}`);
 		if (typeof content !== 'string' || !content.trim()) {
+			log.warn('TARS', 'VLM returned empty or missing content');
 			return buildInvalidResponse('UI-TARS VLM returned empty or missing content', payload);
 		}
 
 		const parsed = parseUITarsModelOutput(content, imageWidth || 0, imageHeight || 0);
 		if (!parsed) {
+			log.warn('TARS', `VLM output could not be parsed: ${content}`);
 			return buildInvalidResponse(`UI-TARS VLM output could not be parsed: ${content}`, payload);
 		}
 
+		log.info('TARS', `VLM parsed action: ${parsed.action_type} ${parsed.x != null ? `x=${parsed.x} y=${parsed.y}` : ''} ${parsed.text || parsed.key || parsed.direction || parsed.result || ''} ${parsed.thought ? `thought="${parsed.thought}"` : ''}`);
 		return normalizeTarsResponse(parsed);
 	} catch (err) {
 		if (err?.name === 'AbortError') {
+			log.warn('TARS', `VLM request timed out after ${tars.timeoutMs}ms`);
 			return { ok: false, code: 'tars_timeout', error: `UI-TARS VLM request timed out after ${tars.timeoutMs}ms` };
 		}
+		log.error('TARS', `VLM request failed: ${err?.message || err}`);
 		return { ok: false, code: 'tars_network_error', error: err?.message || 'UI-TARS VLM request failed' };
 	} finally {
 		clearTimeout(timer);
@@ -601,6 +608,7 @@ async function requestTarsAction({ screenshotBase64, instruction, imageWidth, im
 	if (!screenshotBase64 || !instruction) {
 		return { ok: false, code: 'tars_invalid_request', error: 'Missing screenshot or instruction for TARS request' };
 	}
+	log.info('TARS', `provider=${tars.provider} model=${tars.model} endpoint=${tars.endpoint} imageSize=${imageWidth}x${imageHeight}`);
 	if (tars.provider === 'openai-compatible') {
 		return requestTarsActionVLM({ screenshotBase64, instruction, imageWidth, imageHeight });
 	}
