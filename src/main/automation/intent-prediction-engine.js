@@ -141,10 +141,14 @@ class IntentPredictionEngine {
 			axSnapshot,
 		});
 
-		const fingerprint = hashString(
-			[context.frontmostApp, context.behaviorMode, context.timeOfDay,
-				(context.recentTools[context.recentTools.length - 1]?.name || '')].join('|'),
-		);
+		const fingerprint = hashString([
+			context.frontmostApp,
+			context.behaviorMode,
+			context.timeOfDay,
+			(context.recentTools[context.recentTools.length - 1]?.name || ''),
+			(context.windowTitles || []).slice(0, 3).join(','),
+			hashString((context.recentTurns[context.recentTurns.length - 1]?.text || '')),
+		].join('|'));
 
 		if (fingerprint === this._lastFingerprint) {
 			return { intents: [], toolHints: [], contextFingerprint: fingerprint };
