@@ -3,19 +3,30 @@ const { runHelper } = require('../native-helper');
 const log = require('../logger');
 
 const FIELD_PATTERNS = [
+	// English
 	/\b(?:verification|2fa|two.?factor|otp|one.?time|security)\s*(?:code|token|pin)?\b/i,
 	/\b(?:enter|type|input)\s*(?:your\s+)?(?:code|pin|token)\b/i,
 	/\b(?:6.?digit|4.?digit)\s*(?:code|pin)?\b/i,
 	/\bconfirmation\s*code\b/i,
 	/\bauth(?:entication|enticator)?\s*(?:code|token)\b/i,
 	/\bpasscode\b/i,
-	/\beinmalcode\b/i, // German
-	/\bcodice di verifica\b/i, // Italian
+	/\bgoogle.*verify\b/i,
+	/\benter.*code\b/i,
+	// German
+	/\beinmalcode\b/i,
+	/\b(?:verifi?cation|best[aä]tigung).*code\b/i,
+	// Italian
+	/\bcodice di verifica\b/i,
+	// French
+	/\bcode de v[eé]rification\b/i,
+	/\bcode de confirmation\b/i,
+	/\bcode d'acc[eè]s\b/i,
+	/\bentr[eé]e du code\b/i,
 ];
 
-const LOGIN_CONTEXT = /(?:2fa|verification|otp|one-time|security code|auth code|enter code|login|sign.?in|log.?in|verify|confirm)/i;
+const LOGIN_CONTEXT = /(?:2fa|verification|otp|one-time|security code|auth code|enter code|login|sign.?in|log.?in|verify|confirm|r[eé]cup[eé]ration|protect|s[eé]curit[eé])/i;
 
-const TEXT_FIELD_ROLES = new Set(['AXTextField', 'AXSecureTextField']);
+const TEXT_FIELD_ROLES = new Set(['AXTextField', 'AXSecureTextField', 'AXTextArea', 'AXSearchField', 'AXComboBox', 'AXPasswordField']);
 
 function textOf(el) {
 	return [el.title, el.value, el.help, el.detail, el.label, el.description, el.placeholder].filter(Boolean).join(' ');
@@ -33,7 +44,6 @@ function detectSplitDigitCluster(elements) {
 	const textFields = elements.filter(el => TEXT_FIELD_ROLES.has(el.role));
 	if (textFields.length < 4) return null;
 
-	// Look for consecutive fields whose maxLength or size is 1
 	for (let i = 0; i <= textFields.length - 4; i++) {
 		const cluster = [];
 		for (let j = i; j < textFields.length && cluster.length < 8; j++) {
@@ -47,7 +57,6 @@ function detectSplitDigitCluster(elements) {
 			}
 		}
 		if (cluster.length >= 4 && cluster.length <= 8) {
-			// Check if nearby labels suggest 2FA
 			const nearbyText = elements.map(textOf).join(' ');
 			if (matchesFieldPattern(nearbyText) || LOGIN_CONTEXT.test(nearbyText)) {
 				return { type: 'split-digit', count: cluster.length, firstField: cluster[0] };
@@ -64,7 +73,6 @@ async function detect2FAField() {
 		if (!result.ok || !result.result) return nil;
 
 		const parsed = typeof result.result === 'string' ? JSON.parse(result.result) : result.result;
-		// ax_snapshot returns { appName, windowTitle, focused, elements } — unwrap
 		const snapshot = Array.isArray(parsed) ? { appName: '', windowTitle: '', elements: parsed } : parsed;
 		const elements = snapshot.elements || [];
 		if (!elements.length) return nil;
@@ -72,16 +80,14 @@ async function detect2FAField() {
 		const appName = snapshot.appName || '';
 		const windowTitle = snapshot.windowTitle || '';
 
-		// Combine all text for context matching
 		const allText = elements.map(textOf).join(' ');
 		const textFields = elements.filter(el => TEXT_FIELD_ROLES.has(el.role));
-		log.debug('2FA-Detector', `AX: app=${appName}, window=${windowTitle}, elements=${elements.length}, textFields=${textFields.length}`);
+		log.info('2FA-Detector', `AX: app=${appName}, window=${windowTitle.slice(0, 50)}, elements=${elements.length}, textFields=${textFields.length}`);
 
-		// Strategy 1: Find focused text field matching 2FA patterns
+		// Strategy 1: Focused field matching patterns
 		const focused = elements.find(el => el.focused && TEXT_FIELD_ROLES.has(el.role));
 		if (focused) {
 			const focusedText = textOf(focused);
-			// Check nearby siblings too
 			const siblingText = elements
 				.filter(el => el !== focused && !TEXT_FIELD_ROLES.has(el.role))
 				.map(textOf).join(' ');
@@ -124,9 +130,11 @@ async function detect2FAField() {
 			};
 		}
 
-		// Strategy 3: Unfocused field but strong context (window title has login keywords + field visible)
+		// Strategy 3: Strong context (window title matches 2FA patterns)
 		if (LOGIN_CONTEXT.test(windowTitle)) {
 			const anyTextField = elements.find(el => TEXT_FIELD_ROLES.has(el.role));
+			
+			// With native text field
 			if (anyTextField && matchesFieldPattern(allText)) {
 				return {
 					detected: true,
@@ -135,11 +143,26 @@ async function detect2FAField() {
 					fieldContext: allText.slice(0, 200),
 					appName,
 					windowTitle,
-					confidence: 0.65, // lower confidence since field isn't focused
+					confidence: 0.65,
 					focusedValue: String(anyTextField.value || ''),
 					fieldQuery: anyTextField.title || anyTextField.label || '',
 				};
 			}
+			
+			// Or just strong context (web forms without exposed accessibility attributes)
+			// Web form detected via strong window context (even without exposed text fields)
+			log.info('2FA-Detector', `Detected 2FA via window title: "${windowTitle.slice(0, 60)}"`);
+			return {
+				detected: true,
+				type: 'web-form',
+				fieldRole: 'unknown',
+				fieldContext: windowTitle,
+				appName,
+				windowTitle,
+				confidence: 0.7,
+				focusedValue: '',
+				fieldQuery: windowTitle,
+			};
 		}
 
 		return nil;
