@@ -137,3 +137,22 @@ export const getRecentLinks = query({
       .take(limit);
   },
 });
+
+export const searchLinksByText = query({
+  args: {
+    limit: v.optional(v.number()),
+    domainFilter: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 50;
+    const results = await ctx.db
+      .query("links")
+      .withIndex("by_lastSeen")
+      .order("desc")
+      .take(limit);
+    if (args.domainFilter) {
+      return results.filter((r) => r.domain === args.domainFilter);
+    }
+    return results;
+  },
+});
