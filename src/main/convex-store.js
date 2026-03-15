@@ -433,9 +433,12 @@ const convexStore = {
     const clean = cleanText(queryText);
     if (!clean) return [];
 
-    // Phase 1: semantic vector search (requires ready embeddings)
-    const { embedding, status } = await generateEmbedding(clean);
-    if (status === 'ready') {
+    // Run semantic search and text search in parallel, merge results.
+    // Semantic search only finds links with ready embeddings; text search
+    // catches links whose embeddings are still pending/failed.
+    const semanticPromise = (async () => {
+      const { embedding, status } = await generateEmbedding(clean);
+      if (status !== 'ready') return [];
       try {
         const result = await httpRun('links:semanticLinkSearch', {
           embedding,
@@ -443,42 +446,54 @@ const convexStore = {
           minScore: 0.3,
           domainFilter: domainFilter || undefined,
         });
-        const hits = Array.isArray(result?.value) ? result.value : [];
-        if (hits.length) return hits;
+        return Array.isArray(result?.value) ? result.value : [];
       } catch (err) {
         console.error('[ConvexStore] searchLinks semantic error:', err.message);
-      }
-    }
-
-    // Phase 2: text-based fallback (works even with pending/failed embeddings)
-    try {
-      const result = await httpRun('links:getRecentLinks', { limit: 50 });
-      if (result.error) {
-        console.warn('[ConvexStore] searchLinks text fallback query error:', result.error);
         return [];
       }
-      const candidates = Array.isArray(result?.value) ? result.value : [];
-      if (!candidates.length) return [];
-      const keywords = clean.toLowerCase().split(/\s+/).filter(w => w.length > 1);
-      if (!keywords.length) return [];
-      let filtered = candidates;
-      if (domainFilter) {
-        filtered = filtered.filter(link => (link.domain || '') === domainFilter);
+    })();
+
+    const textPromise = (async () => {
+      try {
+        const result = await httpRun('links:getRecentLinks', { limit: 50 });
+        if (result.error) {
+          console.warn('[ConvexStore] searchLinks text query error:', result.error);
+          return [];
+        }
+        const candidates = Array.isArray(result?.value) ? result.value : [];
+        if (!candidates.length) return [];
+        const keywords = clean.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+        if (!keywords.length) return [];
+        let filtered = candidates;
+        if (domainFilter) {
+          filtered = filtered.filter(link => (link.domain || '') === domainFilter);
+        }
+        return filtered
+          .map(link => {
+            const haystack = `${link.title || ''} ${link.domain || ''} ${link.url || ''} ${link.snippet || ''}`.toLowerCase();
+            const matchCount = keywords.reduce((s, kw) => s + (haystack.includes(kw) ? 1 : 0), 0);
+            return { ...link, _score: matchCount / keywords.length };
+          })
+          .filter(r => r._score > 0)
+          .sort((a, b) => b._score - a._score);
+      } catch (err) {
+        console.error('[ConvexStore] searchLinks text error:', err.message);
+        return [];
       }
-      const scored = filtered
-        .map(link => {
-          const haystack = `${link.title || ''} ${link.domain || ''} ${link.url || ''} ${link.snippet || ''}`.toLowerCase();
-          const matchCount = keywords.reduce((s, kw) => s + (haystack.includes(kw) ? 1 : 0), 0);
-          return { ...link, _score: matchCount / keywords.length };
-        })
-        .filter(r => r._score > 0)
-        .sort((a, b) => b._score - a._score)
-        .slice(0, limit);
-      return scored;
-    } catch (err) {
-      console.error('[ConvexStore] searchLinks text fallback error:', err.message);
-      return [];
+    })();
+
+    const [semanticHits, textHits] = await Promise.all([semanticPromise, textPromise]);
+
+    // Merge: semantic results first, then text results that weren't already found
+    const seenUrls = new Set(semanticHits.map(h => h.url));
+    const merged = [...semanticHits];
+    for (const hit of textHits) {
+      if (!seenUrls.has(hit.url)) {
+        merged.push(hit);
+        seenUrls.add(hit.url);
+      }
     }
+    return merged.slice(0, limit);
   },
 
   async getRecentLinks(limit = 5) {
