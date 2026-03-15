@@ -93,13 +93,28 @@ function summarizePolicies(entries = []) {
 		}));
 }
 
-function buildIntentContext({ learningManager, memoryStore, behaviorMode, frontmostApp, screenMeta, windowTitles, axSnapshot } = {}) {
+function formatTemporalPatterns(patterns = []) {
+	if (!patterns.length) return [];
+	return patterns.map((p) => ({
+		intentType: p.intentType,
+		count: p.count,
+		appName: p.appName,
+		timeOfDay: p.timeOfDay,
+	}));
+}
+
+function buildIntentContext({ learningManager, memoryStore, behaviorMode, frontmostApp, screenMeta, windowTitles, axSnapshot, patternStore } = {}) {
 	const recentTools = summarizeTools(learningManager?.recentToolExecutions);
 	const recentTurns = summarizeTurns(learningManager?.recentTurns);
 	const activePolicies = summarizePolicies(memoryStore?.getEntries?.() || []);
 	const workspacePath = workspace.get() || null;
 	const projectType = detectProjectType(workspacePath);
 	const gitBranch = getGitBranch(workspacePath);
+	const appName = String(frontmostApp || '').trim();
+	const tod = getTimeOfDay();
+	const temporalPatterns = formatTemporalPatterns(
+		patternStore?.getTopPatterns?.({ appName: appName || undefined, timeOfDay: tod, limit: 5 }) || [],
+	);
 
 	return {
 		frontmostApp: String(frontmostApp || '').trim() || 'unknown',
@@ -116,6 +131,7 @@ function buildIntentContext({ learningManager, memoryStore, behaviorMode, frontm
 		workspacePath,
 		projectType,
 		gitBranch,
+		temporalPatterns,
 	};
 }
 

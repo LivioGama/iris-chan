@@ -51,6 +51,9 @@ Recent conversation (most recent last):
 Active learned policies:
 {activePolicies}
 
+Historical patterns for this app/time:
+{temporalPatterns}
+
 Based on this context, predict the user's most likely next intent(s).
 Return JSON: { "intents": [{ "type": "<intent kind>", "confidence": <0-1>, "description": "<why>", "suggestedAction": "<what to suggest>" }], "toolHints": ["<tool names to pre-load>"] }
 Return at most 3 intents, ordered by confidence. Only include intents with confidence >= 0.5.
@@ -103,6 +106,11 @@ function formatPolicies(policies = []) {
 	return policies.map((p) => `  ${p.key}: ${p.message}`).join('\n');
 }
 
+function formatTemporalPatterns(patterns = []) {
+	if (!patterns.length) return '(none)';
+	return patterns.map((p) => `  ${p.intentType}: ${p.count} occurrences (${p.timeOfDay}, ${p.appName})`).join('\n');
+}
+
 function fillTemplate(template, context) {
 	return template
 		.replace('{frontmostApp}', context.frontmostApp)
@@ -115,16 +123,18 @@ function fillTemplate(template, context) {
 		.replace('{screenContent}', context.screenContent || '(not available)')
 		.replace('{recentTools}', formatTools(context.recentTools))
 		.replace('{recentTurns}', formatTurns(context.recentTurns))
-		.replace('{activePolicies}', formatPolicies(context.activePolicies));
+		.replace('{activePolicies}', formatPolicies(context.activePolicies))
+		.replace('{temporalPatterns}', formatTemporalPatterns(context.temporalPatterns));
 }
 
 class IntentPredictionEngine {
-	constructor({ groqClient, learningManager, memoryStore, eventBus, worldState }) {
+	constructor({ groqClient, learningManager, memoryStore, eventBus, worldState, patternStore }) {
 		this._groq = groqClient;
 		this._learningManager = learningManager;
 		this._memoryStore = memoryStore;
 		this._eventBus = eventBus;
 		this._worldState = worldState || null;
+		this._patternStore = patternStore || null;
 		this._loopInterval = null;
 		this._loopInFlight = false;
 		this._lastFingerprint = '';
@@ -145,6 +155,7 @@ class IntentPredictionEngine {
 			screenMeta,
 			windowTitles,
 			axSnapshot,
+			patternStore: this._patternStore,
 		});
 
 		const fingerprint = hashString([
@@ -190,6 +201,16 @@ class IntentPredictionEngine {
 		const toolHints = Array.isArray(result.toolHints)
 			? result.toolHints.filter((h) => typeof h === 'string').slice(0, 5)
 			: [];
+
+		if (this._patternStore && intents.length > 0) {
+			for (const intent of intents) {
+				this._patternStore.recordPrediction({
+					appName: context.frontmostApp,
+					timeOfDay: context.timeOfDay,
+					intentType: intent.type,
+				});
+			}
+		}
 
 		info(TAG, `Predicted ${intents.length} intent(s) for ${frontmostApp || 'unknown'}: ${intents.map((i) => `${i.type}@${i.confidence.toFixed(2)}`).join(', ') || 'none'}`);
 
