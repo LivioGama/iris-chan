@@ -8,9 +8,10 @@ const { getGeometry, setGeometry } = require('../runtime/geometry-store');
 let win = null;
 let currentDisplayId = null;
 let displayPollTimer = null;
+let initialized = false;
 
 async function saveGeometry() {
-	if (!win || win.isDestroyed()) return;
+	if (!initialized || !win || win.isDestroyed()) return;
 	try {
 		const bounds = win.getBounds();
 		await setGeometry('avatar', bounds);
@@ -19,9 +20,11 @@ async function saveGeometry() {
 
 function getBottomLeftPosition(display) {
 	const { x, y, height } = display.bounds;
+	// Push window past screen bottom so empty space below the 3D model is off-screen
+	const bottomOverflow = 80;
 	return {
 		x: x - 60,
-		y: y + height - config.window.avatarHeight,
+		y: y + height - config.window.avatarHeight + bottomOverflow,
 	};
 }
 
@@ -84,18 +87,23 @@ function create() {
 				height: config.window.avatarHeight
 			});
 			win.show();
+
+			// Defer listener attachment by one tick so the setBounds 'move' event
+			// doesn't immediately trigger a save
+			setImmediate(() => {
+				initialized = true;
+				let geoDebounce = null;
+				const persistGeo = () => { clearTimeout(geoDebounce); geoDebounce = setTimeout(saveGeometry, 300); };
+				win.on('resize', persistGeo);
+				win.on('move', persistGeo);
+				startDisplayPolling();
+			});
 		}
 	});
 
 	win.setIgnoreMouseEvents(true, { forward: true });
 	const rendererPath = path.join(__dirname, '..', '..', 'renderer', 'index.html');
 	win.loadFile(rendererPath);
-
-	// Save geometry on resize/move (debounced)
-	let geoDebounce = null;
-	const persistGeo = () => { clearTimeout(geoDebounce); geoDebounce = setTimeout(saveGeometry, 300); };
-	win.on('resize', persistGeo);
-	win.on('move', persistGeo);
 
 	// Forward renderer console output to unified log (skip messages already sent via IPC logToFile)
 	win.webContents.on('console-message', (ev) => {
@@ -111,11 +119,10 @@ function create() {
 
 	win.on('closed', () => {
 		stopDisplayPolling();
+		initialized = false;
 		win = null;
 		currentDisplayId = null;
 	});
-
-	startDisplayPolling();
 
 	return win;
 }
