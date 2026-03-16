@@ -270,6 +270,7 @@ export class VoiceEngine extends Emitter {
 			...this.voiceConfig.bargeIn,
 		});
 		this._dropModelOutputUntilTurnComplete = false;
+		this._toolCallPending = false;
 		this._speechReleaseTimer = null;
 		this._speechReleaseMs = this.voiceConfig.speechReleaseMs;
 		this._echoSuppressionGain = this.voiceConfig.echoSuppressionGain;
@@ -506,7 +507,12 @@ export class VoiceEngine extends Emitter {
 				this._learnCorrections(this._lastUserTurn, this._accum.model);
 			}
 			if (this._directTurn.awaitingResponse) {
-				if (this._accum.model) {
+				if (this._toolCallPending) {
+					// A tool call is in-flight — Gemini will send follow-up tool calls
+					// or audio after receiving the tool response. Don't finish the
+					// direct turn yet; we'll finalize on a later turnComplete.
+					logInfo('DirectAsk', `[${this._directTurn.id}] turnComplete deferred — tool call in progress`);
+				} else if (this._accum.model) {
 					this._finishDirectTurn('answered', {
 						hadTranscript: this._directTurn.hasTranscript,
 						hadModel: true,
@@ -532,7 +538,11 @@ export class VoiceEngine extends Emitter {
 				});
 			}
 
-			if (!this._autonomousMode) {
+			// Skip idle-gate accounting while a tool call is pending — the model
+			// is still working on the user's request, not generating idle chatter.
+			if (this._toolCallPending) {
+				// no-op: preserve current unpromptedTurnCount / idleMessageSent
+			} else if (!this._autonomousMode) {
 				if (this._proactiveResponseExpected) {
 					this._proactiveResponseExpected = false;
 					this._proactivePromptedAt = Date.now();
@@ -589,7 +599,12 @@ export class VoiceEngine extends Emitter {
 			logInfo('Voice', 'User interrupted — playback stopped');
 		});
 
-		this.gemini.on('toolCall', (calls) => this._toolHandler.handleToolCalls(calls));
+		this.gemini.on('toolCall', (calls) => {
+			this._toolCallPending = true;
+			this._toolHandler.handleToolCalls(calls).finally(() => {
+				this._toolCallPending = false;
+			});
+		});
 
 		this.capture.on('started', () => {
 			updateIndicator('mic', true);
