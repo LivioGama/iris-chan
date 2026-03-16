@@ -97,7 +97,7 @@ export class ParallelRequestManager extends Emitter {
 				contents: [{ parts: [{ text: prompt }] }],
 				generationConfig: {
 					temperature: 0,
-					maxOutputTokens: 400,
+					maxOutputTokens: 1024,
 					responseMimeType: 'application/json',
 					responseSchema: {
 						type: 'OBJECT',
