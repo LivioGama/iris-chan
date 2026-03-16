@@ -1,6 +1,12 @@
 // Plays PCM16 24kHz audio from Gemini via Web Audio API
 import { Emitter } from '../../shared/emitter.js';
 import { info as logInfo, error as logError } from '../logger.js';
+import {
+	AUDIO_ROUTING_DIAGNOSTICS_ENABLED,
+	getActiveAudioRoutingTrace,
+	getAudioRoutingDiagnosticsState,
+	recordAudioRoutingEvent,
+} from './audio-routing-diagnostics.js';
 
 const DEFAULT_SPEECH_PROFILE = Object.freeze({
 	playbackRate: 1,
@@ -56,6 +62,7 @@ export class AudioPlayback extends Emitter {
 		this.presenceFilter = null;
 		this.highShelfFilter = null;
 		this.compressorNode = null;
+		this._playbackChunkCount = 0;
 	}
 
 	setReferenceCallback(callback) {
@@ -77,6 +84,7 @@ export class AudioPlayback extends Emitter {
 		this._initPromise = (async () => {
 			if (!this.ctx) {
 				this.ctx = new AudioContext({ sampleRate: 24000, latencyHint: 'interactive' });
+				recordAudioRoutingEvent('playback_context_created', { sampleRate: this.ctx.sampleRate });
 			}
 
 			if (!this.analyser || !this.gainNode) {
@@ -178,6 +186,15 @@ export class AudioPlayback extends Emitter {
 		source.start(startTime);
 		this.nextStartTime = startTime + (audioBuffer.duration / playbackRate);
 
+		this._playbackChunkCount += 1;
+		this._recordPlaybackDiagnostics(float32, {
+			chunkIndex: this._playbackChunkCount,
+			frameCount: float32.length,
+			bufferedLeadMs: bufferedLead * 1000,
+			durationMs: audioBuffer.duration * 1000,
+			playbackRate,
+		});
+
 		this.sources.push(source);
 		const gen = this._generation;
 		source.onended = () => {
@@ -186,6 +203,7 @@ export class AudioPlayback extends Emitter {
 			if (idx >= 0) this.sources.splice(idx, 1);
 			if (this.sources.length === 0) {
 				this.playing = false;
+				this._finalizeActiveTracePlayback();
 				this.emit('ended');
 			}
 		};
@@ -307,6 +325,49 @@ export class AudioPlayback extends Emitter {
 		this.nextStartTime = 0;
 		this.playing = false;
 		this.emit('stopped');
+	}
+
+	getDiagnosticsSnapshot() {
+		return structuredClone(getAudioRoutingDiagnosticsState());
+	}
+
+	_recordPlaybackDiagnostics(float32, { chunkIndex, frameCount, bufferedLeadMs, durationMs, playbackRate }) {
+		if (!AUDIO_ROUTING_DIAGNOSTICS_ENABLED) return;
+		const state = getAudioRoutingDiagnosticsState();
+		state.playback.chunkCount = chunkIndex;
+		state.playback.totalFrames += frameCount;
+		state.playback.totalSeconds += durationMs / 1000;
+		state.playback.lastChunkAt = Date.now();
+		state.playback.lastChunkFrames = frameCount;
+		state.playback.lastQueueLeadMs = bufferedLeadMs;
+		let sumSquares = 0;
+		for (let i = 0; i < float32.length; i++) {
+			sumSquares += float32[i] * float32[i];
+		}
+		const rms = float32.length ? Math.sqrt(sumSquares / float32.length) : 0;
+		state.playback.lastChunkRms = rms;
+
+		if (chunkIndex === 1 || chunkIndex % 25 === 0) {
+			recordAudioRoutingEvent('playback_chunk', {
+				chunkIndex,
+				frameCount,
+				durationMs,
+				bufferedLeadMs,
+				playbackRate,
+				rms,
+			});
+		}
+	}
+
+	_finalizeActiveTracePlayback() {
+		const trace = getActiveAudioRoutingTrace();
+		if (!trace) return;
+		trace.playbackEndedAt = Date.now();
+		recordAudioRoutingEvent('playback_ended_for_phrase', {
+			traceId: trace.traceId,
+			playbackDurationMs: trace.playbackEndedAt - (trace.playbackStartedAt || trace.matchedAt),
+			totalChunks: this._playbackChunkCount,
+		});
 	}
 
 	_resample24kTo16k(float32Data) {
