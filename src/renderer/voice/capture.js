@@ -1,5 +1,11 @@
 // Mic capture via AudioWorklet -> PCM16 16kHz chunks
 import { Emitter } from '../../shared/emitter.js';
+import { warn as logWarn } from '../logger.js';
+import {
+	AUDIO_ROUTING_DIAGNOSTICS_ENABLED,
+	getAudioRoutingDiagnosticsState,
+	recordAudioRoutingEvent,
+} from './audio-routing-diagnostics.js';
 
 export const WORKLET_CODE = `
 class CaptureProcessor extends AudioWorkletProcessor {
@@ -190,6 +196,7 @@ export class AudioCapture extends Emitter {
 		this.stream = null;
 		this.workletNode = null;
 		this.active = false;
+		this._capturedChunkCount = 0;
 	}
 
 	async start(retries = 2) {
@@ -204,15 +211,33 @@ export class AudioCapture extends Emitter {
 		};
 		// Allow selecting a specific audio input device by name (e.g. "BlackHole 2ch")
 		const preferredDevice = window.__irisAudioDevice;
+		let selectedDevice = '';
 		if (preferredDevice) {
 			try {
 				const devices = await navigator.mediaDevices.enumerateDevices();
 				const match = devices.find(d => d.kind === 'audioinput' && d.label.includes(preferredDevice));
-				if (match) audioConstraints.deviceId = { exact: match.deviceId };
-			} catch {}
+				if (match) {
+					audioConstraints.deviceId = { exact: match.deviceId };
+					selectedDevice = match.label;
+				}
+			} catch (err) {
+				logWarn('Capture', `Unable to enumerate audio inputs for diagnostics: ${err?.message || err}`);
+			}
 		}
 		this.stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
 		this.ctx = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' });
+		this._capturedChunkCount = 0;
+		if (AUDIO_ROUTING_DIAGNOSTICS_ENABLED) {
+			const state = getAudioRoutingDiagnosticsState();
+			state.capture.startedAt = Date.now();
+			state.capture.preferredDevice = preferredDevice || '';
+			state.capture.selectedDevice = selectedDevice || this.stream?.getAudioTracks?.()[0]?.label || '';
+			recordAudioRoutingEvent('capture_started', {
+				sampleRate: this.ctx.sampleRate,
+				preferredDevice: state.capture.preferredDevice,
+				selectedDevice: state.capture.selectedDevice,
+			});
+		}
 
 		const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
 		const url = URL.createObjectURL(blob);
@@ -226,14 +251,7 @@ export class AudioCapture extends Emitter {
 			const source = this.ctx.createMediaStreamSource(this.stream);
 			this.workletNode = new AudioWorkletNode(this.ctx, 'capture-processor');
 
-			this.workletNode.port.onmessage = (ev) => {
-				const { type, value, samples } = ev.data;
-				if (type === 'volume') {
-					this.emit('volume', value);
-				} else if (type === 'audio') {
-					this.emit('data', this._arrayBufferToBase64(samples));
-				}
-			};
+			this.workletNode.port.onmessage = (ev) => this._handleWorkletMessage(ev.data);
 
 			source.connect(this.workletNode);
 			const silentGain = this.ctx.createGain();
@@ -253,6 +271,12 @@ export class AudioCapture extends Emitter {
 	}
 
 	stop() {
+		if (AUDIO_ROUTING_DIAGNOSTICS_ENABLED && this.active) {
+			recordAudioRoutingEvent('capture_stopped', {
+				chunkCount: this._capturedChunkCount,
+				lastChunkAt: getAudioRoutingDiagnosticsState().capture.lastChunkAt,
+			});
+		}
 		this.active = false;
 		if (this.workletNode) {
 			try { this.workletNode.disconnect(); } catch {}
@@ -267,6 +291,36 @@ export class AudioCapture extends Emitter {
 			this.ctx = null;
 		}
 		this.emit('stopped');
+	}
+
+	getDiagnosticsSnapshot() {
+		return structuredClone(getAudioRoutingDiagnosticsState());
+	}
+
+	_handleWorkletMessage(data = {}) {
+		const { type, value, samples } = data;
+		if (type === 'volume') {
+			this.emit('volume', value);
+			return;
+		}
+		if (type !== 'audio') return;
+		const base64 = this._arrayBufferToBase64(samples);
+		this._capturedChunkCount += 1;
+		if (AUDIO_ROUTING_DIAGNOSTICS_ENABLED) {
+			const sampleCount = samples ? new Int16Array(samples).length : 0;
+			const state = getAudioRoutingDiagnosticsState();
+			state.capture.chunkCount = this._capturedChunkCount;
+			state.capture.lastChunkAt = Date.now();
+			state.capture.lastChunkSamples = sampleCount;
+			if (this._capturedChunkCount === 1 || this._capturedChunkCount % 25 === 0) {
+				recordAudioRoutingEvent('capture_chunk', {
+					chunkIndex: this._capturedChunkCount,
+					sampleCount,
+					base64Bytes: base64.length,
+				});
+			}
+		}
+		this.emit('data', base64);
 	}
 
 	_arrayBufferToBase64(buffer) {
