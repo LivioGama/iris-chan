@@ -346,29 +346,19 @@ export class ParallelRequestManager extends Emitter {
 		}
 
 		if (response.text) {
-			// Show the response as a bubble immediately
+			// Show the response as a bubble
 			const streamId = `stream-parallel-${response.index}`;
 			showStreamingBubble('chat', response.text, streamId, { role: 'iris' });
 			finalizeStreamingBubble(streamId, { minDurationMs: 4000 });
-
-			// Feed the text to Gemini WebSocket for TTS
-			// Use a special directive so Gemini speaks it naturally
-			const speakDirective = [
-				'[SYSTEM: SPEAK PARALLEL RESPONSE — read the following response naturally as if you just thought of it.',
-				'Do NOT add any extra commentary, greetings, or meta-remarks. Just speak the response exactly.]',
-				response.text,
-			].join('\n');
-
-			// Listen for turnComplete to drain next response
-			const onTurnComplete = () => {
-				this._gemini.off('turnComplete', onTurnComplete);
-				// Small gap between responses for natural pacing
-				setTimeout(() => this._drainNext(), 300);
-			};
-			this._gemini.on('turnComplete', onTurnComplete);
-
-			this._gemini.sendText(speakDirective);
 			logInfo('Parallel', `Speaking response ${response.index} ("${response.summary}")`);
+
+			// NOTE: We intentionally do NOT send parallel responses through the
+			// Gemini WebSocket for TTS. Sending sendText() directives for each
+			// parallel segment creates extra model turns that pollute the session,
+			// causing subsequent user turns to hit "heard_but_backend_failed".
+			// Parallel responses are displayed as text bubbles only.
+			// Move to next response after a short display pause.
+			setTimeout(() => this._drainNext(), 500);
 		} else {
 			// Tool-only response, move to next
 			this._drainNext();

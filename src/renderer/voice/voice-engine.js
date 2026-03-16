@@ -998,6 +998,48 @@ export class VoiceEngine extends Emitter {
 		return true;
 	}
 
+	/**
+	 * REST API fallback when WebSocket salvage fails.
+	 * Uses the ParallelRequestManager's REST endpoint (Gemini Flash) to get a
+	 * text response, then displays it as a bubble.
+	 */
+	async _restSalvage(transcript) {
+		try {
+			const systemInstruction = [
+				'You are Iris, a helpful voice AI assistant.',
+				'Answer the user\'s question concisely and conversationally.',
+				'Do NOT use markdown, bullet points, or formatting.',
+				'CRITICAL: For questions about the current time, date, or day, use the run_terminal_command tool with "date". Never guess the time.',
+			].join('\n');
+			const contents = [{ role: 'user', parts: [{ text: transcript }] }];
+			const result = await this._parallelManager._restRequest(systemInstruction, contents);
+
+			// If we got tool calls, execute and loop back
+			let text = result.responseText;
+			if (result.toolCalls.length > 0 && !text.trim()) {
+				const toolResults = await this._parallelManager._executeToolsForLoopback(result.toolCalls);
+				const followUpContents = [
+					...contents,
+					{ role: 'model', parts: result.rawModelParts },
+					{ role: 'user', parts: toolResults.map(tr => ({ functionResponse: { name: tr.name, response: { result: tr.result } } })) },
+				];
+				const followUp = await this._parallelManager._restRequest(systemInstruction, followUpContents);
+				text = followUp.responseText;
+			}
+
+			if (text?.trim()) {
+				logInfo('DirectAsk', `REST salvage succeeded: ${text.trim().slice(0, 100)}`);
+				logInfo('Conversation', `[IRIS] ${text.trim()}`);
+				const salvageId = `rest-salvage-${Date.now()}`;
+				showStreamingBubble('chat', text.trim(), salvageId, { role: 'iris' });
+				finalizeStreamingBubble(salvageId, { minDurationMs: 4000 });
+				this._consecutiveSalvageFailures = 0;
+			}
+		} catch (err) {
+			logError('DirectAsk', `REST salvage failed: ${err?.message || err}`);
+		}
+	}
+
 	_retryPendingDirectTurn(reason = 'server_superseded_before_playback') {
 		if (!this._directTurn.awaitingResponse || this._directTurn.firstModelAudioAt) return false;
 		if (this._directTurn.retryCount >= 1) return false;
@@ -1030,6 +1072,15 @@ export class VoiceEngine extends Emitter {
 		if (this._directTurn.salvageStarted) {
 			this._consecutiveSalvageFailures++;
 			logInfo('DirectAsk', `[${this._directTurn.id}] consecutive salvage failures: ${this._consecutiveSalvageFailures}`);
+
+			// Try REST API fallback before giving up — the WebSocket is degraded
+			// but the REST endpoint (Gemini Flash) is independent and reliable
+			const transcript = this._getDirectTurnTranscript();
+			if (transcript && this._parallelManager?._apiKey) {
+				logInfo('DirectAsk', `[${this._directTurn.id}] attempting REST API fallback for: ${transcript.slice(0, 80)}`);
+				this._restSalvage(transcript);
+			}
+
 			this._finishDirectTurn(reason);
 			if (this._consecutiveSalvageFailures >= 2) {
 				logInfo('Voice', `Multiple salvage failures (${this._consecutiveSalvageFailures}) — forcing WebSocket reconnect`);
