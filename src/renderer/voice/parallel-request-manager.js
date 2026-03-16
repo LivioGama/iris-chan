@@ -167,6 +167,7 @@ export class ParallelRequestManager extends Emitter {
 			`For example, start with something like "About ${segment.summary}, ..." or "To answer your question about ${segment.summary}, ..."`,
 			'Keep your response concise and conversational — it will be spoken aloud.',
 			'Do NOT use markdown, bullet points, or formatting. Speak naturally.',
+			'CRITICAL: For questions about the current time, date, or day you MUST use the run_terminal_command tool with the "date" command. Never guess the time.',
 		].join('\n');
 
 		const contents = [];
@@ -183,40 +184,41 @@ export class ParallelRequestManager extends Emitter {
 			parts: [{ text: segment.text }],
 		});
 
-		const body = {
-			systemInstruction: { parts: [{ text: systemInstruction }] },
-			contents,
-			tools: this._restToolDeclarations,
-			generationConfig: {
-				temperature: 0.7,
-				maxOutputTokens: 500,
-			},
-		};
-
 		try {
-			const resp = await fetch(`${FLASH_ENDPOINT}?key=${this._apiKey}`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
-				signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
-			});
+			const { responseText, toolCalls, rawModelParts } = await this._restRequest(systemInstruction, contents);
 
-			if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+			// If the model returned tool calls without text, execute them and
+			// send the results back for a follow-up response with actual text.
+			let finalText = responseText;
+			let toolsAlreadyExecuted = false;
+			const allToolCalls = [...toolCalls];
+			if (toolCalls.length > 0 && !responseText.trim()) {
+				logInfo('Parallel', `Segment ${index} ("${segment.summary}") returned ${toolCalls.length} tool call(s) with no text — executing and looping back`);
+				toolsAlreadyExecuted = true;
+				const toolResults = await this._executeToolsForLoopback(toolCalls);
 
-			const data = await resp.json();
-			const candidate = data?.candidates?.[0];
-			const parts = candidate?.content?.parts || [];
+				// Build follow-up contents with tool call + result
+				const followUpContents = [...contents];
+				// Add the model's tool-call turn — use ALL raw parts to preserve thought_signature
+				followUpContents.push({
+					role: 'model',
+					parts: rawModelParts,
+				});
+				// Add tool results (role must be 'user' for functionResponse in REST API)
+				followUpContents.push({
+					role: 'user',
+					parts: toolResults.map(tr => ({
+						functionResponse: {
+							name: tr.name,
+							response: { result: tr.result },
+						},
+					})),
+				});
 
-			// Extract text and tool calls
-			let responseText = '';
-			const toolCalls = [];
-			for (const part of parts) {
-				if (part.text) responseText += part.text;
-				if (part.functionCall) {
-					toolCalls.push({
-						name: part.functionCall.name,
-						args: part.functionCall.args || {},
-					});
+				const followUp = await this._restRequest(systemInstruction, followUpContents);
+				finalText = followUp.responseText;
+				if (followUp.toolCalls.length > 0) {
+					allToolCalls.push(...followUp.toolCalls);
 				}
 			}
 
@@ -228,12 +230,12 @@ export class ParallelRequestManager extends Emitter {
 			const response = {
 				index,
 				summary: segment.summary,
-				text: responseText.trim(),
-				toolCalls,
+				text: finalText.trim(),
+				toolCalls: toolsAlreadyExecuted ? [] : allToolCalls,
 				completedAt: Date.now(),
 			};
 
-			logInfo('Parallel', `Segment ${index} ("${segment.summary}") completed: ${responseText.length} chars, ${toolCalls.length} tool calls`);
+			logInfo('Parallel', `Segment ${index} ("${segment.summary}") completed: ${finalText.length} chars, ${allToolCalls.length} tool calls`);
 
 			this._responseQueue.push(response);
 			this._drainResponseQueue();
@@ -243,6 +245,78 @@ export class ParallelRequestManager extends Emitter {
 			// Show error bubble for this segment
 			showBubble('chat', `Sorry, I couldn't process your question about ${segment.summary}.`, { role: 'iris' });
 		}
+	}
+
+	/**
+	 * Make a REST API request to Gemini Flash and extract text + tool calls.
+	 */
+	async _restRequest(systemInstruction, contents) {
+		const body = {
+			systemInstruction: { parts: [{ text: systemInstruction }] },
+			contents,
+			tools: this._restToolDeclarations,
+			generationConfig: {
+				temperature: 0.7,
+				maxOutputTokens: 500,
+			},
+		};
+
+		const resp = await fetch(`${FLASH_ENDPOINT}?key=${this._apiKey}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
+		});
+
+		if (!resp.ok) {
+			const errBody = await resp.text().catch(() => '');
+			throw new Error(`HTTP ${resp.status}: ${errBody.slice(0, 800)}`);
+		}
+
+		const data = await resp.json();
+		const parts = data?.candidates?.[0]?.content?.parts || [];
+
+		let responseText = '';
+		const toolCalls = [];
+		// Keep raw parts from model to preserve thought_signature for tool loopback
+		const rawModelParts = [];
+		for (const part of parts) {
+			if (part.text) responseText += part.text;
+			if (part.functionCall) {
+				toolCalls.push({
+					name: part.functionCall.name,
+					args: part.functionCall.args || {},
+				});
+			}
+			// Preserve ALL parts as-is (including thought, thought_signature, functionCall)
+			rawModelParts.push(part);
+		}
+		if (toolCalls.length > 0) {
+			logInfo('Parallel', `Raw model parts keys: ${rawModelParts.map(p => Object.keys(p).join('+')).join(', ')}`);
+		}
+
+		return { responseText, toolCalls, rawModelParts };
+	}
+
+	/**
+	 * Execute tool calls and return results for looping back into the conversation.
+	 * Uses electronAPI.executeTool directly to get return values.
+	 */
+	async _executeToolsForLoopback(toolCalls) {
+		const results = [];
+		for (const tc of toolCalls) {
+			try {
+				logInfo('Tool', `Executing (parallel loopback): ${tc.name}(${JSON.stringify(tc.args || {})})`.slice(0, 500));
+				const directResult = await window.electronAPI.executeTool(tc.name, tc.args);
+				const resultStr = String(directResult?.result || 'done').slice(0, 500);
+				logInfo('Tool', `Result (parallel loopback): ${tc.name} → ${directResult?.ok !== false ? 'OK' : 'FAIL'}: ${resultStr}`);
+				results.push({ name: tc.name, result: resultStr });
+			} catch (err) {
+				logError('Tool', `Parallel loopback tool ${tc.name} error: ${err.message}`);
+				results.push({ name: tc.name, result: `Error: ${err.message}` });
+			}
+		}
+		return results;
 	}
 
 	_drainResponseQueue() {

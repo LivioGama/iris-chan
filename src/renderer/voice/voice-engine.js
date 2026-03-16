@@ -1322,6 +1322,8 @@ export class VoiceEngine extends Emitter {
 				// Suppress the WebSocket response that's already playing
 				this._dropModelOutputUntilTurnComplete = true;
 				this.playback.stop();
+				// Clear any WebSocket response bubbles that snuck in before parallel activated
+				clearBubbles();
 				logInfo('Parallel', `Activated parallel processing for: ${transcript}`);
 			}
 		} catch (err) {
