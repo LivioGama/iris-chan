@@ -439,6 +439,30 @@ function inferNoisyPointerScreenReference({ rawText = '', tokenSet, pointerMode 
 	return asciiTokens <= 1;
 }
 
+function inferPointerMode(event = {}, failedFamilies = [], succeededFamilies = []) {
+	if (failedFamilies.includes('pointer') || succeededFamilies.includes('pointer')) return 'pointer';
+
+	const reason = normalizeText(event.classification?.reason || '');
+	const semanticText = normalizeIssueText(event.classification?.payload?.semanticText || '');
+	const issueSignature = normalizeText(event.classification?.payload?.issueSignature || event.issueSignature || '');
+	const rawText = String(
+		event.guidanceText
+		|| event.userText
+		|| event.classification?.payload?.description
+		|| ''
+	).trim();
+	const rawTerms = countRawTerms(rawText);
+	const failedNames = (event.failedTools || []).map((item) => item?.name).filter(Boolean);
+
+	const contextualPointerGuidance = reason.includes('pointer action guidance')
+		|| semanticText.includes('pointer')
+		|| issueSignature.includes('screen-reference-direct-action');
+	const plannerVisibleTargetFailure = failedNames.includes('run_ui_task')
+		&& (semanticText.includes('screen reference') || semanticText.includes('visible_target') || reason.includes('screen-reference'));
+
+	return contextualPointerGuidance && plannerVisibleTargetFailure && rawTerms >= 5 ? 'pointer' : 'nonpointer';
+}
+
 function inferFlattenedPreparationRecoveryPolicy(event = {}) {
 	const rawText = String(
 		event.guidanceText
@@ -721,7 +745,7 @@ class LearningManager {
 		const tokenSet = new Set(tokens);
 		const failedFamilies = uniqueSorted((event.failedTools || []).map((item) => toolFamily(item.name)));
 		const succeededFamilies = uniqueSorted((event.successfulTools || []).map((item) => toolFamily(item.name)));
-		const pointerMode = failedFamilies.includes('pointer') || succeededFamilies.includes('pointer') ? 'pointer' : 'nonpointer';
+		const pointerMode = inferPointerMode(event, failedFamilies, succeededFamilies);
 		let intentFamily = deriveIntentFamily(text, tokenSet, domain);
 		let targets = deriveTargetFeatures(text, tokenSet, domain);
 		if (inferNoisyPointerScreenReference({ rawText, tokenSet, pointerMode, targets })) {

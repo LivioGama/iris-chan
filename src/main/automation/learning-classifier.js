@@ -50,7 +50,7 @@ function buildScreenReferencePolicyPayload(text = '', confidence = 0.94) {
 		key: 'policy.screen_reference_direct_action',
 		value: {
 			enabled: true,
-			message: 'When the user gives a deictic or otherwise ambiguous pointer correction during active UI work, treat it as a screen-referential request. Use the latest screen context and visible target instead of asking them to restate or point again.',
+			message: 'When the user gives a deictic or otherwise ambiguous on-screen correction or question during active UI work, treat it as a screen-referential request. Use the latest screen context, visible target, and any readable on-screen label, text, or value near that target to resolve what they mean instead of asking them to restate or point again.',
 			evidence: text.trim(),
 		},
 		source: 'user_correction',

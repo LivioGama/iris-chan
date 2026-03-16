@@ -25,7 +25,7 @@ async function testMemoryStoreSeedsScreenReferencePolicy() {
 	const policy = memoryStore.find({ key: 'policy.screen_reference_direct_action' });
 	assert.ok(policy, 'memory store should seed screen-reference direct-action policy');
 	assert.strictEqual(policy.kind, 'fallback_policy', 'screen-reference direct-action policy should be a fallback policy');
-	assert.match(String(policy.value?.message || ''), /readable on-screen label or text/i, 'seeded screen-reference policy should instruct Iris to use visible text around the target');
+	assert.match(String(policy.value?.message || ''), /readable on-screen label, text, or value near that target/i, 'seeded screen-reference policy should instruct Iris to use visible text around the target');
 }
 
 async function testBuildCodingPromptIncludesScreenReferencePolicy() {
@@ -73,6 +73,7 @@ async function testOpaqueNepaliPointerCorrectionLearnsVisibleTextScreenReference
 	const policy = memoryStore.find({ key: 'policy.screen_reference_direct_action' });
 	assert.ok(policy, 'opaque Nepali pointer correction should still learn the reusable screen-reference policy');
 	assert.match(String(policy.value?.evidence || ''), /यो लेख्छ जस्तो बुझेन भन्दै नै/u, 'stored screen-reference policy should preserve the exact user guidance');
+	assert.match(String(policy.value?.message || ''), /readable on-screen label, text, or value near that target/i, 'learned screen-reference policy should preserve nearby-label resolution guidance');
 	assert.strictEqual(selfFixCalls, 0, 'single opaque Nepali pointer correction should learn natively before escalating');
 }
 

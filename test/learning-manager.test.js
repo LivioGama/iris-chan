@@ -1547,6 +1547,41 @@ async function testNoisyMultilingualScreenReferencePointerMapsToScreenReferenceI
 	assert.strictEqual(selfFixCalls >= 1, true, 'repeated noisy multilingual screen-reference friction should queue a self-fix for the learned native issue');
 }
 
+async function testOpaqueTransliteratedScreenReferenceAfterPlannerFailureStaysInPointerBucket() {
+	const irisDir = createTempDir();
+	const memoryStore = new MemoryStore({ irisDir });
+	const selfImprovementManager = new SelfImprovementManager({
+		irisDir,
+		skillsEngine: { scan() { return []; } },
+		selfFixTool: async () => ({ ok: true, result: 'queued core self-fix' }),
+	});
+	let selfFixCalls = 0;
+	const manager = new LearningManager({
+		irisDir,
+		memoryStore,
+		selfImprovementManager,
+		selfFixTool: async () => {
+			selfFixCalls += 1;
+			return { ok: true, result: 'queued core self-fix' };
+		},
+	});
+
+	manager.recordToolExecution('run_ui_task', { goal: 'open that' }, 'Error: could not resolve visible target', false, 10);
+	manager.recordConversationTurn('user', 'टू आवर्स ऑफ कॉल युंग विस्टम टू फॉल स्लीप टू');
+	await wait(80);
+	manager.recordConversationTurn('user', 'टू आवर्स ऑफ कॉल युंग विस्टम टू फॉल स्लीप टू');
+	await wait(120);
+
+	const issues = JSON.parse(fs.readFileSync(path.join(irisDir, 'self_fix_issues.json'), 'utf8'));
+	assert.strictEqual(issues.issues.length, 1, 'opaque transliterated screen-reference friction should cluster into one issue');
+	assert.strictEqual(
+		issues.issues[0].issueSignature,
+		'core_gap:general:screen_reference:screen_context+visible_target:none:none:pointer',
+		'planner-led opaque screen-reference friction should preserve pointer context instead of regressing to the nonpointer bucket'
+	);
+	assert.strictEqual(selfFixCalls, 1, 'repeated opaque transliterated screen-reference friction should queue one self-fix');
+}
+
 async function testSemanticIssueClusteringMergesParaphrasedFalsePositives() {
 	const irisDir = createTempDir();
 	const memoryStore = new MemoryStore({ irisDir });
@@ -1782,6 +1817,7 @@ Promise.resolve()
 	.then(testNoisyMultilingualPointerFrictionMapsToVisibleTargetIssue)
 	.then(testOpaqueNepaliPointerRecoveryMapsToVisibleTargetIssue)
 	.then(testNoisyMultilingualScreenReferencePointerMapsToScreenReferenceIssue)
+	.then(testOpaqueTransliteratedScreenReferenceAfterPlannerFailureStaysInPointerBucket)
 	.then(testSemanticIssueClusteringMergesParaphrasedFalsePositives)
 	.then(testSemanticIssueClusteringIgnoresToolPathVariance)
 	.then(testStabilizationFailureQueuesImmediateSelfFix)
