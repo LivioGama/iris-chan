@@ -104,11 +104,11 @@ restart_iris() {
 # --- Say with verification (waits for transcript in logs) ---
 iris_say() {
   local text="$1" timeout="${2:-15}"
-  local log_before=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+  local log_before=$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d '[:space:]' || echo 0)
   say -v Samantha "$text"
   # Wait for any transcript/response activity
   for i in $(seq 1 "$timeout"); do
-    local log_after=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+    local log_after=$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d '[:space:]' || echo 0)
     if [ "$log_after" -gt "$((log_before + 5))" ]; then
       return 0
     fi
@@ -433,14 +433,16 @@ grep -i "transcript" "$LOG_FILE" | tail -5
 **Steps:**
 ```bash
 # Note the current log line count
-LOG_LINES_BEFORE=$(wc -l < "$LOG_FILE")
+LOG_LINES_BEFORE=$(wc -l < "$LOG_FILE" | tr -d '[:space:]')
 
 # Do NOT speak for 15 seconds
 sleep 15
 
 # Check for phantom transcriptions
-LOG_LINES_AFTER=$(wc -l < "$LOG_FILE")
-tail -n $((LOG_LINES_AFTER - LOG_LINES_BEFORE)) "$LOG_FILE" | grep -i "transcript"
+LOG_LINES_AFTER=$(wc -l < "$LOG_FILE" | tr -d '[:space:]')
+PHANTOM=$(tail -n $((LOG_LINES_AFTER - LOG_LINES_BEFORE)) "$LOG_FILE" | grep -ci "transcript" || true)
+PHANTOM=$(echo "$PHANTOM" | tr -d '[:space:]')  # strip whitespace/newlines
+[ "${PHANTOM:-0}" -eq 0 ] && echo "PASS: No phantom transcriptions" || echo "FAIL: $PHANTOM phantom transcript(s) detected"
 ```
 **Expected:** No transcript lines appear during silence. The listening gate (180ms minimum speech) prevents noise from triggering false positives.
 
