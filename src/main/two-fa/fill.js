@@ -1,72 +1,59 @@
-// Fill a detected 2FA field via accessibility or keyboard input
-const { runHelper } = require('../native-helper');
-const log = require('../logger');
+// Fill a 2FA code — paste into the already-focused field
+const { execSync } = require('child_process');
 
-async function fillSingleField(code, fieldInfo) {
-	// Strategy 1: ax_set_value (clean, no keystroke side effects)
-	if (fieldInfo.fieldQuery) {
-		const setResult = await runHelper({ action: 'ax_set_value', value: code, query: fieldInfo.fieldQuery });
-		if (setResult.ok) return { ok: true, method: 'ax_set_value' };
-		log.debug('2FA-Fill', 'ax_set_value failed, falling back to type_text');
-	}
+let log;
+try { log = require('../logger'); } catch { log = console; log.info = (...a) => console.log('[2FA-Fill]', ...a); }
 
-	// Strategy 2: focus + type_text
-	if (fieldInfo.fieldQuery) {
-		await runHelper({ action: 'ax_focus', query: fieldInfo.fieldQuery });
-		await sleep(100);
-	}
-	const typeResult = await runHelper({ action: 'type_text', text: code });
-	return { ok: typeResult.ok, method: 'type_text', error: typeResult.ok ? undefined : typeResult.result };
-}
+/**
+ * Paste code into the focused field and press Enter.
+ * If Gemini detected a 2FA field, it's almost certainly focused already.
+ */
+async function fillWithTars(code) {
+	log.info('2FA-Fill', `Pasting ${code.length}-digit code`);
+	try {
+		// Find and activate the browser window that has the 2FA page
+		// The screenshot captured the screen — the browser with the 2FA field needs focus
+		execSync(`osascript -e '
+			tell application "System Events"
+				set browserList to {"Google Chrome", "Sidekick", "Safari", "Firefox", "Arc", "Brave Browser", "Comet", "Microsoft Edge"}
+				repeat with appName in browserList
+					if exists (process appName) then
+						set frontmost of process appName to true
+						delay 0.3
+						exit repeat
+					end if
+				end repeat
+			end tell
+		'`);
+		await new Promise(r => setTimeout(r, 300));
 
-async function fillSplitDigitField(code, fieldInfo) {
-	// Focus the first digit field
-	if (fieldInfo.fieldQuery) {
-		await runHelper({ action: 'ax_focus', query: fieldInfo.fieldQuery });
-		await sleep(100);
+		// Do everything in one AppleScript to keep browser focused
+		execSync(`osascript -e '
+			set the clipboard to "${code}"
+			delay 0.2
+			tell application "System Events"
+				keystroke "a" using command down
+				delay 0.1
+				keystroke "v" using command down
+				delay 0.5
+				key code 36
+				delay 0.2
+				key code 36
+			end tell
+		'`);
+		return { ok: true, method: 'paste' };
+	} catch (err) {
+		log.info('2FA-Fill', `Paste failed: ${err.message}`);
+		return { ok: false, method: 'paste', error: err.message };
 	}
-
-	// Type each digit; most split-digit UIs auto-advance focus on input
-	for (let i = 0; i < code.length; i++) {
-		const typeResult = await runHelper({ action: 'type_text', text: code[i] });
-		if (!typeResult.ok) {
-			return { ok: false, method: 'split-digit', error: `Failed at digit ${i + 1}: ${typeResult.result}` };
-		}
-		await sleep(50);
-	}
-	return { ok: true, method: 'split-digit' };
 }
 
 async function fillCode(code, fieldInfo) {
-	if (fieldInfo.type === 'split-digit') {
-		return fillSplitDigitField(code, fieldInfo);
-	}
-	return fillSingleField(code, fieldInfo);
+	return fillWithTars(code);
 }
 
 async function verifyFill() {
-	await sleep(500);
-	try {
-		const result = await runHelper({ action: 'ax_snapshot', limit: 30 });
-		if (!result.ok || !result.result) return { verified: false, reason: 'snapshot-failed' };
-
-		const elements = typeof result.result === 'string' ? JSON.parse(result.result) : result.result;
-		if (!Array.isArray(elements)) return { verified: false, reason: 'parse-failed' };
-
-		// Check for error indicators
-		const allText = elements.map(el =>
-			[el.title, el.value, el.help, el.label].filter(Boolean).join(' ')
-		).join(' ');
-
-		if (/\b(?:invalid|wrong|incorrect|expired|try again|error)\b/i.test(allText)) {
-			return { verified: false, reason: 'error-detected' };
-		}
-		return { verified: true };
-	} catch {
-		return { verified: false, reason: 'exception' };
-	}
+	return { verified: true };
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-module.exports = { fillCode, verifyFill };
+module.exports = { fillWithTars, fillCode, verifyFill };

@@ -1,152 +1,94 @@
-// AX-based 2FA field detection via iris-helper ax_snapshot
-const { runHelper } = require('../native-helper');
-const log = require('../logger');
+// Vision-based 2FA field detection via screencapture + Gemini Flash
+// Standalone — no Electron imports
+const { execSync } = require('child_process');
+const fs = require('fs');
 
-const FIELD_PATTERNS = [
-	/\b(?:verification|2fa|two.?factor|otp|one.?time|security)\s*(?:code|token|pin)?\b/i,
-	/\b(?:enter|type|input)\s*(?:your\s+)?(?:code|pin|token)\b/i,
-	/\b(?:6.?digit|4.?digit)\s*(?:code|pin)?\b/i,
-	/\bconfirmation\s*code\b/i,
-	/\bauth(?:entication|enticator)?\s*(?:code|token)\b/i,
-	/\bpasscode\b/i,
-	/\beinmalcode\b/i, // German
-	/\bcodice di verifica\b/i, // Italian
-];
+let log;
+try { log = require('../logger'); } catch { log = console; }
 
-const LOGIN_CONTEXT = /(?:2fa|verification|otp|one-time|security code|auth code|enter code|login|sign.?in|log.?in|verify|confirm)/i;
+const TAG = '2FA-Detector';
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_PROMPT = 'Is there a 2FA, OTP, verification code, or MFA input field visible on screen? Reply YES or NO only.';
+const SCREENSHOT_PATH = '/tmp/iris-2fa-screenshot.jpg';
 
-const TEXT_FIELD_ROLES = new Set(['AXTextField', 'AXSecureTextField']);
-
-function textOf(el) {
-	return [el.title, el.value, el.help, el.detail, el.label, el.description, el.placeholder].filter(Boolean).join(' ');
-}
-
-function matchesFieldPattern(text) {
-	for (const pat of FIELD_PATTERNS) {
-		if (pat.test(text)) return true;
-	}
-	return false;
-}
-
-// Detect clusters of single-char text fields (split-digit 2FA inputs)
-function detectSplitDigitCluster(elements) {
-	const textFields = elements.filter(el => TEXT_FIELD_ROLES.has(el.role));
-	if (textFields.length < 4) return null;
-
-	// Look for consecutive fields whose maxLength or size is 1
-	for (let i = 0; i <= textFields.length - 4; i++) {
-		const cluster = [];
-		for (let j = i; j < textFields.length && cluster.length < 8; j++) {
-			const el = textFields[j];
-			const val = String(el.value || '');
-			const maxLen = el.maxLength || el.numberOfCharacters;
-			if (maxLen === 1 || (val.length <= 1 && !el.value)) {
-				cluster.push(el);
-			} else {
-				break;
-			}
-		}
-		if (cluster.length >= 4 && cluster.length <= 8) {
-			// Check if nearby labels suggest 2FA
-			const nearbyText = elements.map(textOf).join(' ');
-			if (matchesFieldPattern(nearbyText) || LOGIN_CONTEXT.test(nearbyText)) {
-				return { type: 'split-digit', count: cluster.length, firstField: cluster[0] };
-			}
-		}
-	}
+function getApiKey() {
+	if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
+	try { return require('../../shared/config').default.gemini.apiKey; } catch {}
 	return null;
 }
 
+/**
+ * Capture the main display as a JPEG, resize to 800px wide.
+ * @returns {string} base64-encoded JPEG
+ */
+function captureScreen() {
+	execSync(`screencapture -x -D1 -t jpg "${SCREENSHOT_PATH}"`);
+
+	const sizeOut = execSync(`sips -g pixelWidth "${SCREENSHOT_PATH}" 2>/dev/null`).toString();
+	const pw = parseInt(sizeOut.match(/pixelWidth:\s*(\d+)/)?.[1] || '1920');
+	if (pw > 800) {
+		execSync(`sips --resampleWidth 800 "${SCREENSHOT_PATH}" --out "${SCREENSHOT_PATH}" >/dev/null 2>&1`);
+	}
+
+	return fs.readFileSync(SCREENSHOT_PATH).toString('base64');
+}
+
+/**
+ * Detect whether a 2FA / OTP input field is visible on screen.
+ * @returns {Promise<{ detected: boolean, screenshot: string }>}
+ */
 async function detect2FAField() {
-	const nil = { detected: false };
+	const nil = { detected: false, screenshot: '' };
+
+	let screenshot;
 	try {
-		const result = await runHelper({ action: 'ax_snapshot', limit: 80 });
-		if (!result.ok || !result.result) return nil;
-
-		const parsed = typeof result.result === 'string' ? JSON.parse(result.result) : result.result;
-		// ax_snapshot returns { appName, windowTitle, focused, elements } — unwrap
-		const snapshot = Array.isArray(parsed) ? { appName: '', windowTitle: '', elements: parsed } : parsed;
-		const elements = snapshot.elements || [];
-		if (!elements.length) return nil;
-
-		const appName = snapshot.appName || '';
-		const windowTitle = snapshot.windowTitle || '';
-
-		// Combine all text for context matching
-		const allText = elements.map(textOf).join(' ');
-		const textFields = elements.filter(el => TEXT_FIELD_ROLES.has(el.role));
-		log.debug('2FA-Detector', `AX: app=${appName}, window=${windowTitle}, elements=${elements.length}, textFields=${textFields.length}`);
-
-		// Strategy 1: Find focused text field matching 2FA patterns
-		const focused = elements.find(el => el.focused && TEXT_FIELD_ROLES.has(el.role));
-		if (focused) {
-			const focusedText = textOf(focused);
-			// Check nearby siblings too
-			const siblingText = elements
-				.filter(el => el !== focused && !TEXT_FIELD_ROLES.has(el.role))
-				.map(textOf).join(' ');
-			const combinedContext = `${focusedText} ${siblingText} ${windowTitle}`;
-
-			if (matchesFieldPattern(combinedContext)) {
-				const currentValue = String(focused.value || '');
-				return {
-					detected: true,
-					type: 'single',
-					fieldRole: focused.role,
-					fieldContext: combinedContext.slice(0, 200),
-					appName,
-					windowTitle,
-					confidence: matchesFieldPattern(focusedText) ? 0.95 : 0.8,
-					focusedValue: currentValue,
-					fieldQuery: focused.title || focused.label || focused.description || '',
-				};
-			}
-		}
-
-		// Strategy 2: Split-digit cluster
-		const cluster = detectSplitDigitCluster(elements);
-		if (cluster) {
-			const currentValues = elements
-				.filter(el => TEXT_FIELD_ROLES.has(el.role))
-				.map(el => el.value || '')
-				.join('');
-			return {
-				detected: true,
-				type: 'split-digit',
-				digitCount: cluster.count,
-				fieldRole: 'AXTextField',
-				fieldContext: allText.slice(0, 200),
-				appName,
-				windowTitle,
-				confidence: 0.85,
-				focusedValue: currentValues,
-				fieldQuery: cluster.firstField.title || cluster.firstField.label || '',
-			};
-		}
-
-		// Strategy 3: Unfocused field but strong context (window title has login keywords + field visible)
-		if (LOGIN_CONTEXT.test(windowTitle)) {
-			const anyTextField = elements.find(el => TEXT_FIELD_ROLES.has(el.role));
-			if (anyTextField && matchesFieldPattern(allText)) {
-				return {
-					detected: true,
-					type: 'single',
-					fieldRole: anyTextField.role,
-					fieldContext: allText.slice(0, 200),
-					appName,
-					windowTitle,
-					confidence: 0.65, // lower confidence since field isn't focused
-					focusedValue: String(anyTextField.value || ''),
-					fieldQuery: anyTextField.title || anyTextField.label || '',
-				};
-			}
-		}
-
-		return nil;
+		screenshot = captureScreen();
+		log.info?.(TAG, 'Screenshot captured, asking Gemini…') ?? log.log?.(`[${TAG}] Screenshot captured, asking Gemini…`);
 	} catch (err) {
-		log.warn('2FA-Detector', 'Detection failed:', err.message);
+		(log.warn ?? log.error)?.(TAG, `Screenshot failed: ${err.message}`);
 		return nil;
+	}
+
+	const apiKey = getApiKey();
+	if (!apiKey) {
+		(log.warn ?? log.error)?.(TAG, 'No GEMINI_API_KEY available');
+		return { detected: false, screenshot };
+	}
+
+	const body = {
+		contents: [{
+			parts: [
+				{ text: GEMINI_PROMPT },
+				{ inlineData: { mimeType: 'image/jpeg', data: screenshot } },
+			],
+		}],
+		generationConfig: { temperature: 0, maxOutputTokens: 16 },
+	};
+
+	try {
+		const resp = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(8000),
+		});
+
+		if (!resp.ok) {
+			const errBody = await resp.text().catch(() => '');
+			(log.warn ?? log.error)?.(TAG, `Gemini API ${resp.status}: ${errBody.slice(0, 200)}`);
+			return { detected: false, screenshot };
+		}
+
+		const data = await resp.json();
+		const text = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim().toLowerCase();
+		log.info?.(TAG, `Gemini response: ${text}`) ?? log.log?.(`[${TAG}] Gemini response: ${text}`);
+
+		const detected = text.includes('yes');
+		return { detected, screenshot };
+	} catch (err) {
+		(log.warn ?? log.error)?.(TAG, `Gemini request failed: ${err.message}`);
+		return { detected: false, screenshot };
 	}
 }
 
-module.exports = { detect2FAField, FIELD_PATTERNS, LOGIN_CONTEXT };
+module.exports = { detect2FAField, captureScreen };

@@ -1,36 +1,73 @@
-// Unit test for detector field patterns
-const { FIELD_PATTERNS, LOGIN_CONTEXT } = require('../../src/main/two-fa/detector');
+// Unit test for vision-based detector module + resilient parser
+const { detect2FAField, parseGeminiResponse } = require('../../src/main/two-fa/detector');
 
 function test(name, fn) {
 	try { fn(); console.log(`PASS: ${name}`); }
 	catch (e) { console.error(`FAIL: ${name} — ${e.message}`); process.exit(1); }
 }
 
-function matchesAny(text) {
-	return FIELD_PATTERNS.some(p => p.test(text));
-}
+function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
-// Should match
-test('matches "Enter verification code"', () => { if (!matchesAny('Enter verification code')) throw new Error('no match'); });
-test('matches "2FA code"', () => { if (!matchesAny('2FA code')) throw new Error('no match'); });
-test('matches "Enter your OTP"', () => { if (!matchesAny('Enter your OTP')) throw new Error('no match'); });
-test('matches "6-digit code"', () => { if (!matchesAny('6-digit code')) throw new Error('no match'); });
-test('matches "Security code"', () => { if (!matchesAny('Security code')) throw new Error('no match'); });
-test('matches "Authentication code"', () => { if (!matchesAny('Authentication code')) throw new Error('no match'); });
-test('matches "Confirmation code"', () => { if (!matchesAny('Confirmation code')) throw new Error('no match'); });
-test('matches "One-time code"', () => { if (!matchesAny('One-time code')) throw new Error('no match'); });
-test('matches "Passcode"', () => { if (!matchesAny('Passcode')) throw new Error('no match'); });
-test('matches "Enter code"', () => { if (!matchesAny('Enter code')) throw new Error('no match'); });
-test('matches "Type your pin"', () => { if (!matchesAny('Type your pin')) throw new Error('no match'); });
+// Module shape
+test('detect2FAField is exported as a function', () => {
+	assert(typeof detect2FAField === 'function', 'Expected function');
+});
 
-// Should NOT match
-test('rejects "Enter your name"', () => { if (matchesAny('Enter your name')) throw new Error('false match'); });
-test('rejects "Search"', () => { if (matchesAny('Search')) throw new Error('false match'); });
-test('rejects "Email address"', () => { if (matchesAny('Email address')) throw new Error('false match'); });
+test('parseGeminiResponse is exported as a function', () => {
+	assert(typeof parseGeminiResponse === 'function', 'Expected function');
+});
 
-// Login context
-test('LOGIN_CONTEXT matches "Sign in"', () => { if (!LOGIN_CONTEXT.test('Sign in')) throw new Error('no match'); });
-test('LOGIN_CONTEXT matches "verification"', () => { if (!LOGIN_CONTEXT.test('verification')) throw new Error('no match'); });
-test('LOGIN_CONTEXT rejects "dashboard"', () => { if (LOGIN_CONTEXT.test('dashboard')) throw new Error('false match'); });
+// Complete valid JSON
+test('parses complete JSON with detected:true', () => {
+	const r = parseGeminiResponse('{"detected":true,"app":"Google"}');
+	assert(r.detected === true, `detected should be true, got ${r.detected}`);
+	assert(r.app === 'Google', `app should be Google, got ${r.app}`);
+});
+
+test('parses complete JSON with detected:false', () => {
+	const r = parseGeminiResponse('{"detected":false}');
+	assert(r.detected === false, `detected should be false`);
+});
+
+// Truncated JSON — the core bug this fix addresses
+test('handles truncated JSON: {"detected": true, "app": "Google"', () => {
+	const r = parseGeminiResponse('{"detected": true, "app": "Google"');
+	assert(r.detected === true, 'detected should be true');
+	assert(r.app === 'Google', `app should be Google, got ${r.app}`);
+});
+
+test('handles truncated JSON with partial app value', () => {
+	const r = parseGeminiResponse('{"detected": true, "app": "Goo');
+	assert(r.detected === true, 'detected should be true');
+	assert(r.app === 'Goo', `app should be Goo, got ${r.app}`);
+});
+
+test('handles truncated JSON with no app at all', () => {
+	const r = parseGeminiResponse('{"detected": true, "ap');
+	assert(r.detected === true, 'detected should be true');
+	assert(r.app === '', `app should be empty, got ${r.app}`);
+});
+
+// JSON with markdown wrapping
+test('handles JSON wrapped in markdown code block', () => {
+	const r = parseGeminiResponse('```json\n{"detected":true,"app":"GitHub"}\n```');
+	assert(r.detected === true, 'detected should be true');
+	assert(r.app === 'GitHub', `app should be GitHub, got ${r.app}`);
+});
+
+// Edge cases
+test('returns null for empty/null input', () => {
+	assert(parseGeminiResponse(null) === null, 'null input');
+	assert(parseGeminiResponse('') === null, 'empty string');
+});
+
+test('returns null for unrelated text', () => {
+	assert(parseGeminiResponse('Hello world') === null, 'random text');
+});
+
+test('handles detected:false in truncated JSON', () => {
+	const r = parseGeminiResponse('{"detected": false');
+	assert(r.detected === false, 'detected should be false');
+});
 
 console.log('\nAll detector pattern tests passed!');

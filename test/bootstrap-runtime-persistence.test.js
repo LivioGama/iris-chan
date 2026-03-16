@@ -40,6 +40,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
 				},
 				on() {},
 				quit() {},
+				requestSingleInstanceLock() { return true; },
 			},
 			session: {
 				defaultSession: {
@@ -188,6 +189,8 @@ Module._load = function patchedLoad(request, parent, isMain) {
 			setNativeFallbackManager() {},
 			setEpisodeRecorder() {},
 			setConvexClient() {},
+			setFeedbackStore() {},
+			setIntentPredictionEngine() {},
 		};
 	}
 	if (request === './task-queue/watcher') {
@@ -209,7 +212,43 @@ Module._load = function patchedLoad(request, parent, isMain) {
 	if (request === './task-queue/service') {
 		return { setBehaviorEngine() {} };
 	}
-	if (request === './settings') {
+	if (request === './feedback/store') {
+		return { FeedbackStore: class FakeFeedbackStore {} };
+	}
+	if (request === './automation/groq-client') {
+		return { GroqClient: class FakeGroqClient {} };
+	}
+	if (request === './automation/intent-prediction-engine') {
+		return { IntentPredictionEngine: class FakeIntentPredictionEngine { get available() { return false; } startPredictionLoop() {} } };
+	}
+	if (request === './automation/world-state') {
+		return { WorldState: class FakeWorldState {} };
+	}
+	if (request === './automation/intent-pattern-store') {
+		return { IntentPatternStore: class FakeIntentPatternStore {} };
+	}
+	if (request === './runtime/convex-adapter') {
+		return { setConvexClient() {} };
+	}
+	if (request === './two-fa') {
+		return { init() {} };
+	}
+	if (request === './vocab/monitor') {
+		return {};
+	}
+	if (request === './link-capture/poller') {
+		return { LinkCapturePoller: class FakeLinkCapturePoller { start() {} stop() {} } };
+	}
+	if (request === '../shared/config') {
+		return { default: { linkCapture: { enabled: false } } };
+	}
+	if (request === './runtime/settings-handlers') {
+		return { registerSettingsHandlers() {} };
+	}
+	if (request === './runtime/shortcut-manager') {
+		return { registerShortcuts() {}, unregisterShortcuts() {} };
+	}
+	if (request === './settings' || request === '../settings') {
 		return {
 			registerApplyHandler() {},
 			init() {
@@ -221,6 +260,34 @@ Module._load = function patchedLoad(request, parent, isMain) {
 				};
 			},
 			updateSettings() {},
+			getNamespace() {
+				return {};
+			},
+			onChange() {},
+			DEFAULT_SETTINGS: {
+				logging: {
+					console: { enabled: true, level: 'info' },
+					persist: { enabled: false, level: 'info' },
+					sources: { mainConsole: true, rendererConsole: true, rendererConsoleCapture: true },
+					categories: {},
+				},
+			},
+		};
+	}
+	if (request.endsWith('/logger') || request === './logger' || request === '../logger') {
+		return {
+			captureRendererConsole() {},
+			log: () => {},
+			error: () => {},
+			warn: () => {},
+			info: () => {},
+			debug: () => {},
+		};
+	}
+	if (request === './runtime/geometry-store') {
+		return {
+			getGeometry: () => Promise.resolve(null),
+			setGeometry: () => Promise.resolve(),
 		};
 	}
 	return originalLoad.apply(this, arguments);
@@ -263,8 +330,9 @@ registeredEventHandler({
 	source: 'proactive-engine',
 });
 
-assert.strictEqual(savedRuntimeEvents.length, 4, 'every runtime event should be mirrored to Convex');
-assert.deepStrictEqual(savedRuntimeEvents[0], {
+setTimeout(() => {
+	assert.strictEqual(savedRuntimeEvents.length, 4, 'every runtime event should be mirrored to Convex');
+	assert.deepStrictEqual(savedRuntimeEvents[0], {
 	event: {
 		type: 'DB_HEALTH',
 		timestamp: 111,
@@ -309,8 +377,9 @@ assert.deepStrictEqual(savedProactiveSuggestions[0], {
 		timestamp: 444,
 	},
 	idempotencyKey: 'proactive_444',
-});
+	});
 
-console.log('Bootstrap runtime persistence tests passed.');
+	console.log('Bootstrap runtime persistence tests passed.');
 
-Module._load = originalLoad;
+	Module._load = originalLoad;
+}, 50);

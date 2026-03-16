@@ -1,5 +1,7 @@
 // Tool handler: auto_2fa — retrieve 2FA codes from Messages or Mail and auto-type them
 const { exec } = require('child_process');
+const initSqlJs = require('sql.js');
+const fs = require('fs');
 const { runHelper } = require('../native-helper');
 const log = require('../logger');
 const os = require('os');
@@ -157,12 +159,10 @@ function runShell(cmd, timeout = 8000) {
 }
 
 // Read recent iMessage/SMS from the Messages SQLite database
-async function readMessages(maxAgeSeconds = 300) {
+async function readMessages(maxAgeSeconds = 1200) {
 	const dbPath = path.join(os.homedir(), 'Library/Messages/chat.db');
-	// Query messages from the last N seconds
-	// Messages.app date epoch: 2001-01-01 (Core Data), stored as nanoseconds since that epoch
 	const sql = `
-		SELECT m.text, m.attributedBody, m.date, h.id as sender
+		SELECT m.text, hex(m.attributedBody), m.date, h.id as sender
 		FROM message m
 		LEFT JOIN handle h ON m.handle_id = h.ROWID
 		WHERE (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
@@ -170,7 +170,7 @@ async function readMessages(maxAgeSeconds = 300) {
 		ORDER BY m.date DESC
 		LIMIT 30;
 	`;
-	const cmd = `sqlite3 -separator '|||' "${dbPath}" "${sql.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
+	const cmd = `/usr/bin/sqlite3 -separator '|||' "${dbPath}" "${sql.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
 	const result = await runShell(cmd);
 	if (!result.ok) {
 		log.warn('Auth', 'Messages DB read failed:', result.output);
@@ -179,9 +179,14 @@ async function readMessages(maxAgeSeconds = 300) {
 	return result.output.split('\n').filter(Boolean).map(line => {
 		const parts = line.split('|||');
 		const plainText = parts[0] || '';
-		const binaryBody = parts[1] || '';
-		// Use plain text if available, otherwise decode NSArchiver binary data
-		const text = plainText || extractTextFromBinaryData(binaryBody);
+		const hexBody = parts[1] || '';
+		let text = plainText;
+		if (!text && hexBody) {
+			try {
+				const buf = Buffer.from(hexBody, 'hex');
+				text = extractTextFromBinaryData(buf.toString('latin1'));
+			} catch { text = ''; }
+		}
 		return { text, sender: parts[3] || 'unknown' };
 	});
 }

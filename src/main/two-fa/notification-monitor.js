@@ -18,6 +18,7 @@ class NotificationMonitor {
 		});
 
 		let buffer = '';
+		let lastErrorMessage = null;
 		this.child.stdout.setEncoding('utf-8');
 		this.child.stdout.on('data', (chunk) => {
 			buffer += chunk;
@@ -33,6 +34,7 @@ class NotificationMonitor {
 						} else if (evt.type === 'ready') {
 							log.info('NotifMonitor', `Watching NotificationCenter (pid: ${evt.pid})`);
 						} else if (evt.type === 'error') {
+							lastErrorMessage = evt.message;
 							log.warn('NotifMonitor', `Helper error: ${evt.message}`);
 						}
 					} catch (err) {
@@ -52,7 +54,8 @@ class NotificationMonitor {
 		this.child.once('exit', (code) => {
 			this.child = null;
 			if (code && code !== 0) {
-				log.warn('NotifMonitor', `Helper exited with code ${code}`);
+				const msg = lastErrorMessage || `Helper exited with code ${code}`;
+				log.error('NotifMonitor', `Notification monitoring failed: ${msg}. SMS code auto-fill via notifications will not work. To enable: System Settings → Privacy & Security → Accessibility, then add the Iris app.`);
 			}
 		});
 

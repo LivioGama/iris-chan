@@ -1,4 +1,6 @@
 // Unit test for confidence scoring
+// Clear any cached mock from other test files (e.g. orchestrator.test.js)
+delete require.cache[require.resolve('../../src/main/two-fa/confidence')];
 const { computeConfidence } = require('../../src/main/two-fa/confidence');
 
 function test(name, fn) {

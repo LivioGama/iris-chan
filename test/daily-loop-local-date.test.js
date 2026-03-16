@@ -39,6 +39,8 @@ function installMockDate(isoString) {
 }
 
 async function main() {
+	// Force a timezone ahead of UTC so 2026-03-07T18:30Z rolls to 2026-03-08 local
+	process.env.TZ = 'Asia/Kathmandu';
 	const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'iris-daily-loop-'));
 	process.env.HOME = tempHome;
 

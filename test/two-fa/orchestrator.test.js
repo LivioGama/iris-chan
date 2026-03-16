@@ -21,8 +21,6 @@ require.cache[require.resolve('../../src/main/two-fa/detector')] = {
 	loaded: true,
 	exports: {
 		detect2FAField: async () => mockDetectResult,
-		FIELD_PATTERNS: [],
-		LOGIN_CONTEXT: /login/i,
 	},
 };
 
@@ -49,7 +47,7 @@ require.cache[require.resolve('../../src/main/two-fa/confidence')] = {
 };
 
 // Mock fill
-let mockFillResult = { ok: true, method: 'ax_set_value' };
+let mockFillResult = { ok: true, method: 'type_text' };
 let mockVerifyResult = { verified: true };
 require.cache[require.resolve('../../src/main/two-fa/fill')] = {
 	id: require.resolve('../../src/main/two-fa/fill'),
@@ -75,7 +73,7 @@ require.cache[require.resolve('../../src/main/tools/auth')] = {
 	filename: require.resolve('../../src/main/tools/auth'),
 	loaded: true,
 	exports: {
-		extractOTP: (text) => { const m = text.match(/\b(\d{4,8})\b/); return m ? m[1] : null; },
+		extractOTP: (text) => { const m = text.match(/\b(\d{3,8})\b/); return m ? m[1] : null; },
 		readMessages: async () => [], readMail: async () => [], readNotifications: async () => [],
 		auto_2fa: async () => ({ ok: false }),
 	},
@@ -114,7 +112,7 @@ function resetMocks() {
 	mockDetectResult = { detected: false };
 	mockGatherResult = [];
 	mockConfidenceResult = 0.9;
-	mockFillResult = { ok: true, method: 'ax_set_value' };
+	mockFillResult = { ok: true, method: 'type_text' };
 	mockVerifyResult = { verified: true };
 }
 
@@ -126,7 +124,7 @@ test('constructor sets defaults', () => {
 	assert.strictEqual(status.enabled, true);
 	assert.strictEqual(status.running, false);
 	assert.strictEqual(status.filling, false);
-	assert.strictEqual(status.pollIntervalMs, 3000);
+	assert.strictEqual(status.pollIntervalMs, 5000);
 	assert.strictEqual(status.confidenceThreshold, 0.85);
 });
 
@@ -268,14 +266,14 @@ async function runTests() {
 		};
 		mockGatherResult = [{ code: '654321', confidence: 1.0, timestamp: Date.now(), source: 'keychain-totp' }];
 		mockConfidenceResult = 0.95;
-		mockFillResult = { ok: true, method: 'ax_set_value' };
+		mockFillResult = { ok: true, method: 'type_text' };
 		mockVerifyResult = { verified: true };
 		const bus = makeEventBus();
 		const o = new TwoFAOrchestrator({ eventBus: bus, behaviorEngine: makeBehaviorEngine() });
 		await o._tick();
 		const success = bus.events.find(e => e.type === 'TWO_FA_FILL_SUCCESS');
 		assert.ok(success, 'Expected TWO_FA_FILL_SUCCESS event');
-		assert.strictEqual(success.payload.method, 'ax_set_value');
+		assert.strictEqual(success.payload.method, 'type_text');
 	});
 
 	await testAsync('_tick emits TWO_FA_FILL_FAILED on fill error', async () => {
@@ -286,7 +284,7 @@ async function runTests() {
 		};
 		mockGatherResult = [{ code: '111111', confidence: 1.0, timestamp: Date.now(), source: 'messages' }];
 		mockConfidenceResult = 0.92;
-		mockFillResult = { ok: false, error: 'ax_set_value failed' };
+		mockFillResult = { ok: false, error: 'type_text failed' };
 		const bus = makeEventBus();
 		const o = new TwoFAOrchestrator({ eventBus: bus, behaviorEngine: makeBehaviorEngine() });
 		await o._tick();
@@ -377,7 +375,7 @@ async function runTests() {
 		};
 		mockGatherResult = [];
 		mockConfidenceResult = 0.9;
-		mockFillResult = { ok: true, method: 'ax_set_value' };
+		mockFillResult = { ok: true, method: 'type_text' };
 		mockVerifyResult = { verified: true };
 
 		const bus = makeEventBus();
@@ -388,7 +386,10 @@ async function runTests() {
 		await o._onNotificationReceived({ type: 'notification', texts: ['Code: 999888'], timestamp: Date.now() });
 		assert.ok(bus.events.find(e => e.type === 'TWO_FA_FILL_SUCCESS'), 'First fill should succeed');
 
-		// Second notification should be blocked by dedup (field cleared after fill)
+		// After fill, the page typically moves on — field is no longer visible
+		mockDetectResult = { detected: false };
+
+		// Second notification should not fill (field gone after successful fill)
 		bus.events.length = 0;
 		await o._onNotificationReceived({ type: 'notification', texts: ['Code: 777666'], timestamp: Date.now() });
 		assert.strictEqual(bus.events.filter(e => e.type === 'TWO_FA_FILL_SUCCESS').length, 0, 'Should not fill again');

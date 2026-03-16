@@ -1,5 +1,4 @@
 // Composite confidence scoring for 2FA auto-fill decisions
-const { LOGIN_CONTEXT } = require('./detector');
 
 const SOURCE_RELIABILITY = {
 	'keychain-totp': 1.0,
@@ -8,6 +7,14 @@ const SOURCE_RELIABILITY = {
 	'messages': 0.9,
 	'mail': 0.85,
 	'notifications': 0.8,
+};
+
+// Detection method reliability — vision (Gemini) is high confidence
+const DETECTION_RELIABILITY = {
+	'vision': 0.95,
+	'single': 0.9,
+	'split-digit': 0.85,
+	'web-form': 0.7,
 };
 
 // TOTP sources generate fresh codes, so recency is always maximal
@@ -24,13 +31,12 @@ function recencyScore(timestamp, source) {
 }
 
 function computeConfidence(fieldInfo, codeResult) {
-	const fieldConf = fieldInfo.confidence || 0.5;
+	const detectionRel = DETECTION_RELIABILITY[fieldInfo.type] || 0.7;
+	const fieldConf = fieldInfo.confidence || detectionRel;
 	const sourceRel = SOURCE_RELIABILITY[codeResult.source] || 0.7;
 	const recency = recencyScore(codeResult.timestamp, codeResult.source);
-	const contextText = `${fieldInfo.windowTitle || ''} ${fieldInfo.fieldContext || ''}`;
-	const contextMul = LOGIN_CONTEXT.test(contextText) ? 1.0 : 0.85;
 
-	return fieldConf * sourceRel * recency * contextMul;
+	return fieldConf * sourceRel * recency;
 }
 
 module.exports = { computeConfidence, SOURCE_RELIABILITY };

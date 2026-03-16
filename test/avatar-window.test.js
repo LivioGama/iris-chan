@@ -42,6 +42,14 @@ class FakeBrowserWindow {
 		for (const handler of this.listeners.get(eventName) || []) handler();
 	}
 
+	setBounds(bounds) {
+		this.bounds = bounds;
+	}
+
+	show() {
+		this.visible = true;
+	}
+
 	isDestroyed() {
 		return this.destroyed;
 	}
@@ -84,6 +92,12 @@ Module._load = function patchedLoad(request, parent, isMain) {
 	if (request === '../logger') {
 		return { captureRendererConsole() {} };
 	}
+	if (request === '../runtime/geometry-store') {
+		return {
+			getGeometry: () => Promise.resolve(null),
+			setGeometry: () => Promise.resolve(),
+		};
+	}
 	return originalLoad.apply(this, arguments);
 };
 
@@ -91,24 +105,30 @@ const avatarWindow = require('../src/main/windows/avatar-window');
 
 const first = avatarWindow.create();
 assert.ok(first, 'create should return a BrowserWindow instance');
-assert.strictEqual(activeTimers.size, 1, 'create should start one display polling timer');
 
-const second = avatarWindow.create();
-assert.strictEqual(second, first, 'create should reuse the existing live window');
-assert.strictEqual(activeTimers.size, 1, 'recreating a live window must not add another timer');
+setTimeout(() => {
+	assert.strictEqual(activeTimers.size, 1, 'create should start one display polling timer');
 
-first.destroy();
-assert.strictEqual(activeTimers.size, 0, 'closing the window should clear the display polling timer');
-assert.strictEqual(clearedTimers.length, 1, 'closing should clear the active timer exactly once');
-assert.strictEqual(avatarWindow.get(), null, 'closed window should be released from the module cache');
+	const second = avatarWindow.create();
+	assert.strictEqual(second, first, 'create should reuse the existing live window');
+	assert.strictEqual(activeTimers.size, 1, 'recreating a live window must not add another timer');
 
-const third = avatarWindow.create();
-assert.notStrictEqual(third, first, 'create after close should build a new BrowserWindow');
-assert.strictEqual(activeTimers.size, 1, 'recreated window should start a fresh timer');
-assert.strictEqual(createdWindows.length, 2, 'only two BrowserWindow instances should be created across the lifecycle');
+	first.destroy();
+	assert.strictEqual(activeTimers.size, 0, 'closing the window should clear the display polling timer');
+	assert.strictEqual(clearedTimers.length, 1, 'closing should clear the active timer exactly once');
+	assert.strictEqual(avatarWindow.get(), null, 'closed window should be released from the module cache');
 
-Module._load = originalLoad;
-global.setInterval = originalSetInterval;
-global.clearInterval = originalClearInterval;
+	const third = avatarWindow.create();
+	assert.notStrictEqual(third, first, 'create after close should build a new BrowserWindow');
 
-console.log('Avatar window tests passed.');
+	setTimeout(() => {
+		assert.strictEqual(activeTimers.size, 1, 'recreated window should start a fresh timer');
+		assert.strictEqual(createdWindows.length, 2, 'only two BrowserWindow instances should be created across the lifecycle');
+
+		Module._load = originalLoad;
+		global.setInterval = originalSetInterval;
+		global.clearInterval = originalClearInterval;
+
+		console.log('Avatar window tests passed.');
+	}, 50);
+}, 50);

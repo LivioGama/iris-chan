@@ -14,8 +14,10 @@ const kanbanWindow = require('./windows/kanban-window');
 const { createTrayController } = require('./status-tray');
 const { registerIpc } = require('./ipc-runtime');
 const { BehaviorModeState } = require('./runtime/behavior-mode');
+const settings = require('./settings');
 const { registerSettingsHandlers } = require('./runtime/settings-handlers');
 const { registerShortcuts, unregisterShortcuts } = require('./runtime/shortcut-manager');
+const { RuntimeEventPersistence } = require('./runtime/event-persistence');
 const { UITaskService } = require('./automation/ui-task-service');
 const { SelfImprovementManager } = require('./automation/self-improvement-manager');
 const { MemoryStore } = require('./automation/memory-store');
@@ -30,8 +32,6 @@ const { WorldState } = require('./automation/world-state');
 const { IntentPatternStore } = require('./automation/intent-pattern-store');
 const { setConvexClient: setUnifiedConvexClient } = require('./runtime/convex-adapter');
 const taskQueueWatcher = require('./task-queue/watcher');
-const { RuntimeEventPersistence } = require('./runtime/event-persistence');
-const settings = require('./settings');
 const taskQueueService = require('./task-queue/service');
 const twoFA = require('./two-fa');
 const vocabMonitor = require('./vocab/monitor');
@@ -39,6 +39,15 @@ const { LinkCapturePoller } = require('./link-capture/poller');
 const appConfig = require('../shared/config').default;
 
 function startRuntime({ apiKey }) {
+	// Enforce single instance: quit if another instance is already running
+	const { app } = require('electron');
+	const gotTheLock = app.requestSingleInstanceLock();
+	if (!gotTheLock) {
+		require('./logger').info('Runtime', 'Another instance is already running. Quitting.');
+		app.quit();
+		return { apiKey };
+	}
+
 	const eventBus = new RuntimeEventBus();
 	const convexClient = new ConvexClient({ eventBus });
 	setUnifiedConvexClient(convexClient);
@@ -69,12 +78,24 @@ function startRuntime({ apiKey }) {
 	});
 	const statusTray = createTrayController();
 	const eventPersistence = new RuntimeEventPersistence({ eventBus, convexClient });
+	eventPersistence.start();
 
 	registerSettingsHandlers({ behaviorEngine });
 	const initialSettings = settings.init();
 	behaviorEngine.setState(initialSettings.behavior);
 	eventPersistence.start();
 	twoFA.init({ eventBus, behaviorEngine, settings: initialSettings.twoFA });
+
+	// ONE-SHOT: read SMS codes and write to /tmp for debugging
+	setTimeout(async () => {
+		try {
+			const auth = require('./tools/auth');
+			const codes = await auth.get_codes({ refresh: true, limit: 10 });
+			require('fs').writeFileSync('/tmp/iris-codes.json', JSON.stringify(codes, null, 2));
+		} catch (e) {
+			require('fs').writeFileSync('/tmp/iris-codes.json', JSON.stringify({ error: e.message }));
+		}
+	}, 3000);
 
 	skills.scan();
 	legacyConvexStore.init();

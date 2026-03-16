@@ -2,7 +2,8 @@ const assert = require('node:assert');
 
 require('ts-node').register({ transpileOnly: true });
 
-const { UITaskService, createTaskSignature, createPlanSignature } = require('../src/main/automation/ui-task-service');
+const { UITaskService } = require('../src/main/automation/ui-task-service');
+const { createTaskSignature, createPlanSignature } = require('../src/main/automation/planning-engine');
 const { NativeFallbackManager } = require('../src/main/automation/native-fallback-manager');
 
 console.log('Running UI task service tests...');

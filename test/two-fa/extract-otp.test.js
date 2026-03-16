@@ -1,5 +1,7 @@
 // OTP extraction tests — adapted from Raycast imessage-2fa test vectors
 const assert = require('node:assert');
+// Clear any cached mock from other test files (e.g. orchestrator.test.js)
+delete require.cache[require.resolve('../../src/main/tools/auth')];
 const { extractOTP, stripHtmlTags, extractTextFromBinaryData, extractVerificationLink } = require('../../src/main/tools/auth');
 
 function test(name, fn) {
