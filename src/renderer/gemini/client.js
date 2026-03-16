@@ -27,7 +27,7 @@ const MAX_SKILL_CATALOG_ENTRIES = 40;
 const SYSTEM_PROMPT_VERSION = 'speed-scientific-v1';
 const DEFAULT_SETUP_MAX_SYSTEM_CHARS = Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_SETUP_MAX_SYSTEM_CHARS || '24000', 10);
 const COMPACT_SETUP_MAX_SYSTEM_CHARS = Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_SETUP_COMPACT_SYSTEM_CHARS || '14000', 10);
-const DEFAULT_SETUP_MAX_PAYLOAD_CHARS = Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_SETUP_MAX_PAYLOAD_CHARS || '45000', 10);
+const DEFAULT_SETUP_MAX_PAYLOAD_CHARS = Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_SETUP_MAX_PAYLOAD_CHARS || '55000', 10);
 const INBOUND_MESSAGE_BATCH_SIZE = Math.max(1, Number.parseInt(globalThis.process?.env?.IRIS_GEMINI_INBOUND_BATCH_SIZE || '24', 10));
 const SETUP_FALLBACK_PROFILES = Object.freeze([
 	Object.freeze({
