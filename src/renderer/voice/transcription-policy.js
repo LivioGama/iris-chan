@@ -79,6 +79,84 @@ export function shouldDropTranscript(text) {
 	return IDLE_NOISE_PATTERN.test(text);
 }
 
+// --- Path-aware STT corrections ---
+// Gemini STT mangles Unix paths: "/tmp/iris-test-output.txt" becomes
+// "temp iris test output TXT" or "slash temp slash iris dash test dash output dot TXT".
+// This pass detects mangled path fragments and reconstructs plausible Unix paths.
+
+const PATH_DIR_ALIASES = {
+	'temp': '/tmp',
+	'slash temp': '/tmp',
+	'slash T M P': '/tmp',
+	'forward slash temp': '/tmp',
+	'tilde': '~',
+	'home': '~',
+	'desktop': '~/Desktop',
+	'downloads': '~/Downloads',
+	'documents': '~/Documents',
+};
+
+const PATH_EXT_ALIASES = {
+	'dot T X T': '.txt',
+	'dot txt': '.txt',
+	'dot text': '.txt',
+	'dot T-X-T': '.txt',
+	'dot JSON': '.json',
+	'dot J S O N': '.json',
+	'dot json': '.json',
+	'dot J S': '.js',
+	'dot js': '.js',
+	'dot M D': '.md',
+	'dot md': '.md',
+	'dot P Y': '.py',
+	'dot py': '.py',
+	'dot T S': '.ts',
+	'dot ts': '.ts',
+	'dot C S V': '.csv',
+	'dot csv': '.csv',
+	'dot log': '.log',
+	'dot L O G': '.log',
+	'dot Y A M L': '.yaml',
+	'dot yaml': '.yaml',
+	'dot yml': '.yml',
+};
+
+// Build a single regex that matches: <dir alias> <words…> <ext alias>
+const _dirKeys = Object.keys(PATH_DIR_ALIASES).sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
+const _extKeys = Object.keys(PATH_EXT_ALIASES).sort((a, b) => b.length - a.length).map(escapeRegExp).join('|');
+const _pathRe = new RegExp(`(?:${_dirKeys})\\s+([\\w](?:[\\w\\s]*[\\w])?)\\s+(?:${_extKeys})`, 'gi');
+
+function _buildFilename(middle) {
+	return middle
+		.replace(/\s+dash\s+/gi, '-')
+		.replace(/\s+underscore\s+/gi, '_')
+		.replace(/\s+/g, '-')
+		.toLowerCase();
+}
+
+/**
+ * Detect mangled Unix paths in STT output and reconstruct them.
+ * e.g. "temp iris test output dot txt" → "/tmp/iris-test-output.txt"
+ */
+export function repairMangledPaths(text) {
+	if (!text) return text;
+	// Skip if the text already contains real Unix paths
+	if (/\/\w+\/\w+/.test(text)) return text;
+	return text.replace(_pathRe, (match, middle, offset) => {
+		// Find which dir alias matched (start of match)
+		const matchStart = match.substring(0, match.indexOf(middle)).trim();
+		const dir = PATH_DIR_ALIASES[Object.keys(PATH_DIR_ALIASES).find(
+			k => matchStart.toLowerCase() === k.toLowerCase()
+		) || ''] || '/tmp';
+		// Find which ext alias matched (end of match)
+		const afterMiddle = match.substring(match.indexOf(middle) + middle.length).trim();
+		const ext = PATH_EXT_ALIASES[Object.keys(PATH_EXT_ALIASES).find(
+			k => afterMiddle.toLowerCase() === k.toLowerCase()
+		) || ''] || '.txt';
+		return `${dir}/${_buildFilename(middle)}${ext}`;
+	});
+}
+
 function escapeRegExp(value) {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
