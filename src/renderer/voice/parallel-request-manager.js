@@ -350,6 +350,7 @@ export class ParallelRequestManager extends Emitter {
 			const streamId = `stream-parallel-${response.index}`;
 			showStreamingBubble('chat', response.text, streamId, { role: 'iris' });
 			finalizeStreamingBubble(streamId, { minDurationMs: 4000 });
+			logInfo('Conversation', `[IRIS] [parallel:${response.summary}] ${response.text}`);
 			logInfo('Parallel', `Speaking response ${response.index} ("${response.summary}")`);
 
 			// NOTE: We intentionally do NOT send parallel responses through the

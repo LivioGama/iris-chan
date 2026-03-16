@@ -470,12 +470,24 @@ export class VoiceEngine extends Emitter {
 					const correctedUser = this._correctTranscript(this._accum.user);
 					logInfo('Conversation', `[USER] ${correctedUser}`);
 					this._lastUserTurn = correctedUser;
-					// Attempt parallel processing in the background — if activated,
-					// it will set _dropModelOutputUntilTurnComplete to suppress
-					// subsequent WebSocket audio and handle responses via REST
+					// Eagerly suppress WebSocket output if transcript looks like
+					// multiple questions — parallel classification will confirm.
+					// This prevents the WebSocket from answering with hallucinated
+					// responses before parallel processing can take over.
+					const wordCount = correctedUser.split(/\s+/).length;
+					const hasMultipleQuestionMarkers = /also[, ?.]|second[, ?.]|third[, ?.]|and .{0,10}(what|how|when|tell|why)|(\?.*\?)/i.test(correctedUser);
+					if (wordCount >= 6 && hasMultipleQuestionMarkers) {
+						this._dropModelOutputUntilTurnComplete = true;
+						this._parallelPreemptActive = true;
+						logInfo('Parallel', `Preemptively suppressing WebSocket (multi-question detected: ${wordCount} words)`);
+					}
 					this._tryParallelProcessing(correctedUser);
 				}
 				this._accum.user = '';
+			}
+			if (this._dropModelOutputUntilTurnComplete) {
+				this._noteDirectTurnSuppressed('parallel-preempt');
+				return;
 			}
 			this._setState(STATES.RESPONDING);
 			this._noteFirstModelAudio();
@@ -1376,8 +1388,18 @@ export class VoiceEngine extends Emitter {
 				// Clear any WebSocket response bubbles that snuck in before parallel activated
 				clearBubbles();
 				logInfo('Parallel', `Activated parallel processing for: ${transcript}`);
+			} else if (this._parallelPreemptActive) {
+				// Preemptive suppression was wrong — it's a single question.
+				// Un-suppress so the WebSocket can answer normally.
+				this._dropModelOutputUntilTurnComplete = false;
+				this._parallelPreemptActive = false;
+				logInfo('Parallel', 'Preemptive suppression released — single question');
 			}
 		} catch (err) {
+			if (this._parallelPreemptActive) {
+				this._dropModelOutputUntilTurnComplete = false;
+				this._parallelPreemptActive = false;
+			}
 			logError('Parallel', `Parallel processing failed: ${err?.message || err}`);
 		}
 	}
