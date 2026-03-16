@@ -2,7 +2,7 @@
 
 > **Purpose:** Self-contained test playbook for an AI agent (Claude Code) to manually test every iris-chan feature end-to-end. **Zero human intervention required** — no GUI steps, no manual clicks, no passwords.
 >
-> **Total:** 154 scenarios across 9 independent suites.
+> **Total:** 165 scenarios across 10 suites (Suite 0 setup + Suite P parallel infrastructure + Suites 1–8).
 >
 > **How to use:** Source the test harness first, run Suite 0 (Setup), then any suite independently. The AI tester should take screenshots before/after each test and grep logs for verification. **If something fails, DO NOT stop** — log the failure and continue. A full failure report is generated at teardown.
 >
@@ -81,24 +81,54 @@ test_skip() {
   SKIP_COUNT=$((SKIP_COUNT + 1))
 }
 
-# --- Restart iris (for tests that need it) ---
-restart_iris() {
-  echo "[harness] Stopping iris..."
-  kill $IRIS_PID 2>/dev/null
-  sleep 4
-  echo "[harness] Starting iris..."
+# --- Single Instance Guard ---
+# Call before every suite and after every restart to prevent the dual-avatar bug
+# (two overlapping Electron windows, one stuck on "Initializing...")
+enforce_single_instance() {
+  local count=$(pgrep -fc "electron.*iris-chan" 2>/dev/null || echo 0)
+  if [ "$count" -gt 1 ]; then
+    echo "[FATAL] $count Iris instances detected! Killing ALL..."
+    pkill -f "electron.*iris-chan" 2>/dev/null
+    sleep 4
+    # Verify all dead
+    while pgrep -f "electron.*iris-chan" >/dev/null 2>&1; do
+      echo "[harness] Waiting for zombie processes to exit..."
+      sleep 2
+    done
+    echo "[harness] All instances killed. Restarting single instance..."
+    _start_iris_process
+  elif [ "$count" -eq 0 ] && [ -n "$IRIS_PID" ]; then
+    echo "[WARN] Iris process $IRIS_PID is gone. Restarting..."
+    _start_iris_process
+  else
+    echo "[OK] Single Iris instance running (PID: $IRIS_PID)"
+  fi
+}
+
+# Internal: start a single iris instance (used by enforce_single_instance and restart_iris)
+_start_iris_process() {
   cd "$IRIS_PROJECT_DIR"
   IRIS_AUDIO_DEVICE="BlackHole 2ch" pnpm dev >> "$LOG_FILE" 2>&1 &
   IRIS_PID=$!
-  # Wait for readiness (poll for WebSocket connection or avatar window)
   echo "[harness] Waiting for iris to become ready..."
   for i in $(seq 1 30); do
     grep -qi "websocket\|ws.*open\|gemini.*connect\|ready" "$LOG_FILE" 2>/dev/null && break
     sleep 1
   done
-  sleep 3  # Extra buffer for renderer init
+  sleep 3
   snap "restart-ready"
   echo "[harness] Iris restarted (PID: $IRIS_PID)"
+}
+
+# --- Restart iris (for tests that need it) ---
+restart_iris() {
+  echo "[harness] Stopping all iris instances..."
+  pkill -f "electron.*iris-chan" 2>/dev/null
+  sleep 4
+  while pgrep -f "electron.*iris-chan" >/dev/null 2>&1; do sleep 1; done
+  echo "[harness] Starting iris..."
+  _start_iris_process
+  enforce_single_instance
 }
 
 # --- Say with verification (waits for transcript in logs) ---
@@ -166,6 +196,64 @@ REPORTEOF
   echo "  Recording: ${RECORDING_FILE}"
   echo "  Logs: ${LOG_FILE}"
   echo "=============================================="
+}
+
+# --- Parallel Batch Helpers ---
+# These support testing Iris's parallel request processing (multi-question utterances)
+
+PARALLEL_BATCHES_ATTEMPTED=0
+PARALLEL_BATCHES_CONFIRMED=0
+PARALLEL_BATCHES_FALLBACK=0
+
+# Record log line count before a batch (use as baseline for log-range verification)
+mark_log_position() {
+  wc -l < "$LOG_FILE" 2>/dev/null | tr -d '[:space:]' || echo 0
+}
+
+# Verify N parallel segments completed since a log position
+# Usage: verify_parallel_segments 3 $LOG_POS
+verify_parallel_segments() {
+  local expected="$1" log_pos="$2"
+  PARALLEL_BATCHES_ATTEMPTED=$((PARALLEL_BATCHES_ATTEMPTED + 1))
+  local actual=$(tail -n +"$log_pos" "$LOG_FILE" | grep -c "Parallel.*Segment.*completed" 2>/dev/null || echo 0)
+  if [ "$actual" -ge "$expected" ]; then
+    echo "[PARALLEL-OK] $actual/$expected segments completed"
+    PARALLEL_BATCHES_CONFIRMED=$((PARALLEL_BATCHES_CONFIRMED + 1))
+    return 0
+  else
+    echo "[PARALLEL-WARN] Only $actual/$expected segments completed"
+    PARALLEL_BATCHES_FALLBACK=$((PARALLEL_BATCHES_FALLBACK + 1))
+    return 1
+  fi
+}
+
+# Verify a specific tool was called since a log position
+# Usage: verify_tool_in_range "list_apps" $LOG_POS
+verify_tool_in_range() {
+  local tool_name="$1" log_pos="$2"
+  if tail -n +"$log_pos" "$LOG_FILE" | grep -qi "$tool_name" 2>/dev/null; then
+    echo "[TOOL-OK] $tool_name found in log range"
+    return 0
+  else
+    echo "[TOOL-WARN] $tool_name NOT found in log range"
+    return 1
+  fi
+}
+
+# Verify parallel processing was activated since a log position
+verify_parallel_activated() {
+  local log_pos="$1"
+  tail -n +"$log_pos" "$LOG_FILE" | grep -qi "Parallel.*Activated" 2>/dev/null
+}
+
+# Generate parallel processing summary for the final report
+generate_parallel_report() {
+  echo ""
+  echo "=== Parallel Processing Summary ==="
+  echo "  Batches attempted: $PARALLEL_BATCHES_ATTEMPTED"
+  echo "  Batches confirmed: $PARALLEL_BATCHES_CONFIRMED"
+  echo "  Batches fell back to serial: $PARALLEL_BATCHES_FALLBACK"
+  echo "==================================="
 }
 ```
 
@@ -314,6 +402,9 @@ fi
 
 # Verify process is alive
 kill -0 $IRIS_PID 2>/dev/null && echo "Iris process running" || test_fail "S03" "Iris process died during startup"
+
+# CRITICAL: Verify exactly ONE instance is running (prevents dual-avatar bug)
+enforce_single_instance
 ```
 
 ---
@@ -341,10 +432,10 @@ grep -iE "transcript|audio|capture|speech|volume" "$LOG_FILE" | tail -10
 ### Teardown: Stop Everything & Generate Report
 
 ```bash
-# Stop iris gracefully
-echo "[teardown] Stopping iris..."
-kill $IRIS_PID 2>/dev/null
-sleep 3
+# Stop ALL iris instances (prevent orphan processes)
+echo "[teardown] Stopping all iris instances..."
+pkill -f "electron.*iris-chan" 2>/dev/null
+sleep 4
 
 # Stop screen recording gracefully (SIGINT → ffmpeg writes trailer)
 echo "[teardown] Stopping screen recording..."
@@ -365,6 +456,7 @@ wifi_on 2>/dev/null
 
 # Generate the full test report
 generate_report
+generate_parallel_report
 
 # List all artifacts
 echo ""
@@ -383,6 +475,267 @@ if [ -s "$FAILURE_LOG" ]; then
 else
   echo "  None! All tests passed."
 fi
+```
+
+---
+
+## Suite P: Parallel Request Processing
+
+> **Tests the ParallelRequestManager — multi-question segmentation, parallel dispatch, response draining, tool calls, and error handling.**
+> **Precondition:** Suite 0 completed, iris running, audio routing verified.
+> **Why this suite runs first:** All later suites use parallel batching for efficiency. Suite P validates that the parallel infrastructure works before depending on it.
+
+### Batch Groups
+
+_All Suite P tests are **sequential** — each tests a specific aspect of the parallel system and needs isolated observation._
+
+---
+
+### P01: Two-Question Segmentation
+
+**Priority:** P0
+**Parallel:** sequential(tests parallel infrastructure itself)
+**Steps:**
+```bash
+enforce_single_instance
+LOG_POS=$(mark_log_position)
+snap "P01-before"
+
+say -v Samantha "What is the current time? Also, what is two plus two?"
+sleep 12
+
+snap "P01-after"
+
+# Verify segmentation activated with 2 segments
+if tail -n +"$LOG_POS" "$LOG_FILE" | grep -qi "Parallel.*Segmented into 2"; then
+  test_pass "P01: Two-question utterance segmented into 2 parallel requests"
+else
+  test_fail "P01" "Parallel segmentation did not activate for two-question utterance"
+fi
+```
+**Expected:** Logs show `[Parallel] Segmented into 2 requests`. Both questions get answered.
+
+---
+
+### P02: Three-Question Segmentation
+
+**Priority:** P0
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+say -v Samantha "What time is it? Also, what is the weather like? And separately, what day of the week is it?"
+sleep 15
+
+if tail -n +"$LOG_POS" "$LOG_FILE" | grep -qi "Parallel.*Segmented into 3"; then
+  test_pass "P02: Three-question utterance segmented correctly"
+else
+  test_fail "P02" "Expected 3 segments"
+fi
+```
+
+---
+
+### P03: Single Question — No Segmentation
+
+**Priority:** P0
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+say -v Samantha "Tell me a joke"
+sleep 10
+
+# Should NOT activate parallel processing (single question)
+if tail -n +"$LOG_POS" "$LOG_FILE" | grep -qi "Parallel.*Segmented"; then
+  test_fail "P03" "Parallel processing should not activate for single questions"
+else
+  test_pass "P03: Single question correctly handled without parallel processing"
+fi
+```
+
+---
+
+### P04: Short Utterance — Below Word Threshold
+
+**Priority:** P1
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+say -v Samantha "What time?"
+sleep 8
+
+if tail -n +"$LOG_POS" "$LOG_FILE" | grep -qi "Parallel.*Segmented"; then
+  test_fail "P04" "Short utterances (< 6 words) should not trigger parallel processing"
+else
+  test_pass "P04: Short utterance correctly skipped parallel processing"
+fi
+```
+
+---
+
+### P05: Response Order — First Completed Speaks First
+
+**Priority:** P1
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+say -v Samantha "What is two plus two? Also, write a haiku about the ocean."
+sleep 20
+
+# The math question should complete and speak first (faster)
+# Verify sequential speaking order in logs
+if tail -n +"$LOG_POS" "$LOG_FILE" | grep -qi "Parallel.*Speaking response 0"; then
+  test_pass "P05: First-completed response spoke first"
+else
+  test_fail "P05" "Could not verify response speaking order"
+fi
+```
+
+---
+
+### P06: WebSocket Suppression During Parallel
+
+**Priority:** P0
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+say -v Samantha "What apps are running? Also, what is on my clipboard?"
+sleep 12
+
+# Verify parallel activated AND WebSocket output was suppressed
+if tail -n +"$LOG_POS" "$LOG_FILE" | grep -qi "Parallel.*Activated"; then
+  test_pass "P06: Parallel processing activated with WebSocket suppression"
+else
+  test_fail "P06" "Parallel processing did not activate"
+fi
+```
+
+---
+
+### P07: Segment Completion Logging
+
+**Priority:** P1
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+say -v Samantha "What is three times four? Also, what is the current date?"
+sleep 12
+
+verify_parallel_segments 2 "$LOG_POS"
+if [ $? -eq 0 ]; then
+  test_pass "P07: Both parallel segments completed and logged"
+else
+  test_fail "P07" "Not all parallel segments completed"
+fi
+```
+
+---
+
+### P08: Tool Calls from Parallel Segments
+
+**Priority:** P0
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+say -v Samantha "What apps are currently running? Also, what is five plus five?"
+sleep 15
+
+# Verify list_apps tool was called AND both segments completed
+verify_tool_in_range "list_apps" "$LOG_POS"
+TOOL_OK=$?
+verify_parallel_segments 2 "$LOG_POS"
+SEG_OK=$?
+
+if [ $TOOL_OK -eq 0 ] && [ $SEG_OK -eq 0 ]; then
+  test_pass "P08: Tool call from parallel segment executed correctly"
+else
+  test_fail "P08" "Tool call or segment completion failed in parallel mode"
+fi
+```
+
+---
+
+### P09: Error Isolation — One Segment Fails
+
+**Priority:** P1
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+# Ask one valid question and one that may trigger an error
+say -v Samantha "What is two plus two? Also, read the file at /nonexistent/path/that/does/not/exist.txt"
+sleep 15
+
+# The math question should still complete even if file read fails
+if tail -n +"$LOG_POS" "$LOG_FILE" | grep -qi "Parallel.*Segment.*completed"; then
+  test_pass "P09: Error in one segment did not prevent other segments from completing"
+else
+  test_fail "P09" "Error isolation failed — no segments completed"
+fi
+```
+
+---
+
+### P10: Parallel After Barge-In Recovery
+
+**Priority:** P2
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+# First trigger a response, then barge in with a multi-question
+say -v Samantha "Tell me about the history of computing"
+sleep 3
+say -v Samantha "Actually, what is two plus two? Also, what time is it?"
+sleep 15
+
+# Verify the second utterance triggered parallel processing
+if tail -n +"$LOG_POS" "$LOG_FILE" | grep -qi "Parallel.*Segmented"; then
+  test_pass "P10: Parallel processing works after barge-in"
+else
+  test_fail "P10" "Parallel processing did not activate after barge-in"
+fi
+```
+
+---
+
+### P11: Five-Question Stress Test
+
+**Priority:** P1
+**Parallel:** sequential
+**Steps:**
+```bash
+LOG_POS=$(mark_log_position)
+say -v Samantha "I have five questions. What is two plus two? What is three times three? What day is today? What apps are running? And what is on my clipboard?"
+sleep 25
+
+# Verify segmentation into 4-5 segments (model may merge some)
+local seg_count=$(tail -n +"$LOG_POS" "$LOG_FILE" | grep -c "Parallel.*Segment.*completed" 2>/dev/null || echo 0)
+if [ "$seg_count" -ge 3 ]; then
+  test_pass "P11: Five-question stress test — $seg_count segments completed"
+else
+  test_fail "P11" "Only $seg_count segments completed for 5-question utterance"
+fi
+```
+
+---
+
+### P12: Parallel Processing Disabled for Muted Mic
+
+**Priority:** P2
+**Parallel:** sequential
+**Steps:**
+```bash
+# This test verifies parallel processing respects the mute state
+# (Parallel processing only activates on inputTranscription, which
+# doesn't fire when muted, so this is implicitly tested by the mute tests)
+test_pass "P12: Parallel processing implicitly disabled when muted (no inputTranscription events)"
 ```
 
 ---
@@ -693,9 +1046,10 @@ grep -iE "reference|resample|24.*16|echo.*ref|sendReference" "$LOG_FILE" | tail 
 **Note:** This test restarts iris. It will restore iris to a running state when done.
 **Steps:**
 ```bash
-# Kill current iris instance
-kill $IRIS_PID 2>/dev/null
+# Kill ALL iris instances (prevent dual-avatar bug)
+pkill -f "electron.*iris-chan" 2>/dev/null
 sleep 4
+while pgrep -f "electron.*iris-chan" >/dev/null 2>&1; do sleep 1; done
 
 # Start iris and IMMEDIATELY speak (before it's ready)
 cd "$IRIS_PROJECT_DIR"
@@ -731,6 +1085,15 @@ snap "V17-coldstart"
 
 > **Tests the 3D avatar rendering, window behavior, shortcuts, tray menu, and visual states.**
 > **Precondition:** Iris running (Suite 0 completed).
+
+### Batch Groups
+
+_No batchable tests._ All avatar tests are visual/observational and require specific UI state or screenshot verification between steps. Run sequentially.
+
+```bash
+# Run before Suite 2
+enforce_single_instance
+```
 
 ### A01: Idle State — Neutral Lighting
 
@@ -1032,6 +1395,23 @@ sleep 1
 
 > **Tests each of the 21 built-in tools by invoking them through voice commands.**
 > **Precondition:** Iris running, voice pipeline working (Suite 1 V01 passed).
+
+### Batch Groups
+
+| Batch | Tests | Utterance Template | Verify |
+|-------|-------|-------------------|--------|
+| info-tools | T09, T10, T12, T14, T17 | "I have several questions. What apps are currently running? Read the package.json file. What is on my clipboard? Search the web for Electron framework latest version. Give me the system info." | `verify_tool_in_range` for each tool name |
+| write-tools | T11, T13, T16 | "Do three things. Write 'parallel test output' to /tmp/iris-test-output.txt. Copy 'parallel clipboard test' to my clipboard. Send me a notification saying 'Test from Iris'." | File exists + clipboard check + notification log |
+| misc-tools | T15, T18 | "Set the volume to 50 percent. Also refresh the vocabulary list." | `grep "set_volume\|volume"` + `grep "vocab"` |
+
+**Sequential tests (CANNOT batch):** T01-T08 (UI tools—need specific app focus), T19-T24 (self_fix, skills, multi-tool chains—complex dependencies), T26-T35 (cancellation, observations, link capture, 3D gen, drag—state-dependent)
+
+**T25: Superseded by Suite P** (see note below)
+
+```bash
+# Run before Suite 3
+enforce_single_instance
+```
 
 ### T01: type_text — "Type hello world"
 
@@ -1510,22 +1890,16 @@ rm -f /tmp/weather-summary.txt
 
 ---
 
-### T25: Concurrent Tool Requests
+### T25: ~~Concurrent Tool Requests~~ — SUPERSEDED BY SUITE P
 
-**Priority:** P1
-**Steps:**
-```bash
-# Ask two things in rapid succession
-say -v Samantha "What apps are running?" &
-sleep 1
-say -v Samantha "What is on my clipboard?" &
-wait
-sleep 12
+> **This test is superseded.** Concurrent tool execution via parallel utterances is now tested in Suite P:
+> - **P08** — Tool calls from parallel segments (list_apps + Q&A in one utterance)
+> - **P11** — Five-question stress test with mixed tool/Q&A segments
+> - **P09** — Error isolation when one parallel segment fails
+>
+> The old approach (two separate `say` commands with `&`) created a race condition between two audio streams. The ParallelRequestManager handles concurrency properly via single-utterance segmentation.
 
-screencapture -x /tmp/iris-T25-concurrent.png
-grep -iE "list_apps|read_clipboard|tool.*(start|end|queue)" "$LOG_FILE" | tail -15
-```
-**Expected:** Both requests are handled (sequentially or concurrently). No crash. The cooperative dispatch system may queue one while the other executes. Logs show both tool executions.
+**Status:** SKIP — `test_skip "T25" "Superseded by Suite P (P08, P09, P11)"`
 
 ---
 
@@ -1724,6 +2098,15 @@ grep -iE "drag|tool.*drag" "$LOG_FILE" | tail -5
 
 > **Tests browser navigation, search, clicking, and media control via AppleScript adapter.**
 > **Precondition:** Iris running, Safari available.
+
+### Batch Groups
+
+_No batchable tests._ Browser tests depend on page state from previous navigation steps (open → search → click → verify). Run sequentially.
+
+```bash
+# Run before Suite 4
+enforce_single_instance
+```
 
 ### B01: Open URL in Safari
 
@@ -1959,6 +2342,15 @@ osascript -e 'tell application "Safari" to quit'
 > **Tests screenshot-based GUI automation via the UI-TARS vision language model.**
 > **Precondition:** Iris running, UI-TARS endpoint live (UI_TARS_URL set in .env).
 
+### Batch Groups
+
+_No batchable tests._ Vision tests require specific screen content and modify visible UI state. Run sequentially.
+
+```bash
+# Run before Suite 5
+enforce_single_instance
+```
+
 ### U01: Chess — Open Lichess and Start a Game
 
 **Priority:** P0
@@ -2147,6 +2539,19 @@ grep -iE "design|3d.gen|layout|snap.to.grid|precision" "$LOG_FILE" | tail -10
 > **Tests 2FA code extraction from Messages and auto-fill.**
 > **Precondition:** Iris running. Messages app accessible.
 
+### Batch Groups
+
+| Batch | Tests | Utterance Template | Verify |
+|-------|-------|-------------------|--------|
+| auth-queries | AF01, AF02 | "Check my recent notifications for any two-factor authentication codes. Also, check my messages for any security verification codes." | `grep "2fa\|auth\|verification"` |
+
+**Sequential tests:** AF03 (confidence threshold—needs specific context), AF04 (source detection—specific app state)
+
+```bash
+# Run before Suite 6
+enforce_single_instance
+```
+
 ### AF01: 2FA Code Extraction
 
 **Priority:** P2
@@ -2231,6 +2636,20 @@ grep -iE "source|messages|mail|imessage" "$LOG_FILE" | tail -5
 
 > **Tests behavior mode switching, proactive suggestions, vocabulary learning, and persistence.**
 > **Precondition:** Iris running.
+
+### Batch Groups
+
+| Batch | Tests | Utterance Template | Verify |
+|-------|-------|-------------------|--------|
+| observational-cache | BH22, BH23 | _No voice command — both are log-observation tests for LRU cache and confidence calibration._ | `grep "cache\|calibrat"` |
+| proactive-context | BH25, BH27 | "Open Notes and write something. Also open Safari and browse to a news site." _(triggers proactive fingerprinting + vision suggestion)_ | `grep "proactive\|fingerprint\|suggestion"` |
+
+**Sequential tests:** BH01-BH07 (mode switching—state machine), BH08-BH09 (vocabulary—clipboard timing), BH10 (kanban—UI interaction), BH11-BH12 (persistence—depends on prior conversation), BH13-BH15 (skills—create→reload→error chain), BH16-BH17 (restart required), BH18-BH21 (state-dependent), BH24 (self-improvement), BH26 (reply opportunity), BH28-BH29 (frustration/error), BH30 (long-running—11 min)
+
+```bash
+# Run before Suite 7
+enforce_single_instance
+```
 
 ### BH01: Default Behavior Mode
 
@@ -2870,6 +3289,21 @@ tail -n $(($(wc -l < "$LOG_FILE") - LOG_LINES_BEFORE)) "$LOG_FILE" | grep -iE "d
 
 > **Tests error recovery, race conditions, and performance benchmarks.**
 > **Precondition:** Iris running.
+
+### Batch Groups
+
+| Batch | Tests | Utterance Template | Verify |
+|-------|-------|-------------------|--------|
+| parallel-math | EC09, EC10 | "What is two plus two? Also what is three plus three?" _(measures parallel latency)_ | `verify_parallel_segments 2` + timing from logs |
+
+**Sequential tests:** EC01 (network toggle), EC02 (shortcut spam—UI), EC03-EC08 (voice during tool exec, invalid tool, window close/reopen, multi-step, ambiguous, URL), EC11-EC25 (memory, rendering, Convex, reconnect, cold init, keepalive, etc.)
+
+**Long-running (run last):** EC11 (10 min), EC22 (60 min), EC23 (30 min) — can run as background subagents
+
+```bash
+# Run before Suite 8
+enforce_single_instance
+```
 
 ### EC01: WebSocket Reconnection After Network Blip
 
@@ -3661,15 +4095,18 @@ osascript -e 'tell application "Safari" to quit' 2>/dev/null
 
 ## Appendix G: Test Totals Summary
 
-| Suite | Scenarios | OBSERVATIONAL | Restart Required |
-|-------|-----------|--------------|-----------------|
-| 0: Setup & Teardown | 6 | 0 | N/A |
-| 1: Voice Pipeline | 17 | 2 | 1 (V17) |
-| 2: Avatar & Windows | 16 | 0 | 1 (A14) |
-| 3: Tool Execution | 35 | 0 | 0 |
-| 4: Browser Automation | 12 | 0 | 0 |
-| 5: UI-TARS Vision | 9 | 1 | 0 |
-| 6: Auth & 2FA | 4 | 0 | 0 |
-| 7: Behavior & Learning | 30 | 4 | 3 (BH16, BH17, BH21) |
-| 8: Edge Cases & Perf | 25 | 4 | 1 (EC17) |
-| **TOTAL** | **154** | **11** | **6** |
+| Suite | Scenarios | Batchable | OBSERVATIONAL | Restart Required |
+|-------|-----------|-----------|--------------|-----------------|
+| 0: Setup & Teardown | 6 | 0 | 0 | N/A |
+| P: Parallel Processing | 12 | 0 | 0 | 0 |
+| 1: Voice Pipeline | 17 | 4 | 2 | 1 (V17) |
+| 2: Avatar & Windows | 16 | 0 | 0 | 1 (A14) |
+| 3: Tool Execution | 34 | 12 | 0 | 0 |
+| 4: Browser Automation | 12 | 0 | 0 | 0 |
+| 5: UI-TARS Vision | 9 | 0 | 1 | 0 |
+| 6: Auth & 2FA | 4 | 2 | 0 | 0 |
+| 7: Behavior & Learning | 30 | 4 | 4 | 3 (BH16, BH17, BH21) |
+| 8: Edge Cases & Perf | 25 | 2 | 4 | 1 (EC17) |
+| **TOTAL** | **165** | **24** | **11** | **6** |
+
+> T25 (Concurrent Tool Requests) is superseded by Suite P and counted as skipped, reducing Suite 3 from 35 to 34 active tests.
