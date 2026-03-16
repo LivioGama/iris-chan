@@ -7,5 +7,6 @@ helpers/iris-helper
 .ruff_cache/
 .DS_Store
 .env.convex-mcp
+/.macp
 pnpm-lock.yaml
 AGENTS.md
