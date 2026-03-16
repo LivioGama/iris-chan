@@ -151,6 +151,18 @@ async function get_frontmost_app() {
 	return runHelper({ action: 'get_frontmost_app' });
 }
 
+async function list_apps() {
+	try {
+		const result = runAppleScript(
+			'tell application "System Events" to get name of every process whose background only is false'
+		);
+		const apps = result.split(', ').filter(Boolean);
+		return { ok: true, result: `Running apps: ${apps.join(', ')}`, apps };
+	} catch (err) {
+		return { ok: false, result: `Error listing apps: ${err.message}` };
+	}
+}
+
 async function window_manage(args) {
 	return runHelper({ action: 'window_manage', position: args.position || 'maximize' });
 }
@@ -159,6 +171,7 @@ module.exports = {
 	open_app,
 	get_default_app,
 	get_frontmost_app,
+	list_apps,
 	window_manage,
 	resolveDefaultApp,
 };

@@ -109,6 +109,11 @@ export const toolDeclarations = [
 		parameters: { type: 'OBJECT', properties: {} },
 	},
 	{
+		name: 'list_apps',
+		description: 'List all currently running user-facing macOS applications.',
+		parameters: { type: 'OBJECT', properties: {} },
+	},
+	{
 		name: 'window_manage',
 		description: 'Move/resize the frontmost window. Position: "left" (left half), "right" (right half), "maximize" (full screen), "center" (centered).',
 		parameters: { type: 'OBJECT', properties: { position: { type: 'STRING' } }, required: ['position'] },
