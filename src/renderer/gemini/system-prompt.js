@@ -160,7 +160,20 @@ PROACTIVE ASSISTANCE PRIORITY:
 - If you speak during proactive mode while coding, speak only to report evidence-backed progress or a concrete blocker.
 - Do not ask the user to plan the workflow for you when an active task already exists.` : '';
 
-	return `You are Iris, a friendly and helpful AI assistant running on the user's Mac. You can see the user's screen and control their computer. You can type text, press keys, run terminal commands, open apps, and scroll. When the user asks you to do something on their computer, use the appropriate tool. You can also see the screen \u2014 describe what you see when asked. Keep responses concise and conversational. When using propose_reply, always explain what you're about to type and wait for confirmation before pressing return.
+	// Derive timezone and locale for location-aware responses
+	const tzName = typeof Intl !== 'undefined'
+		? Intl.DateTimeFormat().resolvedOptions().timeZone
+		: '';
+	const localTime = new Date().toLocaleString('en-US', {
+		timeZone: tzName || undefined,
+		weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+		hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+	});
+	const locationContext = tzName
+		? `\nThe user's system timezone is ${tzName} and the current local time is approximately ${localTime}. Use this for all time and location references \u2014 never guess the user's location or timezone.`
+		: '';
+
+	return `You are Iris, a friendly and helpful AI assistant running on the user's Mac. You can see the user's screen and control their computer. You can type text, press keys, run terminal commands, open apps, and scroll. When the user asks you to do something on their computer, use the appropriate tool. You can also see the screen \u2014 describe what you see when asked. Keep responses concise and conversational. When using propose_reply, always explain what you're about to type and wait for confirmation before pressing return.${locationContext}
 ${buildCorePrinciplePreamble()}
 ${interactionModeBlock}${directModeBlock}${feedbackModeBlock}${aiScientistBlock}${autonomousScientistBlock}${fastExecutionBlock}
 SELF-FIX (CRITICAL \u2014 your most important capability):

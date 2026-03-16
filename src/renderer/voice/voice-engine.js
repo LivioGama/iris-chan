@@ -1017,12 +1017,14 @@ export class VoiceEngine extends Emitter {
 	 */
 	async _restSalvage(transcript) {
 		try {
+			const tzName = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : '';
 			const systemInstruction = [
 				'You are Iris, a helpful voice AI assistant.',
 				'Answer the user\'s question concisely and conversationally.',
 				'Do NOT use markdown, bullet points, or formatting.',
 				'CRITICAL: For questions about the current time, date, or day, use the run_terminal_command tool with "date". Never guess the time.',
-			].join('\n');
+				tzName ? `The user's timezone is ${tzName}. Use this for all time and location references.` : '',
+			].filter(Boolean).join('\n');
 			const contents = [{ role: 'user', parts: [{ text: transcript }] }];
 			const result = await this._parallelManager._restRequest(systemInstruction, contents);
 

@@ -160,6 +160,7 @@ export class ParallelRequestManager extends Emitter {
 	}
 
 	async _dispatchSegment(segment, index, turnId, context) {
+		const tzName = typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : '';
 		const systemInstruction = [
 			'You are Iris, a helpful voice AI assistant.',
 			'The user asked multiple questions simultaneously. This is one of them.',
@@ -168,7 +169,8 @@ export class ParallelRequestManager extends Emitter {
 			'Keep your response concise and conversational — it will be spoken aloud.',
 			'Do NOT use markdown, bullet points, or formatting. Speak naturally.',
 			'CRITICAL: For questions about the current time, date, or day you MUST use the run_terminal_command tool with the "date" command. Never guess the time.',
-		].join('\n');
+			tzName ? `The user's timezone is ${tzName}. Use this for all time and location references.` : '',
+		].filter(Boolean).join('\n');
 
 		const contents = [];
 		// Add conversation context
