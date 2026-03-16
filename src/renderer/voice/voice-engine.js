@@ -50,6 +50,8 @@ const DEFAULT_VOICE_CONFIG = Object.freeze({
 		fastReleaseMs: 90,
 		serverEvidenceGraceMs: 1500,
 		resumeWindowMs: 1200,
+		continuousSpeechReleaseMs: 500,
+		continuousSpeechThresholdMs: 2000,
 		trailingNoiseRatio: 0.35,
 		trailingNoiseThresholdMultiplier: 1.2,
 		repromptText: 'I did not catch that. Please say it again.',
@@ -290,6 +292,7 @@ export class VoiceEngine extends Emitter {
 		this._pendingReplyAction = null;
 		this._directTurnCounter = 0;
 		this._directTurn = createDirectTurnState();
+		this._consecutiveSalvageFailures = 0;
 
 		this._matcher = vocab || new VocabMatcher();
 		this._correctionCandidates = new Map();
@@ -817,6 +820,7 @@ export class VoiceEngine extends Emitter {
 		if (!this._directTurn.awaitingResponse || this._directTurn.firstModelAudioAt) return;
 		clearPresence('recovery');
 		this._modelOutputFenceActive = false;
+		this._consecutiveSalvageFailures = 0;
 		this._directTurn.firstModelAudioAt = Date.now();
 		this._directTurn.serverRecognized = true;
 		this._directTurn.phase = 'responding';
@@ -945,7 +949,17 @@ export class VoiceEngine extends Emitter {
 			return;
 		}
 		if (this._directTurn.salvageStarted) {
+			this._consecutiveSalvageFailures++;
+			logInfo('DirectAsk', `[${this._directTurn.id}] consecutive salvage failures: ${this._consecutiveSalvageFailures}`);
 			this._finishDirectTurn(reason);
+			if (this._consecutiveSalvageFailures >= 2) {
+				logInfo('Voice', `Multiple salvage failures (${this._consecutiveSalvageFailures}) — forcing WebSocket reconnect`);
+				this._consecutiveSalvageFailures = 0;
+				this.reconnect().catch((err) => {
+					logError('Voice', `Salvage-triggered reconnect failed: ${err?.message || err}`);
+				});
+				return;
+			}
 			if (this.state !== STATES.RESPONDING) {
 				this._setState(STATES.LISTENING);
 			}

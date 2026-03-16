@@ -1214,12 +1214,34 @@ grep -iE "read_file|tool.*read" "$LOG_FILE" | tail -5
 **Priority:** P0
 **Steps:**
 ```bash
-say -v Samantha "Create a file at /tmp/iris-test-output.txt with the content hello from iris"
-sleep 8
+# Ensure previous test response has settled
+sleep 3
+
+LOG_BEFORE_T09=$(wc -l < "$LOG_FILE" 2>/dev/null | tr -d ' ')
+say -v Samantha "Use the write file tool to write the text hello from iris to the file /tmp/iris-test-output.txt"
+
+# Poll for write_file tool execution in NEW log lines only
+T09_FOUND=0
+for i in $(seq 1 15); do
+  if tail -n +"$((LOG_BEFORE_T09 + 1))" "$LOG_FILE" | grep -qi "write_file"; then
+    T09_FOUND=1; break
+  fi
+  sleep 1
+done
+if [ "$T09_FOUND" -eq 1 ]; then
+  sleep 2  # brief settle after tool completes
+else
+  echo "WARN: write_file not found in logs within 15s"
+  sleep 5  # extra grace period
+fi
 
 # Verify the file was created
-cat /tmp/iris-test-output.txt
-# Expected: "hello from iris" or similar
+if [ -f /tmp/iris-test-output.txt ]; then
+  cat /tmp/iris-test-output.txt
+  # Expected: "hello from iris" or similar
+else
+  echo "FAIL: /tmp/iris-test-output.txt was not created"
+fi
 
 screencapture -x /tmp/iris-T09-writefile.png
 grep -iE "write_file|tool.*write" "$LOG_FILE" | tail -5
