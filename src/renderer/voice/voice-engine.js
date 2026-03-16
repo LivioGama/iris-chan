@@ -697,10 +697,16 @@ export class VoiceEngine extends Emitter {
 					this._scheduleDirectTurnGraceTimer();
 					return;
 				}
-				this._scheduleSpeechRelease(
-					now,
-					this._shouldUseDirectTurnFastRelease(meter) ? this._directTurnConfig.fastReleaseMs : this._speechReleaseMs
-				);
+				const turnAge = now - (this._directTurn.startedAt || now);
+				let releaseMs;
+				if (this._shouldUseDirectTurnFastRelease(meter)) {
+					releaseMs = this._directTurnConfig.fastReleaseMs;
+				} else if (turnAge > this._directTurnConfig.continuousSpeechThresholdMs) {
+					releaseMs = this._directTurnConfig.continuousSpeechReleaseMs;
+				} else {
+					releaseMs = this._speechReleaseMs;
+				}
+				this._scheduleSpeechRelease(now, releaseMs);
 			}
 		});
 

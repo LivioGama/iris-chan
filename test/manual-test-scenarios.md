@@ -572,12 +572,12 @@ tail -n 50 "$LOG_FILE" | grep -iE "state|IDLE|LISTENING|USER_SPEAKING|PROCESSING
 ```bash
 # Generate a long paragraph via say (reads slowly enough to fill 30s)
 say -v Samantha -r 140 "I would like to tell you about my day today. I woke up early in the morning and went for a walk in the park. The weather was beautiful with clear blue skies and a gentle breeze. I saw many birds singing in the trees and dogs playing fetch with their owners. After the walk I came home and had a nice breakfast of scrambled eggs and toast with fresh orange juice. Then I sat down at my computer to work on a project that I have been developing for several weeks now. The project involves building an AI assistant."
-sleep 15
+sleep 30
 
 screencapture -x /tmp/iris-V10-long.png
 grep -i "transcript" "$LOG_FILE" | tail -5
 ```
-**Expected:** The full utterance is transcribed (may be split across multiple transcript lines). Iris responds coherently to the content.
+**Expected:** The full utterance is transcribed (may be split across multiple transcript lines). Iris responds coherently to the content. Note: the `say` command itself takes ~30s at rate 140, then Gemini needs processing time, so the total wait is ~60s from test start.
 
 ---
 
