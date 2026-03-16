@@ -1144,12 +1144,12 @@ osascript -e 'tell application "Safari" to quit'
 **Priority:** P0
 **Steps:**
 ```bash
-# Make sure Safari is closed first
+# Make sure Safari is closed first and previous response completes
 osascript -e 'tell application "Safari" to quit' 2>/dev/null
-sleep 2
+sleep 5
 
 say -v Samantha "Open Safari"
-sleep 5
+sleep 8
 
 screencapture -x /tmp/iris-T05-open.png
 grep -iE "open_app|tool.*open" "$LOG_FILE" | tail -5
