@@ -294,6 +294,7 @@ export class VoiceEngine extends Emitter {
 		this._directTurnCounter = 0;
 		this._directTurn = createDirectTurnState();
 		this._consecutiveSalvageFailures = 0;
+		this._salvageTimer = null;
 
 		this._matcher = vocab || new VocabMatcher();
 		this._correctionCandidates = new Map();
@@ -757,6 +758,12 @@ export class VoiceEngine extends Emitter {
 		this._directTurnGraceTimer = null;
 	}
 
+	_clearSalvageTimer() {
+		if (!this._salvageTimer) return;
+		clearTimeout(this._salvageTimer);
+		this._salvageTimer = null;
+	}
+
 	_scheduleDirectTurnGraceTimer() {
 		if (!this._directTurn.awaitingResponse || this._directTurn.serverRecognized) return;
 		if (this._directTurnGraceTimer) return;
@@ -795,6 +802,19 @@ export class VoiceEngine extends Emitter {
 		if (this._parallelManager?.isActive) {
 			this._parallelManager.cancel();
 			logInfo('Parallel', 'Cancelled by new speech turn');
+		}
+		if (this._directTurn.salvageStarted && this._directTurn.awaitingResponse) {
+			this._consecutiveSalvageFailures++;
+			this._clearSalvageTimer();
+			logInfo('DirectAsk', `[${this._directTurn.id}] salvage abandoned by new turn (consecutive: ${this._consecutiveSalvageFailures})`);
+			if (this._consecutiveSalvageFailures >= 2) {
+				logInfo('Voice', `Multiple salvage failures (${this._consecutiveSalvageFailures}) — forcing WebSocket reconnect`);
+				this._consecutiveSalvageFailures = 0;
+				this.reconnect().catch((err) => {
+					logError('Voice', `Salvage-triggered reconnect failed: ${err?.message || err}`);
+				});
+				return;
+			}
 		}
 		this._directTurn = {
 			...createDirectTurnState(++this._directTurnCounter),
@@ -856,6 +876,7 @@ export class VoiceEngine extends Emitter {
 	_finishDirectTurn(outcome, details = {}) {
 		if (!this._directTurn.awaitingResponse) return;
 		this._clearDirectTurnGraceTimer();
+		this._clearSalvageTimer();
 		this._modelOutputFenceActive = false;
 		logInfo('DirectAsk', `[${this._directTurn.id}] ${outcome}${details.reason ? ` (${details.reason})` : ''}`);
 		this._directTurn = createDirectTurnState(this._directTurn.id);
@@ -941,6 +962,15 @@ export class VoiceEngine extends Emitter {
 			`- Never say "I did not catch that" and never ask the user to repeat the whole thing.\n`
 		);
 		logInfo('DirectAsk', `[${this._directTurn.id}] transcript_salvage_started (${reason})`);
+		this._clearSalvageTimer();
+		const salvageTurnId = this._directTurn.id;
+		this._salvageTimer = setTimeout(() => {
+			this._salvageTimer = null;
+			if (!this._directTurn.awaitingResponse || this._directTurn.id !== salvageTurnId) return;
+			if (!this._directTurn.salvageStarted) return;
+			logInfo('DirectAsk', `[${this._directTurn.id}] salvage timed out after 8s — no WebSocket response`);
+			this._failPendingDirectTurn('salvage_timed_out');
+		}, 8000);
 		return true;
 	}
 
