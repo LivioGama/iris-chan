@@ -4,6 +4,14 @@ import { toolDeclarations } from './tool-declarations.js';
 import { refreshVocabulary, refreshRecentObservations, buildPrioritizedVocab, buildCorrectionsPrompt, buildSystemInstruction } from './system-prompt.js';
 import { buildRecentSeenPrompt } from '../vocab/recent-seen-store.js';
 import { info as logInfo, warn as logWarn, error as logError } from '../logger.js';
+import {
+	AUDIO_ROUTING_DIAGNOSTICS_ENABLED,
+	getActiveAudioRoutingTrace,
+	getAudioRoutingDiagnosticsState,
+	isAudioRoutingPhrase,
+	markAudioRoutingPhraseDetected,
+	recordAudioRoutingEvent,
+} from '../voice/audio-routing-diagnostics.js';
 
 const ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 const MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
@@ -251,6 +259,8 @@ export class GeminiClient extends Emitter {
 		this._setupFallbackLevel = 0;
 		this._inboundQueue = [];
 		this._inboundDrainScheduled = false;
+		this._audioOutboundChunkCount = 0;
+		this._audioInboundChunkCount = 0;
 	}
 
 	setDirectMode(enabled) {
@@ -566,14 +576,17 @@ export class GeminiClient extends Emitter {
 		const sc = msg.serverContent;
 		if (sc) {
 			if (sc.inputTranscription?.text) {
+				this._handleRoutingTranscript('input', sc.inputTranscription.text);
 				this.emit('inputTranscription', sc.inputTranscription.text);
 			}
 			if (sc.outputTranscription?.text) {
+				this._handleRoutingTranscript('output', sc.outputTranscription.text);
 				this.emit('outputTranscription', sc.outputTranscription.text);
 			}
 			if (sc.modelTurn?.parts) {
 				for (const part of sc.modelTurn.parts) {
 					if (part.inlineData?.data) {
+						this._handleRoutingInboundAudio(part.inlineData.data);
 						this.emit('audio', part.inlineData.data);
 					}
 					if (part.text) {
@@ -591,9 +604,11 @@ export class GeminiClient extends Emitter {
 
 		// Alternative message formats (API compatibility)
 		if (msg.inputTranscription?.text) {
+			this._handleRoutingTranscript('input', msg.inputTranscription.text);
 			this.emit('inputTranscription', msg.inputTranscription.text);
 		}
 		if (msg.outputTranscription?.text) {
+			this._handleRoutingTranscript('output', msg.outputTranscription.text);
 			this.emit('outputTranscription', msg.outputTranscription.text);
 		}
 		if (msg.toolCall?.functionCalls) {
@@ -629,7 +644,23 @@ export class GeminiClient extends Emitter {
 
 	sendAudio(base64Data) {
 		if (!this.sessionReady) return;
+		if (AUDIO_ROUTING_DIAGNOSTICS_ENABLED) {
+			this._audioOutboundChunkCount += 1;
+			const state = getAudioRoutingDiagnosticsState();
+			state.gemini.outboundChunkCount = this._audioOutboundChunkCount;
+			state.gemini.lastOutboundAudioAt = Date.now();
+			if (this._audioOutboundChunkCount === 1 || this._audioOutboundChunkCount % 25 === 0) {
+				recordAudioRoutingEvent('gemini_audio_sent', {
+					chunkIndex: this._audioOutboundChunkCount,
+					base64Bytes: base64Data.length,
+				});
+			}
+		}
 		this._send(`{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":"${base64Data}"}}}`);
+	}
+
+	getAudioRoutingSnapshot() {
+		return structuredClone(getAudioRoutingDiagnosticsState());
 	}
 
 	sendToolResponse(callId, name, result) {
@@ -709,6 +740,63 @@ export class GeminiClient extends Emitter {
 			this._reconnectTimer = null;
 			this._connect();
 		}, delay);
+	}
+
+	_handleRoutingTranscript(kind, text) {
+		if (!AUDIO_ROUTING_DIAGNOSTICS_ENABLED || !text) return;
+		const state = getAudioRoutingDiagnosticsState();
+		if (kind === 'input') {
+			state.gemini.lastInputTranscript = text;
+		} else {
+			state.gemini.lastOutputTranscript = text;
+		}
+		if (kind === 'input' && isAudioRoutingPhrase(text)) {
+			markAudioRoutingPhraseDetected(text, 'input_transcription', {
+				inboundChunkCount: state.gemini.inboundChunkCount,
+			});
+			this.emit('audioRouting', {
+				stage: 'phrase_detected',
+				transcript: text,
+				snapshot: this.getAudioRoutingSnapshot(),
+			});
+			return;
+		}
+		const trace = getActiveAudioRoutingTrace();
+		if (!trace) return;
+		if (kind === 'output') {
+			recordAudioRoutingEvent('output_transcription_for_phrase', {
+				traceSource: trace.source,
+				transcript: text,
+			});
+			this.emit('audioRouting', {
+				stage: 'output_transcription_for_phrase',
+				transcript: text,
+				snapshot: this.getAudioRoutingSnapshot(),
+			});
+		}
+	}
+
+	_handleRoutingInboundAudio(base64Data) {
+		if (!AUDIO_ROUTING_DIAGNOSTICS_ENABLED) return;
+		this._audioInboundChunkCount += 1;
+		const state = getAudioRoutingDiagnosticsState();
+		state.gemini.inboundChunkCount = this._audioInboundChunkCount;
+		state.gemini.lastInboundAudioAt = Date.now();
+		const trace = getActiveAudioRoutingTrace();
+		if (trace && !trace.geminiAudioReceivedAt) {
+			trace.geminiAudioReceivedAt = Date.now();
+			recordAudioRoutingEvent('first_inbound_audio_after_phrase', {
+				traceId: trace.traceId,
+				latencyMs: trace.geminiAudioReceivedAt - trace.matchedAt,
+				inboundChunkIndex: this._audioInboundChunkCount,
+			});
+		}
+		if (this._audioInboundChunkCount === 1 || this._audioInboundChunkCount % 25 === 0) {
+			recordAudioRoutingEvent('gemini_audio_received', {
+				chunkIndex: this._audioInboundChunkCount,
+				base64Bytes: base64Data.length,
+			});
+		}
 	}
 
 	disconnect() {
