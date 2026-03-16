@@ -771,6 +771,10 @@ export class VoiceEngine extends Emitter {
 			logInfo('DirectAsk', `[${this._directTurn.id}] merged_local_fragment`);
 			return;
 		}
+		if (this._parallelManager?.isActive) {
+			this._parallelManager.cancel();
+			logInfo('Parallel', 'Cancelled by new speech turn');
+		}
 		this._directTurn = {
 			...createDirectTurnState(++this._directTurnCounter),
 			active: true,
