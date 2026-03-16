@@ -1,0 +1,13 @@
+{
+  "name": "convex",
+  "version": "1.0.0",
+  "description": "Convex backend client with retry logic and table adapters",
+  "capabilities": ["database", "vector-search"],
+  "dependencies": [],
+  "provides": {},
+  "channels": {
+    "publishes": ["convex:connected", "convex:disconnected"],
+    "subscribes": ["convex:save", "convex:query"]
+  },
+  "standalone": "src/standalone.ts"
+}

@@ -1,0 +1,19 @@
+{
+  "name": "demo",
+  "version": "1.0.0",
+  "description": "Hackathon presentation mode — Iris demonstrates her capabilities with narration",
+  "capabilities": ["demo-mode", "presentation"],
+  "dependencies": ["voice", "gemini", "automation", "screen", "2fa", "tools", "search", "skills"],
+  "provides": {
+    "start_demo": {
+      "name": "start_demo",
+      "description": "Start the hackathon demo presentation",
+      "parameters": {}
+    }
+  },
+  "channels": {
+    "publishes": ["ui:bubble-show", "ui:timeline-event"],
+    "subscribes": []
+  },
+  "standalone": "src/standalone.ts"
+}

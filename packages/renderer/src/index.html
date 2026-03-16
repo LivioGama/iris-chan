@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Iris</title>
+  <link rel="stylesheet" href="styles/overlay.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../vendor/three.module.min.js",
+      "@pixiv/three-vrm": "../vendor/three-vrm.module.min.js",
+      "@pixiv/three-vrm-animation": "../vendor/three-vrm-animation.module.min.js",
+      "three/addons/loaders/GLTFLoader.js": "../vendor/three-addons/loaders/GLTFLoader.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="loading-overlay">
+    <div class="loading-pulse"></div>
+  </div>
+
+  <div id="mute-badge" class="hidden">MUTED</div>
+  <div id="workspace-bar"></div>
+
+  <div id="debug-panel">
+    <span class="dbg-dot dbg-ws" title="WebSocket">WS</span>
+    <span class="dbg-dot dbg-mic" title="Microphone">MIC</span>
+    <span class="dbg-dot dbg-voice" title="Voice">VOICE</span>
+    <span class="dbg-dot dbg-send" title="Sending">SEND</span>
+    <span class="dbg-dot dbg-think" title="Thinking">THINK</span>
+    <span class="dbg-dot dbg-speak" title="Speaking">SPEAK</span>
+    <span class="dbg-dot dbg-tool" title="Tool">TOOL</span>
+    <span class="dbg-dot dbg-srch" title="Search">SRCH</span>
+    <span class="dbg-dot dbg-auto" title="Autonomy">AUTO</span>
+    <span class="dbg-dot dbg-2fa" title="2FA">2FA</span>
+  </div>
+
+  <div id="bubbles"></div>
+  <div id="tool-log"></div>
+  <div id="activity-timeline"></div>
+
+  <script type="module" src="app.ts"></script>
+</body>
+</html>

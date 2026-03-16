@@ -1,0 +1,16 @@
+{
+  "name": "macp",
+  "version": "1.0.0",
+  "description": "Multi-agent coordination protocol client",
+  "capabilities": ["macp"],
+  "dependencies": [],
+  "provides": {},
+  "channels": {
+    "publishes": [
+      "macp:message",
+      "macp:task-dispatched"
+    ],
+    "subscribes": []
+  },
+  "standalone": "src/standalone.ts"
+}

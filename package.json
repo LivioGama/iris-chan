@@ -1,30 +1,10 @@
 {
-  "name": "iris-chan",
-  "version": "1.0.0",
-  "main": "src/main/index.js",
+  "name": "iris-v2",
+  "private": true,
+  "workspaces": ["packages/*"],
   "scripts": {
-    "start": "node scripts/patch-electron-macos-plists.js && electron .",
-    "dev": "node scripts/patch-electron-macos-plists.js && NODE_ENV=development electron .",
-    "test": "node scripts/run-tests.js"
-  },
-  "devDependencies": {
-    "@types/node": "^25.3.0",
-    "@types/three": "^0.183.0",
-    "electron": "^40.4.1",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.50",
-    "@gltf-transform/core": "^4.3.0",
-    "@gltf-transform/extensions": "^4.3.0",
-    "@openai/codex-sdk": "^0.114.0",
-    "convex": "^1.31.7",
-    "macp-mcp": "^2.1.0",
-    "meshopt-decoder": "^1.0.2",
-    "meshoptimizer": "^1.0.1",
-    "sql.js": "^1.14.1",
-    "three-mesh-bvh": "^0.9.8"
-  },
-  "packageManager": "pnpm@10.28.0+sha512.05df71d1421f21399e053fde567cea34d446fa02c76571441bfc1c7956e98e363088982d940465fd34480d4d90a0668bc12362f8aa88000a64e83d0b0e47be48"
+    "dev": "cd packages/core && bun run dev",
+    "start": "cd packages/core && bun run start",
+    "build": "bun run --filter '*' build"
+  }
 }

@@ -1,0 +1,19 @@
+{
+  "name": "screen",
+  "version": "1.0.0",
+  "description": "Screenshot capture with Retina normalization and vision analysis",
+  "capabilities": ["screen-capture", "vision-analysis"],
+  "dependencies": ["convex"],
+  "provides": {
+    "capture_screen": {
+      "name": "capture_screen",
+      "description": "Capture a screenshot of the current display",
+      "parameters": {}
+    }
+  },
+  "channels": {
+    "publishes": ["screen:capture-ready", "screen:vision-result", "screen:observation-saved"],
+    "subscribes": ["screen:capture", "screen:vision-request"]
+  },
+  "standalone": "src/standalone.ts"
+}

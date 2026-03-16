@@ -1,0 +1,1 @@
+{"name":"coding","version":"1.0.0","description":"Claude Agent SDK integration and self-improvement learning","capabilities":["coding-tasks","self-improvement"],"dependencies":["settings","convex"],"provides":{},"channels":{"publishes":["coding:task-start","coding:task-log","coding:task-done","coding:self-fix"],"subscribes":["coding:task-start"]},"standalone":"src/standalone.ts"}

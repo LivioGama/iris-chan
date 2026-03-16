@@ -1,31 +1,31 @@
-# Iris-chan Project Rules
+# Iris v2 — Project Rules
 
-## Mandatory: Verify before declaring done
-Never assume a feature works. Before telling the user it's done:
-1. Write a concrete end-to-end test (even a throwaway script) that proves the feature works
-2. Check actual output/logs/recordings — not just "process started successfully"
-3. For audio/video pipelines: record a sample, verify it contains actual data (not silence/empty)
-4. For IPC chains: verify data flows through every hop with logged evidence
-5. If you can't fully verify from CLI, state exactly what's unverified and why
+## Architecture
+
+This is a modular Electron desktop AI assistant. The architecture is:
+
+- **packages/core/** — Minimal Electron shell. NEVER import module code here.
+- **packages/bus/** — Typed pub/sub message bus (no Electron dependency).
+- **packages/renderer/** — Avatar window + UI components (Three.js).
+- **packages/mod-*/** — Feature modules. Each is standalone.
+
+## Module Contract
+
+Every module implements `IrisModule` (start/stop/getHealth) and has a `manifest.json`.
+Modules communicate ONLY through the bus — no direct imports between modules.
 
 ## Development
 
 ```bash
-bun run dev
+bun run dev          # Launch Electron with hot-reload
+bun run packages/mod-*/src/standalone.ts  # Run any module independently
 ```
 
-<!-- MACP-MCP:START -->
-## MACP Coordination
+## Rules
 
-MACP is active for this project. The shared project id is `iris-chan`. The MCP server auto-registers this session on startup and auto-joins the default channel `iris-chan`.
-
-Normal workflow:
-- do not run SQL directly
-- do not manually attach another MACP server inside the agent loop
-- call `macp_poll` regularly to stay aware of peer work
-- call `macp_send_channel` for shared updates and `macp_send_direct` for one-to-one requests
-- call `macp_ack` after acting on a delivery
-- use `macp_ext_claim_files`, shared memory, tasks, goals, and vault tools when this project requires them
-
-If this project uses shared memory, tasks, goals, or the vault, follow the local instructions in this file and use those tools as part of normal work.
-<!-- MACP-MCP:END -->
+- Use bun, never npm/yarn
+- Modules must never import from other modules directly
+- Core must never import module code
+- All cross-module communication goes through the bus
+- Each module must clean up all resources in stop()
+- New features = new module or extend existing module, never touch core

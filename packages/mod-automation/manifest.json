@@ -1,0 +1,21 @@
+{
+  "name": "automation",
+  "version": "1.0.0",
+  "description": "Desktop automation with planning, execution, and verification",
+  "capabilities": ["desktop-automation", "ui-tasks"],
+  "dependencies": ["screen", "tools"],
+  "provides": {},
+  "channels": {
+    "publishes": [
+      "automation:task-start",
+      "automation:task-complete",
+      "automation:task-failed",
+      "automation:verify-result"
+    ],
+    "subscribes": [
+      "automation:run-ui-task",
+      "automation:stop-ui-task"
+    ]
+  },
+  "standalone": "src/standalone.ts"
+}

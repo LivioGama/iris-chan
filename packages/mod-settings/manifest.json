@@ -1,0 +1,13 @@
+{
+  "name": "settings",
+  "version": "1.0.0",
+  "description": "Settings persistence and hot-reload broadcast",
+  "capabilities": ["settings"],
+  "dependencies": [],
+  "provides": {},
+  "channels": {
+    "publishes": ["settings:changed"],
+    "subscribes": ["settings:get", "settings:update"]
+  },
+  "standalone": "src/standalone.ts"
+}

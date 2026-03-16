@@ -1,0 +1,53 @@
+{
+  "name": "search",
+  "version": "1.0.0",
+  "description": "Web search via Gemini Flash, semantic search via Convex vectors, and link capture",
+  "capabilities": ["web-search", "semantic-search", "link-capture"],
+  "dependencies": ["convex", "settings"],
+  "provides": {
+    "web_search": {
+      "name": "web_search",
+      "description": "Search the web using Gemini Flash",
+      "parameters": {
+        "type": "OBJECT",
+        "properties": {
+          "query": { "type": "STRING", "description": "Search query" }
+        },
+        "required": ["query"]
+      }
+    },
+    "recall_link": {
+      "name": "recall_link",
+      "description": "Recall a previously captured link by semantic search",
+      "parameters": {
+        "type": "OBJECT",
+        "properties": {
+          "query": { "type": "STRING", "description": "What to search for" }
+        },
+        "required": ["query"]
+      }
+    },
+    "open_link": {
+      "name": "open_link",
+      "description": "Open a URL in the default browser",
+      "parameters": {
+        "type": "OBJECT",
+        "properties": {
+          "url": { "type": "STRING", "description": "URL to open" }
+        },
+        "required": ["url"]
+      }
+    }
+  },
+  "channels": {
+    "publishes": [
+      "search:result",
+      "search:link-captured"
+    ],
+    "subscribes": [
+      "search:web",
+      "search:semantic"
+    ]
+  },
+  "standalone": "src/standalone.ts"
+}

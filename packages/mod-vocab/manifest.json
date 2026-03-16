@@ -1,0 +1,13 @@
+{
+  "name": "vocab",
+  "version": "1.0.0",
+  "description": "Vocabulary learning, fuzzy matching, and term extraction",
+  "capabilities": ["vocab-matching", "vocab-extraction"],
+  "dependencies": [],
+  "provides": {},
+  "channels": {
+    "publishes": ["vocab:terms-updated"],
+    "subscribes": ["vocab:track", "vocab:correction", "vocab:get-terms"]
+  },
+  "standalone": "src/standalone.ts"
+}

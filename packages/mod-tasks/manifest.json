@@ -1,0 +1,39 @@
+{
+  "name": "tasks",
+  "version": "1.0.0",
+  "description": "Task queue with priorities and kanban window controller",
+  "capabilities": ["task-queue", "kanban"],
+  "dependencies": ["convex", "coding"],
+  "provides": {
+    "create_task": {
+      "name": "create_task",
+      "description": "Create a new task in the queue",
+      "parameters": {
+        "type": "OBJECT",
+        "properties": {
+          "title": { "type": "STRING", "description": "Task title" },
+          "prompt": { "type": "STRING", "description": "Task prompt/description" },
+          "priority": { "type": "STRING", "description": "Priority: p0, p1, or p2" }
+        },
+        "required": ["title"]
+      }
+    }
+  },
+  "channels": {
+    "publishes": [
+      "tasks:created",
+      "tasks:updated",
+      "tasks:completed",
+      "tasks:queue-changed",
+      "tasks:milestone",
+      "tasks:kanban-sync"
+    ],
+    "subscribes": [
+      "tasks:run",
+      "tasks:stop",
+      "coding:task-done"
+    ]
+  },
+  "windowEntry": "src/kanban/window.html",
+  "standalone": "src/standalone.ts"
+}

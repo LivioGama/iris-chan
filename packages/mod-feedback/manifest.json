@@ -1,0 +1,13 @@
+{
+  "name": "feedback",
+  "version": "1.0.0",
+  "description": "User feedback collection and persistence",
+  "capabilities": ["feedback"],
+  "dependencies": [],
+  "provides": {},
+  "channels": {
+    "publishes": ["feedback:updated"],
+    "subscribes": ["feedback:add"]
+  },
+  "standalone": "src/standalone.ts"
+}

@@ -1,0 +1,24 @@
+{
+  "name": "2fa",
+  "version": "1.0.0",
+  "description": "2FA detection, code gathering, and auto-fill",
+  "capabilities": ["2fa-detection", "2fa-autofill"],
+  "dependencies": ["screen", "automation", "settings"],
+  "provides": {},
+  "channels": {
+    "publishes": [
+      "2fa:field-detected",
+      "2fa:fill-start",
+      "2fa:fill-success",
+      "2fa:fill-failed",
+      "2fa:code-cached",
+      "2fa:no-code",
+      "2fa:low-confidence"
+    ],
+    "subscribes": [
+      "screen:capture-ready",
+      "settings:changed"
+    ]
+  },
+  "standalone": "src/standalone.ts"
+}

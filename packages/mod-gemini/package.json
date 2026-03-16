@@ -1,0 +1,9 @@
+{
+  "name": "@iris/mod-gemini",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@iris/bus": "workspace:*"
+  }
+}

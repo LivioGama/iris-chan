@@ -1,0 +1,20 @@
+{
+  "name": "voice",
+  "version": "1.0.0",
+  "description": "Full-duplex voice pipeline with VAD, barge-in, echo suppression",
+  "capabilities": ["audio-capture", "audio-playback", "voice-control"],
+  "dependencies": ["gemini", "screen", "vocab", "settings"],
+  "provides": {},
+  "channels": {
+    "publishes": [
+      "voice:state-changed", "voice:transcript", "voice:user-speaking",
+      "voice:barge-in", "voice:playback-start", "voice:playback-end"
+    ],
+    "subscribes": [
+      "screen:capture-ready", "settings:changed",
+      "behavior:mode-changed", "vocab:terms-updated"
+    ]
+  },
+  "rendererEntry": "src/renderer-engine.ts",
+  "standalone": "src/standalone.ts"
+}

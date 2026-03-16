@@ -1,0 +1,20 @@
+{
+  "name": "gemini",
+  "version": "1.0.0",
+  "description": "Gemini WebSocket client with native audio, tool calling, and system prompt management",
+  "capabilities": ["gemini-chat", "gemini-vision", "gemini-audio"],
+  "dependencies": ["tools", "settings"],
+  "provides": {},
+  "channels": {
+    "publishes": [
+      "gemini:connected", "gemini:disconnected", "gemini:response",
+      "gemini:tool-call", "gemini:tool-result"
+    ],
+    "subscribes": [
+      "gemini:send-audio", "gemini:send-text", "gemini:send-screen",
+      "tools:result"
+    ]
+  },
+  "rendererEntry": "src/renderer-client.ts",
+  "standalone": "src/standalone.ts"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "tools",
+  "version": "1.0.0",
+  "description": "Tool registry, execution dispatcher, and built-in tools",
+  "capabilities": ["tool-execution", "tool-registry"],
+  "dependencies": ["screen"],
+  "provides": {},
+  "channels": {
+    "publishes": ["tools:start", "tools:end", "tools:result"],
+    "subscribes": ["tools:execute", "tools:register", "tools:list"]
+  },
+  "standalone": "src/standalone.ts"
+}

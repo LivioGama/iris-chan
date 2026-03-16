@@ -1,0 +1,19 @@
+{
+  "name": "@iris/core",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron --require tsx/cjs --inspect .",
+    "start": "electron --require tsx/cjs .",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@iris/bus": "workspace:*"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0"
+  }
+}

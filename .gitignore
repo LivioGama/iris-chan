@@ -1,11 +1,7 @@
-node_modules/
-.env
-.env.local
-helpers/iris-helper
-.vercel
-.idea/
-.ruff_cache/
+node_modules
+dist
+.env*
+*.log
+bun.lock
 .DS_Store
-.env.convex-mcp
-pnpm-lock.yaml
-AGENTS.md
+.idea/
