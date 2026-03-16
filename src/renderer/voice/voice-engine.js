@@ -1,6 +1,6 @@
 import { Emitter } from '../../shared/emitter.js';
 import { EVENT_TYPES } from '../../shared/event-types.web.js';
-import { cleanTranscript, shouldDropTranscript } from './transcription-policy.js';
+import { cleanTranscript, shouldDropTranscript, repairMangledPaths } from './transcription-policy.js';
 import { createToolCallHandler } from './tool-call-handler.js';
 import { createScreenCaptureController } from './screen-capture-controller.js';
 import { createClaudeCodeBatcher } from './claude-code-batcher.js';
@@ -26,6 +26,7 @@ import {
 	normalizeInteractionState,
 } from '../interaction/interaction-policy.js';
 import { createObservationTrigger } from '../observations/observation-trigger.js';
+import { ParallelRequestManager } from './parallel-request-manager.js';
 
 const STATES = {
 	IDLE: 'IDLE',
@@ -305,6 +306,25 @@ export class VoiceEngine extends Emitter {
 		this._observationCheckInFlight = null;
 		this._modelOutputFenceActive = false;
 
+		this._parallelManager = new ParallelRequestManager({
+			apiKey: null, // set in start() when apiKey is available
+			gemini,
+			onToolCall: async (calls) => {
+				// Execute parallel tool calls directly via IPC, bypassing the
+				// WebSocket tool handler which rejects calls when
+				// _dropModelOutputUntilTurnComplete is true.
+				for (const call of calls) {
+					try {
+						logInfo('Tool', `Executing (parallel): ${call.name}(${JSON.stringify(call.args || {})})`.slice(0, 500));
+						const result = await window.electronAPI.executeTool(call.name, call.args);
+						logInfo('Tool', `Result (parallel): ${call.name} → ${result?.ok !== false ? 'OK' : 'FAIL'}: ${String(result?.result || 'done').slice(0, 300)}`);
+					} catch (err) {
+						logError('Tool', `Parallel tool ${call.name} error: ${err.message}`);
+					}
+				}
+			},
+		});
+
 		this._screen = screen || createScreenCaptureController({
 			gemini,
 			onEvent: (type, payload) => this.eventBus?.emitEvent?.(type, payload, 'voice-engine'),
@@ -450,6 +470,10 @@ export class VoiceEngine extends Emitter {
 					const correctedUser = this._correctTranscript(this._accum.user);
 					logInfo('Conversation', `[USER] ${correctedUser}`);
 					this._lastUserTurn = correctedUser;
+					// Attempt parallel processing in the background — if activated,
+					// it will set _dropModelOutputUntilTurnComplete to suppress
+					// subsequent WebSocket audio and handle responses via REST
+					this._tryParallelProcessing(correctedUser);
 				}
 				this._accum.user = '';
 			}
@@ -1286,6 +1310,25 @@ export class VoiceEngine extends Emitter {
 		this._dropModelOutputUntilTurnComplete = true;
 	}
 
+	async _tryParallelProcessing(transcript) {
+		if (!transcript || !this._apiKey) return;
+		if (transcript.split(/\s+/).length < 6) return;
+		try {
+			const activated = await this._parallelManager.processTranscript(transcript, {
+				lastUserTurn: this._lastUserTurn || '',
+				lastModelTurn: '',
+			});
+			if (activated) {
+				// Suppress the WebSocket response that's already playing
+				this._dropModelOutputUntilTurnComplete = true;
+				this.playback.stop();
+				logInfo('Parallel', `Activated parallel processing for: ${transcript}`);
+			}
+		} catch (err) {
+			logError('Parallel', `Parallel processing failed: ${err?.message || err}`);
+		}
+	}
+
 	async loadVocabulary() {
 		try {
 			const allTerms = await window.electronAPI.getVocabulary() || [];
@@ -1312,7 +1355,7 @@ export class VoiceEngine extends Emitter {
 
 	_correctTranscript(text) {
 		const cleaned = cleanTranscript(text);
-		let result = this._matcher.correct(cleaned);
+		let result = repairMangledPaths(this._matcher.correct(cleaned));
 		const recentSeenRewrite = findRecentSeenRewrite(result);
 		if (recentSeenRewrite?.text) {
 			result = recentSeenRewrite.text;
@@ -1591,6 +1634,8 @@ export class VoiceEngine extends Emitter {
 			logError('Voice', 'No API key — set GEMINI_API_KEY in .env');
 			return;
 		}
+
+		this._parallelManager._apiKey = this._apiKey;
 
 		await this.loadVocabulary();
 		this._vocabRefreshInterval = setInterval(() => this.loadVocabulary(), 60000);
