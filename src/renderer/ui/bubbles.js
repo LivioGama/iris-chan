@@ -76,7 +76,7 @@ export function showStreamingBubble(lane, text, streamId, { role } = {}) {
  * Finalize a streaming bubble — starts the auto-hide timer based on the
  * final text content. After this, the bubble behaves like a normal bubble.
  */
-export function finalizeStreamingBubble(streamId) {
+export function finalizeStreamingBubble(streamId, { minDurationMs } = {}) {
 	const entry = streamingBubbles.get(streamId);
 	if (!entry) return;
 	streamingBubbles.delete(streamId);
@@ -89,11 +89,12 @@ export function finalizeStreamingBubble(streamId) {
 		clearTimeout(hideTimers.get(el));
 	}
 
+	const duration = Math.max(minDurationMs || 0, getBubbleDurationMs(el.textContent, lane));
 	const timeout = setTimeout(() => {
 		el.classList.remove('visible');
 		setTimeout(() => el.remove(), 180);
 		hideTimers.delete(el);
-	}, getBubbleDurationMs(el.textContent, lane));
+	}, duration);
 	hideTimers.set(el, timeout);
 }
 
