@@ -10,7 +10,7 @@ console.log('Running Gemini client voice config tests...');
 	const originalPayloadLimit = process.env.IRIS_GEMINI_SETUP_MAX_PAYLOAD_CHARS;
 	const originalInboundBatchSize = process.env.IRIS_GEMINI_INBOUND_BATCH_SIZE;
 
-	process.env.IRIS_GEMINI_SETUP_MAX_PAYLOAD_CHARS = '45000';
+	process.env.IRIS_GEMINI_SETUP_MAX_PAYLOAD_CHARS = '52000';
 	process.env.IRIS_GEMINI_INBOUND_BATCH_SIZE = '2';
 
 	Object.defineProperty(globalThis, 'window', {
