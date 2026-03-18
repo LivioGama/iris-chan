@@ -1,0 +1,414 @@
+IRIS-CHAN PROJECT STABILIZATION STRATEGY
+
+Verified against current main snapshot
+
+CURRENT ARCHITECTURAL REALITY
+
+1. The application still has one real runtime entrypoint:
+   src/main/index.js -> src/main/bootstrap.js
+
+2. There is no physical src/v2 tree in the repository today.
+   README.md and spec.md still describe a split runtime that does not exist in the live source tree.
+
+3. The codebase is in a hybrid state:
+   - legacy IPC paths still exist
+   - newer runtime IPC exists in src/main/ipc-runtime.js
+   - runtime services now exist in src/main/runtime/*
+   - task lifecycle infrastructure exists in src/main/tasks/*
+   - queue orchestration exists in src/main/task-queue/*
+   - large automation services exist in src/main/automation/*
+   - shared runtime contracts live in src/shared/*
+
+4. The main risk is no longer a purely monolithic codebase.
+   The main risk is overlapping authorities and partial migration:
+   - legacy IPC plus runtime IPC
+   - legacy Convex store plus newer Convex client
+   - file-backed tasks plus Convex queue tasks
+   - direct window persistence plus geometry store
+   - explicit services plus the automation service locator
+
+5. Stabilization should therefore happen in place first.
+   Do not start with a cosmetic src/v2 file move.
+   First create real module boundaries, explicit ownership, and isolated tests.
+
+
+PRIMARY ENGINEERING GOALS
+
+1. Make development local, fast, and isolated.
+2. Stop requiring full Electron runtime execution to test small logic changes.
+3. Assign exactly one authoritative owner per domain.
+4. Move orchestration out of renderer code and out of bootstrap.
+5. Make failures local and immediate through module-scoped tests.
+6. Reduce overlap between old and new systems until each domain has one path.
+
+
+TARGET MODULE MODEL
+
+1. Core domain modules
+   Pure logic only. No Electron, no fs, no child_process, no Convex, no window access.
+
+   Candidate domains:
+   - task-state
+   - behavior-state
+   - runtime-events
+   - kanban-state
+   - automation-policy
+
+2. Application services
+   Use-case orchestration over interfaces.
+
+   Candidate services:
+   - TaskCatalogService
+   - TaskExecutionService
+   - KanbanService
+   - RuntimeService
+   - AutomationService
+   - DailyLoopService
+   - SettingsService
+
+3. Infrastructure adapters
+   The only layer allowed to touch external systems.
+
+   Candidate adapters:
+   - ElectronWindowAdapter
+   - IpcAdapter
+   - TasksJsonRepository
+   - QueueTaskRepository
+   - ConvexAdapter
+   - GitCliAdapter
+   - GeometryStoreAdapter
+   - SkillFilesystemAdapter
+
+4. UI/controller surfaces
+   Thin and surface-specific.
+
+   Candidate surfaces:
+   - avatar renderer/controller
+   - kanban renderer/controller
+   - search overlay renderer/controller
+
+5. Composition layer
+   Very small and boring.
+   Its only responsibilities should be:
+   - construct dependencies
+   - wire modules together
+   - start and stop lifecycle hooks
+
+
+TOP PRIORITIES
+
+PRIORITY 1: SLIM src/main/bootstrap.js
+
+Current problem:
+bootstrap.js constructs services, applies settings side effects, persists events, registers multiple IPC systems, starts background loops, manages shortcuts, and owns runtime lifecycle behavior.
+
+Target:
+bootstrap.js becomes composition-only.
+
+Extract from bootstrap into dedicated modules:
+   - runtime composition
+   - settings apply bridge
+   - runtime event persistence sink
+   - shortcut registrar
+   - lifecycle coordinator
+
+Result:
+business changes no longer require editing application boot wiring.
+
+
+PRIORITY 2: UNIFY TASK AUTHORITY
+
+Current problem:
+task state is split across:
+   - tasks.json and spec.md
+   - Convex queue tasks
+   - Kanban renderer reconciliation logic
+
+This makes the renderer an owner of workflow state, not just a view.
+
+Target:
+main process owns task normalization and reconciliation.
+
+Introduce:
+   - TaskRepository interface
+   - FileTaskRepository
+   - QueueTaskRepository
+   - TaskCatalogService
+   - normalized task read model for the Kanban UI
+
+Required rule:
+Kanban renderer must consume one task model and one stream.
+It must not merge file tasks and queue tasks itself.
+
+
+PRIORITY 3: REMOVE automation/service-ref.js AS A GLOBAL AUTHORITY
+
+Current problem:
+the service locator hides dependencies and weakens testability.
+
+Target:
+explicit dependency injection from the composition root.
+
+Required rule:
+only the composition root may know concrete service implementations.
+Controllers, tools, and services should receive dependencies through constructors or function parameters.
+
+
+PRIORITY 4: SPLIT UITaskService BY RESPONSIBILITY
+
+Current problem:
+src/main/automation/ui-task-service.js is a large orchestration subsystem compressed into one file and one service boundary.
+
+Target:
+keep UITaskService as a facade, but extract collaborators for:
+   - planning
+   - execution policy
+   - verification and checkpoints
+   - interruption handling
+   - native and browser execution adapters
+   - episode recording
+   - safety rules
+
+Result:
+automation behavior becomes easier to test without booting the full runtime.
+
+
+PRIORITY 5: SHRINK AND NAMESPACE THE PRELOAD API
+
+Current problem:
+src/preload.js exposes one large electronAPI surface covering legacy channels, kanban actions, queue actions, runtime state, and window behavior.
+
+Target:
+split the bridge into bounded namespaces, for example:
+   - electronAPI.runtime
+   - electronAPI.kanban
+   - electronAPI.queue
+   - electronAPI.voice
+   - electronAPI.window
+   - electronAPI.search
+
+Required rule:
+each renderer may access only the namespace it actually needs.
+
+
+PRIORITY 6: CONVERGE DUPLICATE PERSISTENCE PATHS
+
+Current duplication to resolve:
+   - legacy Convex store versus newer Convex client
+   - kanban geometry persistence versus runtime geometry store
+
+Target:
+one persistence gateway per domain.
+
+Required rule:
+do not allow legacy and new paths to remain co-authoritative indefinitely.
+
+
+PRIORITY 7: MAKE THE DOCUMENTATION MATCH THE CODE
+
+Current problem:
+README.md and spec.md describe a dual runtime and src/v2 tree that are not present in the live repository.
+
+Target:
+make architecture descriptions truthful.
+
+Decision:
+either update the docs to describe the current in-place hybrid runtime, or delay runtime split claims until that split is actually implemented.
+
+
+TEST STRATEGY
+
+The project already has a useful local Node-based test style.
+Keep it as the transition path and reorganize around module ownership instead of replacing everything first.
+
+1. Domain tests
+   Fastest tests, pure logic only.
+
+   Examples:
+   - task dependency resolution
+   - task status transitions
+   - behavior-state transitions
+   - runtime event filtering and idempotency
+
+2. Service tests with fakes
+   Exercise orchestration with in-memory repositories and fake adapters.
+
+   Examples:
+   - task reconciliation from file and queue sources
+   - kanban use cases
+   - automation policy decisions
+   - daily loop decisions
+
+3. Adapter contract tests
+   Verify each external boundary separately.
+
+   Examples:
+   - tasks.json read and write behavior
+   - git staging and commit path restrictions
+   - Convex data mapping
+   - geometry persistence
+   - IPC request and response contracts
+
+4. Minimal smoke tests
+   Keep only a small final integrated layer:
+   - app boot
+   - one runtime event path
+   - one task flow
+   - one Kanban load path
+
+Required rule:
+full-runtime tests are confidence checks, not the primary debugging environment.
+
+
+LOCAL DEVELOPMENT WORKFLOW
+
+The default workflow should be:
+   1. change one module
+   2. run only that module's tests
+   3. run contract tests if a boundary changed
+   4. run one narrow integration check if needed
+   5. run smoke tests only near merge time
+
+Engineers should not need to:
+   - boot the full Electron app
+   - boot every dependency
+   - push to CI
+   - use Docker
+just to verify pure logic or module-level orchestration.
+
+Add local commands or grouped test entrypoints for:
+   - runtime tests
+   - kanban tests
+   - task queue tests
+   - automation tests
+   - persistence adapter tests
+   - smoke tests
+
+
+RULES FOR MOCKING AND ISOLATION
+
+1. Replace hidden globals with explicit inputs.
+   Avoid business logic that depends directly on:
+   - process.cwd()
+   - global service references
+   - singleton windows
+   - timers without injected clock behavior
+   - direct environment reads inside core logic
+
+2. Mock integrations, not domain behavior.
+   Typical fakes should include:
+   - in-memory task repository
+   - fake queue repository
+   - fake event bus
+   - fake window notifier
+   - fake git adapter
+   - fake clock
+   - fake Convex adapter
+
+3. Keep Electron and Convex at the edges.
+   Domain logic and service logic should run in plain Node with mocks.
+
+
+CI STRATEGY
+
+CI should confirm already-testable modules instead of being the place where basic logic is discovered to be broken.
+
+Recommended stages:
+
+1. Static safety
+   - typecheck
+   - lint
+   - boundary checks
+
+2. Module test groups
+   - core domain tests
+   - service tests
+   - automation tests
+   - task queue tests
+
+3. Adapter contract tests
+   - persistence
+   - git
+   - IPC
+
+4. Small smoke suite
+   - runtime boot
+   - critical event flow
+   - critical task flow
+
+5. Packaging or deployment checks
+   Only after the logic and contract layers are green.
+
+
+ROLLOUT PLAN
+
+PHASE 1: ARCHITECTURE TRUTH AND OWNERSHIP
+   - document the real current runtime shape
+   - identify one owner per domain
+   - stop adding new cross-domain shortcuts
+
+PHASE 2: BOOTSTRAP SLIMMING
+   - extract settings apply handlers
+   - extract shortcut registration
+   - extract event persistence logic
+   - isolate lifecycle start and stop
+
+PHASE 3: TASK MODEL UNIFICATION
+   - create normalized task interfaces
+   - introduce file and queue repositories
+   - create TaskCatalogService in the main process
+   - remove task reconciliation from Kanban renderer
+
+PHASE 4: PRELOAD AND IPC HARDENING
+   - namespace preload APIs
+   - add IPC contract tests
+   - reduce each renderer to its own minimal bridge
+
+PHASE 5: AUTOMATION SUBSYSTEM SPLIT
+   - decompose UITaskService
+   - remove service-ref
+   - isolate automation policy modules
+
+PHASE 6: PERSISTENCE CONVERGENCE
+   - unify Convex access paths
+   - unify geometry persistence
+   - remove duplicate authorities
+
+PHASE 7: OPTIONAL PHYSICAL REORGANIZATION
+   Only after boundaries are stable:
+   - decide whether a real src/v2 tree still adds value
+   - otherwise keep one tree with clear bounded modules
+
+
+LOW-RISK FIRST PR SEQUENCE
+
+1. Create TaskRepository interfaces and adapters without changing renderer behavior yet.
+2. Add a normalized task read model in the main process.
+3. Move Kanban task merging logic out of kanban.html.
+4. Extract shortcut registration from bootstrap.
+5. Extract settings apply behavior from bootstrap.
+6. Namespace preload methods without changing underlying implementation.
+7. Replace service-ref usage in one subsystem at a time.
+8. Split UITaskService into collaborator modules.
+9. Converge geometry persistence.
+10. Converge Convex persistence paths.
+
+
+DEFINITION OF STABILIZATION SUCCESS
+
+The project is considered stabilized when:
+
+1. Most feature work can be tested locally without booting the full Electron runtime.
+2. Kanban, queue, runtime, and automation domains each have a single authoritative owner.
+3. Renderer code is no longer responsible for cross-source state reconciliation.
+4. bootstrap.js is a composition root, not a behavior container.
+5. module-level test failures identify the broken subsystem immediately.
+6. CI mainly confirms local confidence instead of discovering trivial regressions late.
+7. commit history becomes easier to interpret because changes are scoped to bounded modules.
+
+
+FINAL STRATEGIC RULE
+
+Do not optimize for a prettier directory tree first.
+Optimize for explicit boundaries, single ownership, isolated tests, and local execution.
+Once those are real, the physical tree can be reorganized safely if it is still worth doing.
